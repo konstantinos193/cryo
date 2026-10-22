@@ -19,11 +19,16 @@ pub enum ChromeCommand {
     Close {
         id: u64,
     },
-    CloseActive,
-    NextTab,
-    PrevTab,
     Navigate {
         input: String,
+        /// Modifier state at Enter — decides where the navigation lands
+        /// (current tab, new tab, new window). Wire fields, policy in app.
+        #[serde(default)]
+        ctrl: bool,
+        #[serde(default)]
+        alt: bool,
+        #[serde(default)]
+        shift: bool,
     },
     Reload,
 }
@@ -60,6 +65,16 @@ pub fn normalize_nav_input(input: &str) -> String {
         return format!("https://{s}");
     }
     format!("https://duckduckgo.com/?q={}", percent_encode(s))
+}
+
+/// Chrome's Ctrl+Enter: a bare word becomes `www.<word>.com`; anything
+/// already dotted or multi-word falls back to normal normalization.
+pub fn canonize_nav_input(input: &str) -> String {
+    let s = input.trim();
+    if !s.is_empty() && !s.contains(' ') && !s.contains('.') && !s.contains("://") {
+        return format!("https://www.{s}.com");
+    }
+    normalize_nav_input(s)
 }
 
 fn percent_encode(s: &str) -> String {
@@ -133,30 +148,31 @@ pub const CHROME_HTML: &str = r##"<!doctype html>
 
   urlEl.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
-      ipc({cmd: 'navigate', input: urlEl.value});
+      ipc({cmd: 'navigate', input: urlEl.value,
+           ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey});
       urlEl.blur();
+    } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'l') {
+      // Edge's paste-and-go.
+      navigator.clipboard.readText().then((t) => {
+        if (t) { ipc({cmd: 'navigate', input: t}); urlEl.blur(); }
+      }).catch(() => {});
+      e.preventDefault();
     }
   });
 
-  // WebView2 swallows accelerators when content has focus; forwarding from
-  // chrome only covers the chrome-focused case. Phase 0 limitation.
-  document.addEventListener('keydown', (e) => {
-    if (!e.ctrlKey) return;
-    const k = e.key.toLowerCase();
-    if (k === 't') { e.preventDefault(); ipc({cmd: 'new_tab'}); }
-    else if (k === 'w') { e.preventDefault(); ipc({cmd: 'close_active'}); }
-    else if (e.key === 'Tab') {
-      e.preventDefault();
-      ipc({cmd: e.shiftKey ? 'prev_tab' : 'next_tab'});
-    }
-    else if (k === 'l') { e.preventDefault(); urlEl.focus(); urlEl.select(); }
-  });
+  // Browser shortcuts are not handled here — the engine forwards every
+  // accelerator to the app before the page sees it, for chrome and content
+  // views alike.
 
   window.__cryo_update = (state) => {
     tabsEl.innerHTML = '';
     for (const t of state.tabs) {
       const el = document.createElement('div');
       el.className = 'tab' + (t.active ? ' active' : '');
+      // Middle-click anywhere on the tab closes it.
+      el.addEventListener('auxclick', (e) => {
+        if (e.button === 1) ipc({cmd: 'close', id: t.id});
+      });
       const title = document.createElement('span');
       title.className = 'title';
       title.textContent = t.title;
@@ -196,9 +212,38 @@ mod tests {
     }
 
     #[test]
+    fn canonize_wraps_bare_words_only() {
+        assert_eq!(canonize_nav_input("cnn"), "https://www.cnn.com");
+        assert_eq!(
+            canonize_nav_input("example.com"),
+            "https://example.com"
+        );
+        assert_eq!(
+            canonize_nav_input("two words"),
+            "https://duckduckgo.com/?q=two%20words"
+        );
+    }
+
+    #[test]
     fn command_wire_format_round_trips() {
         let cmd: ChromeCommand = serde_json::from_str(r#"{"cmd":"navigate","input":"x"}"#).unwrap();
-        assert!(matches!(cmd, ChromeCommand::Navigate { input } if input == "x"));
+        assert!(matches!(
+            cmd,
+            ChromeCommand::Navigate {
+                input,
+                ctrl: false,
+                alt: false,
+                shift: false,
+            } if input == "x"
+        ));
+        let cmd: ChromeCommand = serde_json::from_str(
+            r#"{"cmd":"navigate","input":"x","alt":true}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            cmd,
+            ChromeCommand::Navigate { alt: true, .. }
+        ));
         let cmd: ChromeCommand = serde_json::from_str(r#"{"cmd":"activate","id":3}"#).unwrap();
         assert!(matches!(cmd, ChromeCommand::Activate { id: 3 }));
         assert!(serde_json::from_str::<ChromeCommand>(r#"{"cmd":"bogus"}"#).is_err());

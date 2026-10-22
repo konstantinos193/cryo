@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/icon.svg" alt="cryo — a frozen tab inside an ice cube" width="200">
+  <img src="assets/icon.svg" alt="cryo" width="200">
 </p>
 
 # cryo

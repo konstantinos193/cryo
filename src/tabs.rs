@@ -92,11 +92,23 @@ impl Tab {
     }
 }
 
+/// A closed tab kept for Ctrl+Shift+T: the domain object plus the slot it
+/// came from. The engine surface is already gone — reopening respawns one
+/// at the recorded address. Session history dies with the view (Phase 0).
+struct ClosedTab {
+    tab: Tab,
+    index: usize,
+}
+
+/// How many closed tabs are remembered for reopen.
+const MAX_CLOSED: usize = 32;
+
 /// Ordered collection of tabs plus the active selection. The one place
 /// tab state lives — no parallel maps keyed by `TabId` elsewhere.
 #[derive(Default)]
 pub struct TabRegistry {
     tabs: Vec<Tab>,
+    closed: Vec<ClosedTab>,
     active: Option<TabId>,
     next_id: u64,
 }
@@ -139,27 +151,47 @@ impl TabRegistry {
         }
     }
 
-    /// Removes the tab and returns the id the caller should activate next
-    /// (the neighbour), if any remain.
+    /// Removes the tab, stashes it for `reopen_closed`, and returns the id
+    /// the caller should activate next (the neighbour), if any remain.
+    /// The active selection is only *suggested* — the caller owns the
+    /// transition and confirms it through `set_active`.
     pub fn close(&mut self, id: TabId) -> Result<Option<TabId>, TabError> {
         let pos = self
             .tabs
             .iter()
             .position(|t| t.id == id)
             .ok_or(TabError::UnknownTab(id))?;
-        self.tabs.remove(pos);
+        let tab = self.tabs.remove(pos);
+        if self.closed.len() >= MAX_CLOSED {
+            self.closed.remove(0);
+        }
+        self.closed.push(ClosedTab { tab, index: pos });
         if self.active == Some(id) {
-            self.active = self
+            self.active = None;
+            Ok(self
                 .tabs
                 .get(pos)
                 .or_else(|| self.tabs.last())
-                .map(|t| t.id);
+                .map(|t| t.id))
+        } else {
+            Ok(self.active)
         }
-        Ok(self.active)
     }
 
-    /// Activate the tab `offset` positions from the current one, wrapping.
-    pub fn cycle_active(&mut self, offset: isize) -> Option<TabId> {
+    /// Reinsert the most recently closed tab at its old position and
+    /// return its id. The caller respawns the engine surface; the tab's
+    /// old back/forward history is gone with the dead view.
+    pub fn reopen_closed(&mut self) -> Option<TabId> {
+        let closed = self.closed.pop()?;
+        let at = closed.index.min(self.tabs.len());
+        let id = closed.tab.id;
+        self.tabs.insert(at, closed.tab);
+        Some(id)
+    }
+
+    /// The id `offset` positions from the active tab, wrapping. A pure
+    /// query — the caller activates the result.
+    pub fn cycle_target(&self, offset: isize) -> Option<TabId> {
         if self.tabs.is_empty() {
             return None;
         }
@@ -168,9 +200,43 @@ impl TabRegistry {
             .and_then(|id| self.tabs.iter().position(|t| t.id == id))
             .unwrap_or(0) as isize;
         let len = self.tabs.len() as isize;
-        let next = self.tabs[((current + offset).rem_euclid(len)) as usize].id;
-        self.active = Some(next);
-        Some(next)
+        Some(self.tabs[((current + offset).rem_euclid(len)) as usize].id)
+    }
+
+    /// Position of `id` in strip order.
+    pub fn position_of(&self, id: TabId) -> Option<usize> {
+        self.tabs.iter().position(|t| t.id == id)
+    }
+
+    /// Move `id` to `index` (clamped). Used by Ctrl+Shift+PgUp/PgDn and
+    /// Home/End variants. Returns the position it landed on.
+    pub fn relocate(&mut self, id: TabId, index: usize) -> Result<usize, TabError> {
+        let from = self.position_of(id).ok_or(TabError::UnknownTab(id))?;
+        let to = index.min(self.tabs.len() - 1);
+        if from != to {
+            let tab = self.tabs.remove(from);
+            self.tabs.insert(to, tab);
+        }
+        Ok(to)
+    }
+
+    /// Clone `id`'s address into a fresh tab inserted right after it.
+    /// History is not copied — the new view starts clean.
+    pub fn duplicate(&mut self, id: TabId) -> Result<TabId, TabError> {
+        let pos = self.position_of(id).ok_or(TabError::UnknownTab(id))?;
+        let url = self.tabs[pos].url.clone();
+        let new_id = TabId(self.next_id);
+        self.next_id += 1;
+        self.tabs.insert(pos + 1, Tab::new(new_id, url));
+        Ok(new_id)
+    }
+
+    /// Id of the tab at `index`, clamped to the last tab (Ctrl+9).
+    pub fn id_at(&self, index: usize) -> Option<TabId> {
+        self.tabs
+            .get(index)
+            .or_else(|| self.tabs.last())
+            .map(|t| t.id)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &Tab> {
@@ -215,7 +281,7 @@ mod tests {
     }
 
     #[test]
-    fn closing_active_moves_selection_to_neighbour() {
+    fn closing_active_suggests_neighbour_and_clears_selection() {
         let mut reg = TabRegistry::new();
         let a = reg.create("a".into());
         let b = reg.create("b".into());
@@ -223,9 +289,22 @@ mod tests {
         reg.set_active(b).unwrap();
         let next = reg.close(b).unwrap();
         assert_eq!(next, Some(c));
+        // Suggestion only — the caller confirms via set_active.
+        assert_eq!(reg.active_id(), None);
+        reg.set_active(next.unwrap()).unwrap();
         assert_eq!(reg.active_id(), Some(c));
 
-        reg.close(c).unwrap();
+        let next = reg.close(c).unwrap();
+        assert_eq!(next, Some(a));
+    }
+
+    #[test]
+    fn closing_inactive_keeps_active() {
+        let mut reg = TabRegistry::new();
+        let a = reg.create("a".into());
+        let b = reg.create("b".into());
+        reg.set_active(a).unwrap();
+        assert_eq!(reg.close(b).unwrap(), Some(a));
         assert_eq!(reg.active_id(), Some(a));
     }
 
@@ -239,16 +318,80 @@ mod tests {
     }
 
     #[test]
-    fn cycle_wraps_both_directions() {
+    fn reopen_restores_position_and_url() {
+        let mut reg = TabRegistry::new();
+        let a = reg.create("a".into());
+        let b = reg.create("b".into());
+        let c = reg.create("c".into());
+        reg.close(b).unwrap();
+        assert_eq!(reg.len(), 2);
+
+        let reopened = reg.reopen_closed().unwrap();
+        assert_eq!(reopened, b);
+        assert_eq!(ids(&reg), vec![a.get(), b.get(), c.get()]);
+        assert_eq!(reg.get(b).unwrap().url(), "b");
+
+        // Only b was closed — the stack is now empty.
+        assert_eq!(reg.reopen_closed(), None);
+    }
+
+    #[test]
+    fn id_at_clamps_to_last() {
+        let mut reg = TabRegistry::new();
+        let a = reg.create("a".into());
+        let b = reg.create("b".into());
+        assert_eq!(reg.id_at(0), Some(a));
+        assert_eq!(reg.id_at(1), Some(b));
+        assert_eq!(reg.id_at(usize::MAX), Some(b));
+        reg.close(b).unwrap();
+        assert_eq!(reg.id_at(usize::MAX), Some(a));
+    }
+
+    #[test]
+    fn cycle_target_wraps_without_selecting() {
         let mut reg = TabRegistry::new();
         let a = reg.create("a".into());
         let b = reg.create("b".into());
         let c = reg.create("c".into());
         reg.set_active(a).unwrap();
-        assert_eq!(reg.cycle_active(1), Some(b));
-        assert_eq!(reg.cycle_active(1), Some(c));
-        assert_eq!(reg.cycle_active(1), Some(a));
-        assert_eq!(reg.cycle_active(-1), Some(c));
+        assert_eq!(reg.cycle_target(1), Some(b));
+        // Pure query — selection unchanged until the caller activates.
+        assert_eq!(reg.active_id(), Some(a));
+        reg.set_active(b).unwrap();
+        assert_eq!(reg.cycle_target(1), Some(c));
+        reg.set_active(c).unwrap();
+        assert_eq!(reg.cycle_target(1), Some(a));
+        assert_eq!(reg.cycle_target(-1), Some(b));
+    }
+
+    #[test]
+    fn relocate_moves_and_clamps() {
+        let mut reg = TabRegistry::new();
+        let a = reg.create("a".into());
+        let b = reg.create("b".into());
+        let c = reg.create("c".into());
+        assert_eq!(reg.relocate(a, 2).unwrap(), 2);
+        assert_eq!(ids(&reg), vec![b.get(), c.get(), a.get()]);
+        assert_eq!(reg.relocate(a, 99).unwrap(), 2);
+        assert!(matches!(
+            reg.relocate(TabId(99), 0),
+            Err(TabError::UnknownTab(_))
+        ));
+    }
+
+    #[test]
+    fn duplicate_copies_url_right_after() {
+        let mut reg = TabRegistry::new();
+        let a = reg.create("a".into());
+        let b = reg.create("https://example.com".into());
+        let dup = reg.duplicate(a).unwrap();
+        assert_eq!(ids(&reg), vec![a.get(), dup.get(), b.get()]);
+        assert_eq!(reg.get(dup).unwrap().url(), "a");
+        assert!(reg.get(dup).unwrap().id() != a);
+        assert!(matches!(
+            reg.duplicate(TabId(99)),
+            Err(TabError::UnknownTab(_))
+        ));
     }
 
     #[test]

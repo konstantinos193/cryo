@@ -8,10 +8,14 @@ use std::rc::Rc;
 use tao::event::{ElementState, Event, KeyEvent, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopProxy};
 use tao::keyboard::{Key, ModifiersState};
-use tao::window::Window;
+use tao::window::{Fullscreen, Window};
 
-use crate::engine::{ContentView, Engine, ViewSpec};
-use crate::shell::chrome::{normalize_nav_input, ChromeCommand, ChromeState, ChromeTab};
+use crate::engine::{
+    Accelerator, AcceleratorHandler, AcceleratorKey, ContentView, Engine, ViewSpec,
+};
+use crate::shell::chrome::{
+    canonize_nav_input, normalize_nav_input, ChromeCommand, ChromeState, ChromeTab,
+};
 use crate::shell::pages::{self, CHROME_URL, NEW_TAB_URL};
 use crate::shell::{self};
 use crate::tabs::{TabId, TabRegistry};
@@ -22,11 +26,165 @@ use crate::tabs::{TabId, TabRegistry};
 const DEFAULT_URL: &str = "about:blank";
 
 /// Events that reach the loop from view callbacks (`AppEvent`) — chrome
-/// IPC, title changes, navigations.
+/// IPC, title changes, navigations, keys the engine yielded to us.
 pub enum AppEvent {
     Chrome(ChromeCommand),
     TitleChanged(TabId, String),
     Navigated(TabId, String),
+    Accelerator(Accelerator),
+    /// Page asked for a new window (target=_blank, ctrl/shift/middle-click,
+    /// window.open) — we open a tab instead.
+    OpenInNewTab(String),
+}
+
+/// What a keypress should do. One mapping serves both input paths —
+/// `AcceleratorKeyPressed` while a view has focus, and tao's
+/// `KeyboardInput` when it doesn't.
+#[derive(Clone, Copy)]
+enum KeyCommand {
+    NewTab,
+    NewWindow,
+    NewIncognitoWindow,
+    ReopenClosed,
+    CloseActive,
+    CloseWindow,
+    NextTab,
+    PrevTab,
+    /// 0-based index; `usize::MAX` selects the last tab (Ctrl+9).
+    SelectTab(usize),
+    /// Shift the active tab `delta` positions in the strip.
+    MoveTab(isize),
+    /// Absolute target index; `usize::MAX` lands it last.
+    MoveTabTo(usize),
+    DuplicateTab,
+    MuteTab,
+    Quit,
+    GoHome,
+    /// F6 toggles between the address bar and the page.
+    CycleFocus,
+    FocusPage,
+    FocusAddressBar,
+    Reload,
+    HardReload,
+    Back,
+    Forward,
+    Stop,
+    ToggleFullscreen,
+    DevTools,
+    Print,
+    SaveAs,
+    OpenFile,
+    ViewSource,
+    /// +1 zoom step in, -1 out, 0 reset to 100%.
+    Zoom(i32),
+    Screenshot,
+    ClearBrowsingData,
+}
+
+/// Map a key to the browser command it triggers, plus whether the key is
+/// swallowed (`steal = true`) or also passed through to the page. `None`
+/// means cryo doesn't own the key — WebView2 and the page keep it.
+fn key_command(acc: Accelerator) -> Option<(KeyCommand, bool)> {
+    use AcceleratorKey::*;
+    let Accelerator {
+        key,
+        ctrl,
+        alt,
+        shift,
+    } = acc;
+    let (cmd, steal) = match (ctrl, alt, shift, key) {
+        (true, false, false, Character('t')) => (KeyCommand::NewTab, true),
+        (true, false, false, Character('n')) => (KeyCommand::NewWindow, true),
+        (true, false, true, Character('n')) => (KeyCommand::NewIncognitoWindow, true),
+        (true, false, true, Character('t')) => (KeyCommand::ReopenClosed, true),
+        (true, false, false, Character('w')) | (true, false, false, F(4)) => {
+            (KeyCommand::CloseActive, true)
+        }
+        (true, false, true, Character('w')) => (KeyCommand::CloseWindow, true),
+        (true, false, false, Tab) | (true, false, false, PageDown) => (KeyCommand::NextTab, true),
+        (true, false, true, Tab) | (true, false, false, PageUp) => (KeyCommand::PrevTab, true),
+        (true, false, true, PageUp) => (KeyCommand::MoveTab(-1), true),
+        (true, false, true, PageDown) => (KeyCommand::MoveTab(1), true),
+        (true, false, true, Home) => (KeyCommand::MoveTabTo(0), true),
+        (true, false, true, End) => (KeyCommand::MoveTabTo(usize::MAX), true),
+        (true, false, true, Character('k')) => (KeyCommand::DuplicateTab, true),
+        (true, false, false, Character('m')) => (KeyCommand::MuteTab, true),
+        (true, false, true, Character('q')) => (KeyCommand::Quit, true),
+        (false, true, false, Home) => (KeyCommand::GoHome, true),
+        (false, false, false, F(6)) => (KeyCommand::CycleFocus, true),
+        (true, false, false, F(6)) => (KeyCommand::FocusPage, true),
+        (true, false, false, Character(d @ '1'..='8')) => {
+            (KeyCommand::SelectTab((d as usize) - ('1' as usize)), true)
+        }
+        (true, false, false, Character('9')) => (KeyCommand::SelectTab(usize::MAX), true),
+        (true, false, false, Character('l' | 'k' | 'e')) | (false, true, false, Character('d')) => {
+            (KeyCommand::FocusAddressBar, true)
+        }
+        (false, false, false, F(5)) | (true, false, false, Character('r')) => {
+            (KeyCommand::Reload, true)
+        }
+        (true, false, false, F(5))
+        | (true, false, true, Character('r'))
+        | (false, false, true, F(5)) => (KeyCommand::HardReload, true),
+        (false, true, false, Left) => (KeyCommand::Back, true),
+        (false, true, false, Right) => (KeyCommand::Forward, true),
+        // Esc still reaches the page — it dismisses dialogs and menus —
+        // while the view also stops loading.
+        (false, false, false, Escape) => (KeyCommand::Stop, false),
+        (false, false, false, F(11)) => (KeyCommand::ToggleFullscreen, true),
+        (false, false, false, F(12))
+        | (true, false, true, Character('i' | 'j' | 'c')) => (KeyCommand::DevTools, true),
+        (true, false, false, Character('p')) => (KeyCommand::Print, true),
+        (true, false, false, Character('s')) => (KeyCommand::SaveAs, true),
+        (true, false, false, Character('o')) => (KeyCommand::OpenFile, true),
+        (true, false, false, Character('u')) => (KeyCommand::ViewSource, true),
+        // '=' is the unshifted '+' key; Shift makes no difference to zoom.
+        (true, false, _, Character('=' | '+')) => (KeyCommand::Zoom(1), true),
+        (true, false, _, Character('-')) => (KeyCommand::Zoom(-1), true),
+        (true, false, false, Character('0')) => (KeyCommand::Zoom(0), true),
+        (true, false, true, Character('s')) => (KeyCommand::Screenshot, true),
+        (true, false, true, Delete) => (KeyCommand::ClearBrowsingData, true),
+        _ => return None,
+    };
+    Some((cmd, steal))
+}
+
+/// tao delivers `KeyEvent`s in its own key type — normalize into our
+/// `Accelerator` so both input paths share `key_command`.
+fn tao_accelerator(event: &KeyEvent, modifiers: ModifiersState) -> Option<Accelerator> {
+    let key = match &event.logical_key {
+        Key::Character(c) => {
+            let lower = c.to_lowercase();
+            let mut chars = lower.chars();
+            match (chars.next(), chars.next()) {
+                (Some(c @ ('a'..='z' | '0'..='9' | '=' | '+' | '-')), None) => {
+                    AcceleratorKey::Character(c)
+                }
+                _ => return None,
+            }
+        }
+        Key::Tab => AcceleratorKey::Tab,
+        Key::ArrowLeft => AcceleratorKey::Left,
+        Key::ArrowRight => AcceleratorKey::Right,
+        Key::PageUp => AcceleratorKey::PageUp,
+        Key::PageDown => AcceleratorKey::PageDown,
+        Key::Home => AcceleratorKey::Home,
+        Key::End => AcceleratorKey::End,
+        Key::Delete => AcceleratorKey::Delete,
+        Key::Escape => AcceleratorKey::Escape,
+        Key::F4 => AcceleratorKey::F(4),
+        Key::F5 => AcceleratorKey::F(5),
+        Key::F6 => AcceleratorKey::F(6),
+        Key::F11 => AcceleratorKey::F(11),
+        Key::F12 => AcceleratorKey::F(12),
+        _ => return None,
+    };
+    Some(Accelerator {
+        key,
+        ctrl: modifiers.control_key(),
+        alt: modifiers.alt_key(),
+        shift: modifiers.shift_key(),
+    })
 }
 
 pub struct App {
@@ -38,6 +196,10 @@ pub struct App {
     chrome: Box<dyn ContentView>,
     logical_size: (f64, f64),
     modifiers: ModifiersState,
+    /// Where keystrokes go right now: chrome bar or the active page.
+    /// Approximate — a page click isn't reported back — but F6's cycle
+    /// only needs our own focus calls to be consistent.
+    chrome_focused: bool,
 }
 
 impl App {
@@ -45,6 +207,7 @@ impl App {
         window: Rc<Window>,
         engine: Rc<dyn Engine>,
         proxy: EventLoopProxy<AppEvent>,
+        open_url: Option<String>,
     ) -> anyhow::Result<Self> {
         let logical = window.inner_size().to_logical::<f64>(window.scale_factor());
         let logical_size = (logical.width, logical.height);
@@ -53,12 +216,18 @@ impl App {
         // Content spawns before chrome so the chrome bar sits above it in
         // the z-order of sibling container windows.
         let mut registry = TabRegistry::new();
-        let first = registry.create(DEFAULT_URL.to_string());
+        // A spawned window can be handed an address to open (Ctrl+Shift+
+        // Enter, shell args). Blank or absent means the new-tab page.
+        let (domain, load) = match open_url.as_deref().map(normalize_nav_input) {
+            Some(u) if u != DEFAULT_URL => (u.clone(), u),
+            _ => (DEFAULT_URL.to_string(), NEW_TAB_URL.to_string()),
+        };
+        let first = registry.create(domain);
         if let Some(tab) = registry.get_mut(first) {
             tab.set_title("New tab".to_string());
         }
         let first_view =
-            Self::spawn_content_view(&*engine, &proxy, content_rect, first, NEW_TAB_URL)?;
+            Self::spawn_content_view(&*engine, &proxy, content_rect, first, &load, true)?;
         let mut views = HashMap::new();
         views.insert(first, first_view);
         registry.set_active(first)?;
@@ -70,6 +239,7 @@ impl App {
         let chrome = engine.spawn(ViewSpec {
             bounds: chrome_rect,
             visible: true,
+            on_accelerator: Some(Self::accelerator_forwarder(&proxy)),
             on_ipc: Some(Box::new(move |body| {
                 if let Ok(cmd) = serde_json::from_str::<ChromeCommand>(&body) {
                     let _ = ipc_proxy
@@ -90,6 +260,7 @@ impl App {
             chrome,
             logical_size,
             modifiers: ModifiersState::empty(),
+            chrome_focused: false,
         };
         Ok(app)
     }
@@ -110,6 +281,10 @@ impl App {
 
     fn dispatch(&mut self, event: AppEvent, control_flow: &mut ControlFlow) {
         let result = match event {
+            AppEvent::Accelerator(acc) => match key_command(acc) {
+                Some((cmd, _)) => self.run_key_command(cmd, control_flow),
+                None => Ok(()),
+            },
             AppEvent::Chrome(cmd) => self.on_chrome(cmd, control_flow),
             AppEvent::TitleChanged(id, title) => {
                 if let Some(tab) = self.registry.get_mut(id) {
@@ -132,6 +307,7 @@ impl App {
                     Ok(())
                 }
             }
+            AppEvent::OpenInNewTab(url) => self.spawn_tab(&url, true),
         };
         if let Err(e) = result {
             eprintln!("cryo: {e:?}");
@@ -148,45 +324,129 @@ impl App {
             ChromeCommand::NewTab => self.new_tab(),
             ChromeCommand::Activate { id } => self.activate(TabId::from_raw(id)),
             ChromeCommand::Close { id } => self.close_tab(TabId::from_raw(id), control_flow),
-            ChromeCommand::CloseActive => match self.registry.active_id() {
-                Some(id) => self.close_tab(id, control_flow),
-                None => Ok(()),
-            },
-            ChromeCommand::NextTab => self.cycle(1),
-            ChromeCommand::PrevTab => self.cycle(-1),
-            ChromeCommand::Navigate { input } => {
-                let url = normalize_nav_input(&input);
-                self.navigate_active(&url)
+            ChromeCommand::Navigate {
+                input,
+                ctrl,
+                alt,
+                shift,
+            } => {
+                let url = if ctrl && !alt && !shift {
+                    canonize_nav_input(&input)
+                } else {
+                    normalize_nav_input(&input)
+                };
+                match (ctrl, alt, shift) {
+                    // Ctrl+Shift+Enter: open the address in a new window.
+                    (true, false, true) => Self::spawn_window(false, Some(&url)),
+                    // Alt+Enter: new foreground tab; Alt+Shift+Enter: background.
+                    (false, true, false) => self.spawn_tab(&url, true),
+                    (false, true, true) => self.spawn_tab(&url, false),
+                    _ => self.navigate_active(&url),
+                }
             }
             ChromeCommand::Reload => self.reload_active(),
         }
     }
 
+    /// Fallback key path: fires only while no view holds focus — the
+    /// accelerator handler on each view covers the normal case.
     fn on_key(&mut self, event: &KeyEvent, control_flow: &mut ControlFlow) {
         if event.state != ElementState::Pressed {
             return;
         }
-        let ctrl = self.modifiers.control_key();
-        let shift = self.modifiers.shift_key();
-        let result = match &event.logical_key {
-            Key::Tab if ctrl => self.cycle(if shift { -1 } else { 1 }),
-            Key::F5 => self.reload_active(),
-            Key::F12 => self.devtools_active(),
-            Key::Character(c) if ctrl => match c.to_lowercase().as_str() {
-                "t" => self.new_tab(),
-                "w" => match self.registry.active_id() {
-                    Some(id) => self.close_tab(id, control_flow),
-                    None => Ok(()),
-                },
-                "l" => self.focus_address_bar(),
-                "r" => self.reload_active(),
-                _ => Ok(()),
-            },
-            _ => Ok(()),
+        let Some(acc) = tao_accelerator(event, self.modifiers) else {
+            return;
+        };
+        let result = match key_command(acc) {
+            Some((cmd, _)) => self.run_key_command(cmd, control_flow),
+            None => Ok(()),
         };
         if let Err(e) = result {
             eprintln!("cryo: {e:?}");
         }
+    }
+
+    fn run_key_command(
+        &mut self,
+        cmd: KeyCommand,
+        control_flow: &mut ControlFlow,
+    ) -> anyhow::Result<()> {
+        match cmd {
+            KeyCommand::NewTab => self.new_tab(),
+            KeyCommand::NewWindow => Self::spawn_window(false, None),
+            KeyCommand::NewIncognitoWindow => Self::spawn_window(true, None),
+            KeyCommand::ReopenClosed => self.reopen_closed(),
+            KeyCommand::CloseActive => match self.registry.active_id() {
+                Some(id) => self.close_tab(id, control_flow),
+                None => Ok(()),
+            },
+            KeyCommand::NextTab => self.cycle(1),
+            KeyCommand::PrevTab => self.cycle(-1),
+            KeyCommand::SelectTab(index) => match self.registry.id_at(index) {
+                Some(id) => self.activate(id),
+                None => Ok(()),
+            },
+            KeyCommand::MoveTab(delta) => self.move_active_tab(delta),
+            KeyCommand::MoveTabTo(index) => self.move_active_tab_to(index),
+            KeyCommand::DuplicateTab => self.duplicate_active(),
+            KeyCommand::MuteTab => self.mute_active(),
+            KeyCommand::Quit | KeyCommand::CloseWindow => {
+                *control_flow = ControlFlow::Exit;
+                Ok(())
+            }
+            KeyCommand::GoHome => self.navigate_active(DEFAULT_URL),
+            KeyCommand::CycleFocus => self.cycle_focus(),
+            KeyCommand::FocusPage => self.focus_page(),
+            KeyCommand::FocusAddressBar => self.focus_address_bar(),
+            KeyCommand::Reload => self.reload_active(),
+            KeyCommand::HardReload => self.hard_reload_active(),
+            KeyCommand::Back => self.back_active(),
+            KeyCommand::Forward => self.forward_active(),
+            KeyCommand::Stop => self.stop_active(),
+            KeyCommand::ToggleFullscreen => self.toggle_fullscreen(),
+            KeyCommand::DevTools => self.devtools_active(),
+            KeyCommand::Print => self.print_active(),
+            KeyCommand::SaveAs => self.save_active(),
+            KeyCommand::OpenFile => self.open_file(),
+            KeyCommand::ViewSource => self.view_source(),
+            KeyCommand::Zoom(step) => self.zoom_active(step),
+            KeyCommand::Screenshot => self.screenshot_active(),
+            KeyCommand::ClearBrowsingData => self
+                .chrome
+                .clear_browsing_data()
+                .map_err(|e| anyhow::anyhow!(e)),
+        }
+    }
+
+    /// One accelerator callback per view. Keys the browser owns are
+    /// reported to the event loop and swallowed (`steal`); everything else
+    /// returns `false` so the page and the engine see it normally.
+    fn accelerator_forwarder(proxy: &EventLoopProxy<AppEvent>) -> AcceleratorHandler {
+        let proxy = proxy.clone();
+        Box::new(move |acc| match key_command(acc) {
+            Some((_, steal)) => {
+                let _ = proxy.send_event(AppEvent::Accelerator(acc));
+                steal
+            }
+            None => false,
+        })
+    }
+
+    /// One window per process: a "new window" key spawns a sibling cryo
+    /// process. `--incognito` puts every view of that process on an
+    /// InPrivate profile — incognito is a property of the window, not a
+    /// tab, same as Chrome. A bare arg hands the child an address to open.
+    fn spawn_window(incognito: bool, url: Option<&str>) -> anyhow::Result<()> {
+        let exe = std::env::current_exe()?;
+        let mut cmd = std::process::Command::new(exe);
+        if incognito {
+            cmd.arg("--incognito");
+        }
+        if let Some(url) = url {
+            cmd.arg(url);
+        }
+        cmd.spawn()?;
+        Ok(())
     }
 
     fn new_tab(&mut self) -> anyhow::Result<()> {
@@ -194,9 +454,41 @@ impl App {
         if let Some(tab) = self.registry.get_mut(id) {
             tab.set_title("New tab".to_string());
         }
+        self.spawn_view_for(id, NEW_TAB_URL)
+    }
+
+    /// Bring back the most recently closed tab: respawn an engine surface
+    /// at its recorded address and focus it.
+    fn reopen_closed(&mut self) -> anyhow::Result<()> {
+        let Some(id) = self.registry.reopen_closed() else {
+            return Ok(());
+        };
+        let load = match self.registry.get(id).map(|t| t.url().to_string()) {
+            Some(u) if u != DEFAULT_URL => u,
+            _ => NEW_TAB_URL.to_string(),
+        };
+        self.spawn_view_for(id, &load)
+    }
+
+    /// Open `url` in a fresh tab — foreground for target=_blank /
+    /// Alt+Enter, background for Alt+Shift+Enter.
+    fn spawn_tab(&mut self, url: &str, foreground: bool) -> anyhow::Result<()> {
+        let id = self.registry.create(url.to_string());
         let (_, content_rect) = shell::layout(self.logical_size.0, self.logical_size.1);
         let view =
-            Self::spawn_content_view(&*self.engine, &self.proxy, content_rect, id, NEW_TAB_URL)?;
+            Self::spawn_content_view(&*self.engine, &self.proxy, content_rect, id, url, foreground)?;
+        self.views.insert(id, view);
+        if foreground {
+            self.activate(id)
+        } else {
+            self.sync_chrome()
+        }
+    }
+
+    /// Spawn the engine surface for `id`, register it, activate it.
+    fn spawn_view_for(&mut self, id: TabId, url: &str) -> anyhow::Result<()> {
+        let (_, content_rect) = shell::layout(self.logical_size.0, self.logical_size.1);
+        let view = Self::spawn_content_view(&*self.engine, &self.proxy, content_rect, id, url, true)?;
         self.views.insert(id, view);
         self.activate(id)
     }
@@ -207,18 +499,24 @@ impl App {
         content_rect: crate::engine::Rect,
         id: TabId,
         url: &str,
+        visible: bool,
     ) -> anyhow::Result<Box<dyn ContentView>> {
         let title_proxy = proxy.clone();
         let nav_proxy = proxy.clone();
+        let nw_proxy = proxy.clone();
         let view = engine.spawn(ViewSpec {
             bounds: content_rect,
-            visible: true,
+            visible,
             on_title_change: Some(Box::new(move |t| {
                 let _ = title_proxy.send_event(AppEvent::TitleChanged(id, t));
             })),
             on_navigate: Some(Box::new(move |uri| {
                 let _ = nav_proxy.send_event(AppEvent::Navigated(id, uri.clone()));
                 true
+            })),
+            on_accelerator: Some(Self::accelerator_forwarder(proxy)),
+            on_new_window: Some(Box::new(move |url| {
+                let _ = nw_proxy.send_event(AppEvent::OpenInNewTab(url));
             })),
             ..ViewSpec::url(url)
         })?;
@@ -239,6 +537,7 @@ impl App {
             view.set_visible(true)?;
             view.set_bounds(content_rect)?;
             view.focus()?;
+            self.chrome_focused = false;
         }
         self.sync_chrome()
     }
@@ -255,7 +554,7 @@ impl App {
     }
 
     fn cycle(&mut self, offset: isize) -> anyhow::Result<()> {
-        match self.registry.cycle_active(offset) {
+        match self.registry.cycle_target(offset) {
             Some(id) => self.activate(id),
             None => Ok(()),
         }
@@ -273,6 +572,10 @@ impl App {
             } else {
                 view.load_url(url)?;
             }
+            // Hand keyboard focus to the page — a committed navigation in a
+            // real browser moves focus out of the address bar.
+            view.focus()?;
+            self.chrome_focused = false;
         }
         if let Some(tab) = self.registry.get_mut(id) {
             tab.navigate(url.to_string());
@@ -280,27 +583,205 @@ impl App {
         self.sync_chrome()
     }
 
+    /// The engine surface of the selected tab, if one is live.
+    fn active_view(&self) -> Option<&dyn ContentView> {
+        self.registry
+            .active_id()
+            .and_then(|id| self.views.get(&id).map(|v| &**v))
+    }
+
     fn reload_active(&mut self) -> anyhow::Result<()> {
-        if let Some(id) = self.registry.active_id() {
-            if let Some(view) = self.views.get(&id) {
-                view.reload()?;
-            }
+        if let Some(view) = self.active_view() {
+            view.reload()?;
         }
         Ok(())
     }
 
-    fn devtools_active(&mut self) -> anyhow::Result<()> {
-        if let Some(id) = self.registry.active_id() {
-            if let Some(view) = self.views.get(&id) {
-                view.open_devtools();
+    fn hard_reload_active(&mut self) -> anyhow::Result<()> {
+        if let Some(view) = self.active_view() {
+            view.hard_reload()?;
+        }
+        Ok(())
+    }
+
+    fn back_active(&mut self) -> anyhow::Result<()> {
+        if let Some(view) = self.active_view() {
+            view.go_back()?;
+        }
+        Ok(())
+    }
+
+    fn forward_active(&mut self) -> anyhow::Result<()> {
+        if let Some(view) = self.active_view() {
+            view.go_forward()?;
+        }
+        Ok(())
+    }
+
+    fn stop_active(&mut self) -> anyhow::Result<()> {
+        if let Some(view) = self.active_view() {
+            view.stop()?;
+        }
+        Ok(())
+    }
+
+    fn move_active_tab(&mut self, delta: isize) -> anyhow::Result<()> {
+        let Some(id) = self.registry.active_id() else {
+            return Ok(());
+        };
+        let Some(pos) = self.registry.position_of(id) else {
+            return Ok(());
+        };
+        self.registry.relocate(id, (pos as isize + delta).max(0) as usize)?;
+        self.sync_chrome()
+    }
+
+    fn move_active_tab_to(&mut self, index: usize) -> anyhow::Result<()> {
+        match self.registry.active_id() {
+            Some(id) => {
+                self.registry.relocate(id, index)?;
+                self.sync_chrome()
             }
+            None => Ok(()),
+        }
+    }
+
+    fn duplicate_active(&mut self) -> anyhow::Result<()> {
+        let Some(id) = self.registry.active_id() else {
+            return Ok(());
+        };
+        let dup = self.registry.duplicate(id)?;
+        let url = self.registry.get(dup).map(|t| t.url().to_string());
+        let Some(url) = url else { return Ok(()) };
+        let load = if url == DEFAULT_URL { NEW_TAB_URL } else { &url };
+        self.spawn_view_for(dup, load)
+    }
+
+    fn mute_active(&mut self) -> anyhow::Result<()> {
+        if let Some(view) = self.active_view() {
+            view.set_muted(!view.muted()?)?;
+        }
+        Ok(())
+    }
+
+    /// F6 toggles between the address bar and the page; Ctrl+F6 jumps
+    /// straight to the page.
+    fn cycle_focus(&mut self) -> anyhow::Result<()> {
+        if self.chrome_focused {
+            self.focus_page()
+        } else {
+            self.focus_address_bar()
+        }
+    }
+
+    fn focus_page(&mut self) -> anyhow::Result<()> {
+        self.chrome_focused = false;
+        if let Some(view) = self.active_view() {
+            view.focus()?;
+        }
+        Ok(())
+    }
+
+    fn print_active(&mut self) -> anyhow::Result<()> {
+        if let Some(view) = self.active_view() {
+            view.eval("window.print()")?;
+        }
+        Ok(())
+    }
+
+    fn save_active(&mut self) -> anyhow::Result<()> {
+        if let Some(view) = self.active_view() {
+            view.save_as()?;
+        }
+        Ok(())
+    }
+
+    /// Ctrl+O: open a local file — the file dialog blocks the loop while
+    /// it's up, same as any modal system dialog.
+    fn open_file(&mut self) -> anyhow::Result<()> {
+        let Some(path) = rfd::FileDialog::new().pick_file() else {
+            return Ok(());
+        };
+        let url = format!("file:///{}", path.display().to_string().replace('\\', "/"));
+        self.navigate_active(&url)
+    }
+
+    /// Ctrl+U: view-source opens in a new tab, same as Chrome.
+    fn view_source(&mut self) -> anyhow::Result<()> {
+        let url = self.registry.active().map(|t| t.url().to_string());
+        match url {
+            Some(u) if u.starts_with("http") => self.spawn_tab(&format!("view-source:{u}"), true),
+            _ => Ok(()),
+        }
+    }
+
+    /// Steps: in ×1.25, out ÷1.25, reset to 1.0 — clamped like Chrome's
+    /// 25%–500% range.
+    fn zoom_active(&mut self, step: i32) -> anyhow::Result<()> {
+        if let Some(view) = self.active_view() {
+            let current = view.zoom_factor()?;
+            let next = match step {
+                1 => current * 1.25,
+                -1 => current / 1.25,
+                _ => 1.0,
+            }
+            .clamp(0.25, 5.0);
+            view.set_zoom_factor(next)?;
+        }
+        Ok(())
+    }
+
+    /// Ctrl+Shift+S: PNG of the visible page under Pictures\cryo.
+    fn screenshot_active(&mut self) -> anyhow::Result<()> {
+        let Some(view) = self.active_view() else {
+            return Ok(());
+        };
+        let png = view.capture_png()?;
+        if png.is_empty() {
+            return Ok(());
+        }
+        let dir = std::env::var_os("USERPROFILE")
+            .map(std::path::PathBuf::from)
+            .map(|p| p.join("Pictures"))
+            .filter(|p| p.is_dir())
+            .unwrap_or_else(std::env::temp_dir)
+            .join("cryo");
+        std::fs::create_dir_all(&dir)?;
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let path = dir.join(format!("shot-{ts}.png"));
+        std::fs::write(&path, png)?;
+        eprintln!("cryo: screenshot saved to {}", path.display());
+        Ok(())
+    }
+
+    fn toggle_fullscreen(&mut self) -> anyhow::Result<()> {
+        let next = if self.window.fullscreen().is_some() {
+            None
+        } else {
+            Some(Fullscreen::Borderless(None))
+        };
+        self.window.set_fullscreen(next);
+        Ok(())
+    }
+
+    fn devtools_active(&mut self) -> anyhow::Result<()> {
+        if let Some(view) = self.active_view() {
+            view.open_devtools();
         }
         Ok(())
     }
 
     fn focus_address_bar(&mut self) -> anyhow::Result<()> {
+        // Move controller focus to the chrome view first — `u.focus()` in
+        // JS sets DOM focus only, so without this the keystrokes keep going
+        // to whichever webview last had it.
+        self.chrome.focus()?;
         self.chrome
             .eval("const u=document.getElementById('url');u.focus();u.select();")?;
+        self.chrome_focused = true;
         Ok(())
     }
 

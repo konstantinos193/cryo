@@ -10,10 +10,19 @@ use crate::engine::{ContentView, Engine, EngineError, Rect, ViewSpec};
 pub enum FakeCall {
     LoadUrl(String),
     Reload,
+    HardReload,
+    GoBack,
+    GoForward,
+    Stop,
     SetVisible(bool),
     SetBounds(Rect),
     Focus,
     Eval(String),
+    SetMuted(bool),
+    SetZoomFactor(f64),
+    CapturePng,
+    SaveAs,
+    ClearBrowsingData,
 }
 
 #[derive(Default)]
@@ -32,6 +41,8 @@ impl Engine for FakeEngine {
         Ok(Box::new(FakeView {
             calls: self.calls.clone(),
             url: RefCell::new(None),
+            muted: RefCell::new(false),
+            zoom: RefCell::new(1.0),
         }))
     }
 }
@@ -39,6 +50,8 @@ impl Engine for FakeEngine {
 struct FakeView {
     calls: Rc<RefCell<Vec<FakeCall>>>,
     url: RefCell<Option<String>>,
+    muted: RefCell<bool>,
+    zoom: RefCell<f64>,
 }
 
 impl ContentView for FakeView {
@@ -50,6 +63,26 @@ impl ContentView for FakeView {
 
     fn reload(&self) -> Result<(), EngineError> {
         self.calls.borrow_mut().push(FakeCall::Reload);
+        Ok(())
+    }
+
+    fn hard_reload(&self) -> Result<(), EngineError> {
+        self.calls.borrow_mut().push(FakeCall::HardReload);
+        Ok(())
+    }
+
+    fn go_back(&self) -> Result<(), EngineError> {
+        self.calls.borrow_mut().push(FakeCall::GoBack);
+        Ok(())
+    }
+
+    fn go_forward(&self) -> Result<(), EngineError> {
+        self.calls.borrow_mut().push(FakeCall::GoForward);
+        Ok(())
+    }
+
+    fn stop(&self) -> Result<(), EngineError> {
+        self.calls.borrow_mut().push(FakeCall::Stop);
         Ok(())
     }
 
@@ -78,6 +111,43 @@ impl ContentView for FakeView {
     }
 
     fn open_devtools(&self) {}
+
+    fn muted(&self) -> Result<bool, EngineError> {
+        Ok(*self.muted.borrow())
+    }
+
+    fn set_muted(&self, muted: bool) -> Result<(), EngineError> {
+        *self.muted.borrow_mut() = muted;
+        self.calls.borrow_mut().push(FakeCall::SetMuted(muted));
+        Ok(())
+    }
+
+    fn zoom_factor(&self) -> Result<f64, EngineError> {
+        Ok(*self.zoom.borrow())
+    }
+
+    fn set_zoom_factor(&self, factor: f64) -> Result<(), EngineError> {
+        *self.zoom.borrow_mut() = factor;
+        self.calls
+            .borrow_mut()
+            .push(FakeCall::SetZoomFactor(factor));
+        Ok(())
+    }
+
+    fn capture_png(&self) -> Result<Vec<u8>, EngineError> {
+        self.calls.borrow_mut().push(FakeCall::CapturePng);
+        Ok(Vec::new())
+    }
+
+    fn save_as(&self) -> Result<(), EngineError> {
+        self.calls.borrow_mut().push(FakeCall::SaveAs);
+        Ok(())
+    }
+
+    fn clear_browsing_data(&self) -> Result<(), EngineError> {
+        self.calls.borrow_mut().push(FakeCall::ClearBrowsingData);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
