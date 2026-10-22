@@ -12,9 +12,30 @@ use wry::{Rect as WryRect, WebView, WebViewBuilder};
 #[cfg(target_os = "windows")]
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2AcceleratorKeyPressedEventArgs, ICoreWebView2AcceleratorKeyPressedEventHandler,
+    ICoreWebView2ContainsFullScreenElementChangedEventHandler,
+    ICoreWebView2NavigationCompletedEventArgs, ICoreWebView2NavigationCompletedEventArgs2,
+    ICoreWebView2NavigationCompletedEventHandler, ICoreWebView2ProcessFailedEventHandler,
     ICoreWebView2Profile2, ICoreWebView2_13, ICoreWebView2_25, ICoreWebView2_8,
     COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
-    COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN,
+    COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN, COREWEBVIEW2_PROCESS_FAILED_KIND,
+    COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
+    COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE, COREWEBVIEW2_WEB_ERROR_STATUS,
+    COREWEBVIEW2_WEB_ERROR_STATUS_CANNOT_CONNECT,
+    COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_COMMON_NAME_IS_INCORRECT,
+    COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_EXPIRED,
+    COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_IS_INVALID,
+    COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_REVOKED,
+    COREWEBVIEW2_WEB_ERROR_STATUS_CLIENT_CERTIFICATE_CONTAINS_ERRORS,
+    COREWEBVIEW2_WEB_ERROR_STATUS_CONNECTION_ABORTED,
+    COREWEBVIEW2_WEB_ERROR_STATUS_CONNECTION_RESET, COREWEBVIEW2_WEB_ERROR_STATUS_DISCONNECTED,
+    COREWEBVIEW2_WEB_ERROR_STATUS_ERROR_HTTP_INVALID_SERVER_RESPONSE,
+    COREWEBVIEW2_WEB_ERROR_STATUS_HOST_NAME_NOT_RESOLVED,
+    COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED,
+    COREWEBVIEW2_WEB_ERROR_STATUS_REDIRECT_FAILED,
+    COREWEBVIEW2_WEB_ERROR_STATUS_SERVER_UNREACHABLE, COREWEBVIEW2_WEB_ERROR_STATUS_TIMEOUT,
+    COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN,
+    COREWEBVIEW2_WEB_ERROR_STATUS_VALID_AUTHENTICATION_CREDENTIALS_REQUIRED,
+    COREWEBVIEW2_WEB_ERROR_STATUS_VALID_PROXY_AUTHENTICATION_REQUIRED,
 };
 #[cfg(target_os = "windows")]
 use windows::core::Interface;
@@ -23,7 +44,7 @@ use wry::{NewWindowResponse, WebViewExtWindows};
 
 use crate::engine::{
     Accelerator, AcceleratorHandler, AcceleratorKey, ContentView, Engine, EngineError,
-    PageResolver, Rect, ViewSpec,
+    FullscreenHandler, HttpStatus, LoadFailure, LoadFailureHandler, PageResolver, Rect, ViewSpec,
 };
 
 /// Scheme name registered on every view. On Windows wry rewrites it to
@@ -119,7 +140,13 @@ impl Engine for WryEngine {
         let view = builder
             .build_as_child(&*self.window)
             .map_err(|e| EngineError::Spawn(e.to_string()))?;
-        WryView::new(view, spec.on_accelerator).map(|v| Box::new(v) as Box<dyn ContentView>)
+        WryView::new(
+            view,
+            spec.on_accelerator,
+            spec.on_load_failure,
+            spec.on_fullscreen,
+        )
+        .map(|v| Box::new(v) as Box<dyn ContentView>)
     }
 }
 
@@ -147,6 +174,32 @@ fn attach_accelerator(
     unsafe {
         view.controller()
             .add_AcceleratorKeyPressed(&handler, &mut token)
+            .map_err(|e| EngineError::Spawn(e.to_string()))?;
+    }
+    Ok(handler)
+}
+
+/// Attach `ContainsFullScreenElementChanged` — DOM fullscreen (video)
+/// lives inside the view bounds; the app decides to grow the view over
+/// the chrome strip when a page element goes fullscreen.
+#[cfg(target_os = "windows")]
+fn attach_fullscreen_change(
+    view: &WebView,
+    on_fullscreen: FullscreenHandler,
+) -> Result<ICoreWebView2ContainsFullScreenElementChangedEventHandler, EngineError> {
+    let handler = webview2_com::ContainsFullScreenElementChangedEventHandler::create(Box::new(
+        move |webview, _args| {
+            let Some(wv) = webview else { return Ok(()) };
+            let mut contains = windows::core::BOOL::default();
+            unsafe { wv.ContainsFullScreenElement(&mut contains)? };
+            on_fullscreen(contains.as_bool());
+            Ok(())
+        },
+    ));
+    let mut token = 0i64;
+    unsafe {
+        view.webview()
+            .add_ContainsFullScreenElementChanged(&handler, &mut token)
             .map_err(|e| EngineError::Spawn(e.to_string()))?;
     }
     Ok(handler)
@@ -210,28 +263,190 @@ fn accelerator_key(vk: u32) -> Option<AcceleratorKey> {
     })
 }
 
+/// Asks the page whether the server sent anything worth rendering.
+#[cfg(target_os = "windows")]
+const EMPTY_BODY_PROBE: &str =
+    "(function(){var b=document.body;return !b||(!b.children.length&&!b.textContent.trim());})()";
+
+/// Attach `NavigationCompleted`: the event that says a navigation finished,
+/// and whether it produced a document.
+#[cfg(target_os = "windows")]
+fn attach_navigation_completed(
+    view: &WebView,
+    report: Rc<dyn Fn(LoadFailure)>,
+) -> Result<ICoreWebView2NavigationCompletedEventHandler, EngineError> {
+    let webview = view.webview();
+    let handler =
+        webview2_com::NavigationCompletedEventHandler::create(Box::new(move |_sender, args| {
+            let Some(args) = args else { return Ok(()) };
+            unsafe { navigation_completed(&webview, &args, &report) }
+        }));
+    let mut token = 0i64;
+    unsafe {
+        view.webview()
+            .add_NavigationCompleted(&handler, &mut token)
+            .map_err(|e| EngineError::Spawn(e.to_string()))?;
+    }
+    Ok(handler)
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn navigation_completed(
+    webview: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2,
+    args: &ICoreWebView2NavigationCompletedEventArgs,
+    report: &Rc<dyn Fn(LoadFailure)>,
+) -> windows::core::Result<()> {
+    let mut success = windows::core::BOOL::default();
+    args.IsSuccess(&mut success)?;
+    if !success.as_bool() {
+        let mut status = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
+        args.WebErrorStatus(&mut status)?;
+        if let Some(failure) = load_failure(status) {
+            (**report)(failure);
+        }
+        return Ok(());
+    }
+
+    // A 4xx or 5xx is still a successful navigation — the server answered.
+    // Only step in when it answered with nothing to render, so a site's own
+    // 404 page survives, the way Chrome leaves it alone.
+    let Ok(args) = args.cast::<ICoreWebView2NavigationCompletedEventArgs2>() else {
+        return Ok(());
+    };
+    let mut code = 0i32;
+    args.HttpStatusCode(&mut code)?;
+    let Ok(status) = u16::try_from(code) else {
+        return Ok(());
+    };
+    if !HttpStatus::new(status).is_error() {
+        return Ok(());
+    }
+    let report = report.clone();
+    let probe = webview2_com::ExecuteScriptCompletedHandler::create(Box::new(move |_hr, json| {
+        if json == "true" {
+            (*report)(LoadFailure::Http(HttpStatus::new(status)));
+        }
+        Ok(())
+    }));
+    webview.ExecuteScript(&windows::core::HSTRING::from(EMPTY_BODY_PROBE), &probe)
+}
+
+/// Attach `ProcessFailed`: the renderer dying leaves a blank view behind,
+/// and no navigation event ever fires for it.
+#[cfg(target_os = "windows")]
+fn attach_process_failed(
+    view: &WebView,
+    report: Rc<dyn Fn(LoadFailure)>,
+) -> Result<ICoreWebView2ProcessFailedEventHandler, EngineError> {
+    let handler =
+        webview2_com::ProcessFailedEventHandler::create(Box::new(move |_sender, args| {
+            let Some(args) = args else { return Ok(()) };
+            let mut kind = COREWEBVIEW2_PROCESS_FAILED_KIND::default();
+            unsafe { args.ProcessFailedKind(&mut kind)? };
+            // Only the process rendering this view blanks the page. A dead GPU
+            // or utility process is the engine's problem, not a tab's.
+            if kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED
+                || kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE
+            {
+                (*report)(LoadFailure::RenderProcessGone);
+            }
+            Ok(())
+        }));
+    let mut token = 0i64;
+    unsafe {
+        view.webview()
+            .add_ProcessFailed(&handler, &mut token)
+            .map_err(|e| EngineError::Spawn(e.to_string()))?;
+    }
+    Ok(handler)
+}
+
+/// WebView2 status → our vocabulary. `None` for the statuses the shell must
+/// not paint over: a cancelled load is the user changing their mind, and an
+/// authentication challenge is a dialog the engine raises itself.
+#[cfg(target_os = "windows")]
+fn load_failure(status: COREWEBVIEW2_WEB_ERROR_STATUS) -> Option<LoadFailure> {
+    Some(match status {
+        s if s == COREWEBVIEW2_WEB_ERROR_STATUS_DISCONNECTED => LoadFailure::Offline,
+        s if s == COREWEBVIEW2_WEB_ERROR_STATUS_HOST_NAME_NOT_RESOLVED => LoadFailure::HostNotFound,
+        s if s == COREWEBVIEW2_WEB_ERROR_STATUS_TIMEOUT => LoadFailure::TimedOut,
+        s if s == COREWEBVIEW2_WEB_ERROR_STATUS_CANNOT_CONNECT
+            || s == COREWEBVIEW2_WEB_ERROR_STATUS_SERVER_UNREACHABLE
+            || s == COREWEBVIEW2_WEB_ERROR_STATUS_CONNECTION_ABORTED
+            || s == COREWEBVIEW2_WEB_ERROR_STATUS_CONNECTION_RESET =>
+        {
+            LoadFailure::ConnectionFailed
+        }
+        s if s == COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_COMMON_NAME_IS_INCORRECT
+            || s == COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_EXPIRED
+            || s == COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_IS_INVALID
+            || s == COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_REVOKED
+            || s == COREWEBVIEW2_WEB_ERROR_STATUS_CLIENT_CERTIFICATE_CONTAINS_ERRORS =>
+        {
+            LoadFailure::CertificateRejected
+        }
+        s if s == COREWEBVIEW2_WEB_ERROR_STATUS_REDIRECT_FAILED => LoadFailure::RedirectLoop,
+        s if s == COREWEBVIEW2_WEB_ERROR_STATUS_ERROR_HTTP_INVALID_SERVER_RESPONSE => {
+            LoadFailure::MalformedResponse
+        }
+        s if s == COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED
+            || s == COREWEBVIEW2_WEB_ERROR_STATUS_VALID_AUTHENTICATION_CREDENTIALS_REQUIRED
+            || s == COREWEBVIEW2_WEB_ERROR_STATUS_VALID_PROXY_AUTHENTICATION_REQUIRED =>
+        {
+            return None
+        }
+        _ => LoadFailure::Unknown,
+    })
+}
+
 struct WryView {
     view: WebView,
-    /// Keeps the COM callback alive; unregistration dies with the view.
+    /// Keep the COM callbacks alive; unregistration dies with the view.
     #[cfg(target_os = "windows")]
     _accel_handler: Option<ICoreWebView2AcceleratorKeyPressedEventHandler>,
+    #[cfg(target_os = "windows")]
+    _navigation_handler: Option<ICoreWebView2NavigationCompletedEventHandler>,
+    #[cfg(target_os = "windows")]
+    _process_handler: Option<ICoreWebView2ProcessFailedEventHandler>,
+    #[cfg(target_os = "windows")]
+    _fullscreen_handler: Option<ICoreWebView2ContainsFullScreenElementChangedEventHandler>,
 }
 
 impl WryView {
-    fn new(view: WebView, on_accelerator: Option<AcceleratorHandler>) -> Result<Self, EngineError> {
+    fn new(
+        view: WebView,
+        on_accelerator: Option<AcceleratorHandler>,
+        on_load_failure: Option<LoadFailureHandler>,
+        on_fullscreen: Option<FullscreenHandler>,
+    ) -> Result<Self, EngineError> {
         #[cfg(target_os = "windows")]
         {
             let _accel_handler = on_accelerator
                 .map(|cb| attach_accelerator(&view, cb))
                 .transpose()?;
+            // Both events feed one callback, so they share a refcount.
+            let report: Option<Rc<dyn Fn(LoadFailure)>> = on_load_failure.map(Rc::from);
+            let _navigation_handler = report
+                .clone()
+                .map(|cb| attach_navigation_completed(&view, cb))
+                .transpose()?;
+            let _process_handler = report
+                .map(|cb| attach_process_failed(&view, cb))
+                .transpose()?;
+            let _fullscreen_handler = on_fullscreen
+                .map(|cb| attach_fullscreen_change(&view, cb))
+                .transpose()?;
             Ok(Self {
                 view,
                 _accel_handler,
+                _navigation_handler,
+                _process_handler,
+                _fullscreen_handler,
             })
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let _ = on_accelerator;
+            let _ = (on_accelerator, on_load_failure, on_fullscreen);
             Ok(Self { view })
         }
     }

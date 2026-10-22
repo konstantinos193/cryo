@@ -32,6 +32,12 @@ pub type AcceleratorHandler = Box<dyn Fn(Accelerator) -> bool>;
 /// `window.open`). We deny the popup and open a tab ourselves — the URL is
 /// the only thing the app needs.
 pub type NewWindowHandler = Box<dyn Fn(String)>;
+/// Called when a navigation ended without a document. See [`LoadFailure`] for
+/// what counts — cancelled loads and credential prompts do not.
+pub type LoadFailureHandler = Box<dyn Fn(LoadFailure)>;
+/// Page element entered or left DOM fullscreen (video fullscreen). The bool
+/// is the engine's `ContainsFullScreenElement` state after the change.
+pub type FullscreenHandler = Box<dyn Fn(bool)>;
 
 /// A key in our own vocabulary — the engine maps platform virtual-key
 /// codes so policy never sees them.
@@ -74,6 +80,8 @@ pub struct ViewSpec {
     pub on_navigate: Option<NavigateHandler>,
     pub on_accelerator: Option<AcceleratorHandler>,
     pub on_new_window: Option<NewWindowHandler>,
+    pub on_load_failure: Option<LoadFailureHandler>,
+    pub on_fullscreen: Option<FullscreenHandler>,
 }
 
 impl Default for Rect {
@@ -167,8 +175,8 @@ pub enum LoadFailure {
     HostNotFound,
     /// The host took the connection but never finished answering.
     TimedOut,
-    /// Refused, aborted or reset mid-flight.
-    ConnectionLost,
+    /// Refused outright, or aborted or reset mid-flight.
+    ConnectionFailed,
     /// TLS could not be trusted: wrong name, expired, revoked or malformed.
     CertificateRejected,
     /// The redirect chain never terminated.

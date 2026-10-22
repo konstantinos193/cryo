@@ -31,23 +31,79 @@ pub fn internal_page(path: &str) -> Option<&'static str> {
     }
 }
 
-/// New-tab page. The `<title>` matters: it is what the tab strip shows.
+/// Home page: what the window opens on, and what every new tab shows. The
+/// `<title>` matters — it is what the tab strip shows.
+///
+/// The address box navigates the view itself rather than talking to the
+/// shell. Content views deliberately have no IPC handler, because the
+/// internal protocol answers any origin: wiring `/cmd` into a content view
+/// would let any website drive the browser.
 pub const NEW_TAB_HTML: &str = r##"<!doctype html>
-<html>
+<html lang="en">
 <head><meta charset="utf-8"><title>New tab</title><style>
+  :root { color-scheme: dark; }
   body {
-    height: 100vh; margin: 0; display: flex; align-items: center;
-    justify-content: center; flex-direction: column; gap: 8px;
-    background: #16181c; color: #d7dae0;
-    font: 14px/1.5 system-ui, "Segoe UI", sans-serif;
+    min-height: 100vh; margin: 0; display: flex; align-items: center;
+    justify-content: center; background: #16181c; color: #d7dae0;
+    font: 15px/1.6 system-ui, "Segoe UI", sans-serif;
     -webkit-user-select: none; user-select: none;
   }
-  .brand { font-size: 28px; font-weight: 600; letter-spacing: 1px; }
-  .tag { color: #8a8f98; }
+  main {
+    width: min(520px, calc(100vw - 48px));
+    /* sit a little above centre — dead-centre reads as low */
+    margin-bottom: 10vh; text-align: center;
+  }
+  svg { width: 72px; height: 72px; margin: 0 auto; display: block; }
+  .brand {
+    margin-top: 20px; font-size: 34px; font-weight: 600; letter-spacing: .06em;
+  }
+  .tag { margin-top: 6px; color: #8a8f98; font-size: 14px; }
+  form { margin-top: 32px; }
+  input {
+    width: 100%; box-sizing: border-box; padding: 13px 16px;
+    border: 1px solid #272b33; border-radius: 10px;
+    background: #1d2026; color: #e6e9ee; font: inherit;
+    -webkit-user-select: text; user-select: text;
+  }
+  input::placeholder { color: #70767f; }
+  input:focus {
+    outline: none; border-color: #2a7089;
+    box-shadow: 0 0 0 3px rgba(42, 112, 137, .25);
+  }
 </style></head>
 <body>
-  <div class="brand">cryo</div>
-  <div class="tag">Tabs freeze. Budgets hold.</div>
+  <main>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" aria-hidden="true"><defs><clipPath id="cryoMark"><path d="M76.18 69.55 L52.25 85.44 L19.82 66.72 L19.82 29.28 L52.25 10.56 L76.18 26.45 L69.46 32.5 L52.25 28.65 L37.54 39.51 L37.54 56.49 L52.25 67.35 L69.46 63.5Z"/></clipPath></defs><path d="M76.18 69.55 L52.25 85.44 L19.82 66.72 L19.82 29.28 L52.25 10.56 L76.18 26.45 L69.46 32.5 L52.25 28.65 L37.54 39.51 L37.54 56.49 L52.25 67.35 L69.46 63.5Z" fill="#17455A"/><path d="M76.34 69.5 L52.15 85.58 L52.11 67.24Z" fill="#3B8EA8"/><path d="M76.35 69.59 L52.07 67.36 L69.58 63.38Z" fill="#3B8EA8"/><path d="M52.37 85.56 L19.65 66.69 L37.56 56.32Z" fill="#3B8EA8"/><path d="M52.3 85.6 L37.44 56.35 L52.4 67.28Z" fill="#A2DEEE"/><path d="M19.78 66.89 L19.76 29.12 L37.7 39.44Z" fill="#EAF9FD"/><path d="M19.7 66.85 L37.61 39.35 L37.71 56.55Z" fill="#A2DEEE"/><path d="M19.66 29.33 L52.36 10.43 L52.4 28.73Z" fill="#EAF9FD"/><path d="M19.65 29.25 L52.41 28.6 L37.57 39.68Z" fill="#A2DEEE"/><path d="M52.12 10.44 L76.34 26.5 L69.52 32.66Z" fill="#EAF9FD"/><path d="M52.18 10.4 L69.6 32.61 L52.11 28.76Z" fill="#3B8EA8"/><path d="M19.82 29.28 L52.25 10.56 L76.18 26.45" fill="none" stroke="#EAF9FD" stroke-width="2.44" clip-path="url(#cryoMark)"/></svg>
+    <div class="brand">cryo</div>
+    <div class="tag">Tabs freeze. Budgets hold.</div>
+    <form id="go" autocomplete="off">
+      <input id="q" type="text" spellcheck="false" autofocus
+             placeholder="Search DuckDuckGo or type a URL"
+             aria-label="Search or type a URL">
+    </form>
+  </main>
+<script>
+  // Mirrors `normalize_nav_input` in shell::chrome so this box and the
+  // address bar read the same text the same way. Keep the two in step.
+  function destination(raw) {
+    var s = raw.trim();
+    if (!s) return null;
+    // `javascript://x%0Aalert(1)` passes a naive scheme test, and this page
+    // runs on cryo's own origin.
+    if (/^javascript:/i.test(s)) return null;
+    if (s.indexOf("://") !== -1 || /^(about|data|file):/i.test(s)) return s;
+    if (s.indexOf(" ") === -1 && s.indexOf(".") !== -1) return "https://" + s;
+    return "https://duckduckgo.com/?q=" + encodeURIComponent(s);
+  }
+
+  var box = document.getElementById("q");
+  document.getElementById("go").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var url = destination(box.value);
+    if (url) location.href = url;
+  });
+  box.focus();
+</script>
 </body>
 </html>
 "##;

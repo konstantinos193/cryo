@@ -11,13 +11,13 @@ use tao::keyboard::{Key, ModifiersState};
 use tao::window::{Fullscreen, Window};
 
 use crate::engine::{
-    Accelerator, AcceleratorHandler, AcceleratorKey, ContentView, Engine, ViewSpec,
+    Accelerator, AcceleratorHandler, AcceleratorKey, ContentView, Engine, LoadFailure, ViewSpec,
 };
 use crate::shell::chrome::{
     canonize_nav_input, normalize_nav_input, ChromeCommand, ChromeState, ChromeTab,
 };
 use crate::shell::pages::{self, CHROME_URL, NEW_TAB_URL};
-use crate::shell::{self};
+use crate::shell::{self, error};
 use crate::tabs::{TabId, TabRegistry};
 
 /// Domain URL recorded for a fresh tab. The view actually loads
@@ -35,6 +35,10 @@ pub enum AppEvent {
     /// Page asked for a new window (target=_blank, ctrl/shift/middle-click,
     /// window.open) — we open a tab instead.
     OpenInNewTab(String),
+    /// A page element entered/left DOM fullscreen (video fullscreen).
+    PageFullscreen(TabId, bool),
+    /// A navigation ended with no document, or the renderer died under one.
+    LoadFailed(TabId, LoadFailure),
 }
 
 /// What a keypress should do. One mapping serves both input paths —
@@ -201,6 +205,8 @@ pub struct App {
     /// Approximate — a page click isn't reported back — but F6's cycle
     /// only needs our own focus calls to be consistent.
     chrome_focused: bool,
+    /// The active view is in DOM fullscreen — it covers the chrome strip.
+    page_fullscreen: bool,
 }
 
 impl App {
@@ -262,6 +268,7 @@ impl App {
             logical_size,
             modifiers: ModifiersState::empty(),
             chrome_focused: false,
+            page_fullscreen: false,
         };
         Ok(app)
     }
@@ -309,6 +316,8 @@ impl App {
                 }
             }
             AppEvent::OpenInNewTab(url) => self.spawn_tab(&url, true),
+            AppEvent::PageFullscreen(id, on) => self.page_fullscreen(id, on),
+            AppEvent::LoadFailed(id, failure) => self.show_error(id, failure),
         };
         if let Err(e) = result {
             eprintln!("cryo: {e:?}");
@@ -512,6 +521,8 @@ impl App {
         let title_proxy = proxy.clone();
         let nav_proxy = proxy.clone();
         let nw_proxy = proxy.clone();
+        let fs_proxy = proxy.clone();
+        let fail_proxy = proxy.clone();
         let view = engine.spawn(ViewSpec {
             bounds: content_rect,
             visible,
@@ -525,6 +536,12 @@ impl App {
             on_accelerator: Some(Self::accelerator_forwarder(proxy)),
             on_new_window: Some(Box::new(move |url| {
                 let _ = nw_proxy.send_event(AppEvent::OpenInNewTab(url));
+            })),
+            on_fullscreen: Some(Box::new(move |on| {
+                let _ = fs_proxy.send_event(AppEvent::PageFullscreen(id, on));
+            })),
+            on_load_failure: Some(Box::new(move |failure| {
+                let _ = fail_proxy.send_event(AppEvent::LoadFailed(id, failure));
             })),
             ..ViewSpec::url(url)
         })?;
@@ -744,6 +761,59 @@ impl App {
         Ok(())
     }
 
+    /// DOM fullscreen (YouTube etc.): the page element fills the *view*,
+    /// and the view only covers the area under the chrome strip — so we
+    /// hide chrome and stretch the view over the whole window. Chrome
+    /// restores on exit.
+    /// Paint the error page over the tab whose load failed.
+    ///
+    /// The tab keeps its own address, so reload and the address bar still
+    /// point at the destination rather than at the error page — and because
+    /// internal URLs are never recorded, the error page cannot become a
+    /// tab's address and send the next failure back to itself.
+    fn show_error(&mut self, id: TabId, failure: LoadFailure) -> anyhow::Result<()> {
+        let Some(view) = self.views.get(&id) else {
+            return Ok(());
+        };
+        let attempted = self
+            .registry
+            .get(id)
+            .map(|tab| tab.url().to_string())
+            .unwrap_or_default();
+        view.load_url(&error::error_url(failure, &attempted))?;
+        Ok(())
+    }
+
+    fn page_fullscreen(&mut self, id: TabId, on: bool) -> anyhow::Result<()> {
+        if self.registry.active_id() != Some(id) {
+            return Ok(());
+        }
+        self.page_fullscreen = on;
+        // Video fullscreen in a real browser is OS fullscreen — the window
+        // goes borderless over the taskbar too, not just over the strip.
+        self.window.set_fullscreen(if on {
+            Some(Fullscreen::Borderless(None))
+        } else {
+            None
+        });
+        self.chrome.set_visible(!on)?;
+        if let Some(view) = self.views.get(&id) {
+            let (w, h) = self.logical_size;
+            let rect = if on {
+                crate::engine::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w,
+                    h,
+                }
+            } else {
+                shell::layout(w, h).1
+            };
+            view.set_bounds(rect)?;
+        }
+        Ok(())
+    }
+
     /// Ctrl+Shift+S: PNG of the visible page under Pictures\cryo.
     fn screenshot_active(&mut self) -> anyhow::Result<()> {
         let Some(view) = self.active_view() else {
@@ -807,8 +877,20 @@ impl App {
         if let Err(e) = self.chrome.set_bounds(chrome_rect) {
             eprintln!("cryo: {e:?}");
         }
-        for view in self.views.values() {
-            if let Err(e) = view.set_bounds(content_rect) {
+        // A DOM-fullscreen view keeps covering the whole window on resize.
+        let active = self.registry.active_id();
+        for (id, view) in &self.views {
+            let rect = if self.page_fullscreen && Some(*id) == active {
+                crate::engine::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w,
+                    h,
+                }
+            } else {
+                content_rect
+            };
+            if let Err(e) = view.set_bounds(rect) {
                 eprintln!("cryo: {e:?}");
             }
         }
