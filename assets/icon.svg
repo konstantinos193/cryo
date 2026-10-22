@@ -1,0 +1,128 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="34%" r="80%">
+      <stop offset="0%" stop-color="#1e2a47"/>
+      <stop offset="55%" stop-color="#121a2e"/>
+      <stop offset="100%" stop-color="#090d17"/>
+    </radialGradient>
+    <linearGradient id="iceTop" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#d8f1ff"/>
+      <stop offset="100%" stop-color="#8fd4fb"/>
+    </linearGradient>
+    <linearGradient id="iceLeft" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#5aaef2"/>
+      <stop offset="100%" stop-color="#2f74cf"/>
+    </linearGradient>
+    <linearGradient id="iceRight" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3a6fc0"/>
+      <stop offset="100%" stop-color="#1e4d93"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity=".92"/>
+      <stop offset="100%" stop-color="#cfeaff" stop-opacity=".55"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#4aa8ff" stop-opacity=".38"/>
+      <stop offset="100%" stop-color="#4aa8ff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="floor" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#000000" stop-opacity=".45"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="blur18"><feGaussianBlur stdDeviation="18"/></filter>
+    <filter id="blur5"><feGaussianBlur stdDeviation="5"/></filter>
+    <clipPath id="iconClip"><rect width="1024" height="1024" rx="228"/></clipPath>
+    <clipPath id="cubeClip">
+      <path d="M512 264 L748 400 L748 636 L512 772 L276 636 L276 400 Z"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#iconClip)">
+    <rect width="1024" height="1024" rx="228" fill="url(#bg)"/>
+    <rect x="10" y="10" width="1004" height="1004" rx="218" fill="none"
+          stroke="#7fc4ff" stroke-opacity=".18" stroke-width="2"/>
+
+    <!-- ambient glow behind cube -->
+    <circle cx="512" cy="510" r="330" fill="url(#halo)"/>
+
+    <!-- floor shadow -->
+    <ellipse cx="512" cy="800" rx="300" ry="54" fill="url(#floor)"/>
+
+    <!-- ==== the ice cube ==== -->
+    <g>
+      <!-- back rim glow -->
+      <path d="M512 264 L748 400 L748 636 L512 772 L276 636 L276 400 Z"
+            fill="none" stroke="#9fdcff" stroke-opacity=".55" stroke-width="14" filter="url(#blur18)"/>
+
+      <!-- top face -->
+      <path d="M512 264 L748 400 L512 536 L276 400 Z" fill="url(#iceTop)"/>
+      <!-- left face -->
+      <path d="M276 400 L512 536 L512 772 L276 636 Z" fill="url(#iceLeft)"/>
+      <!-- right face -->
+      <path d="M512 536 L748 400 L748 636 L512 772 Z" fill="url(#iceRight)"/>
+
+      <!-- glass sheen across the front faces -->
+      <g clip-path="url(#cubeClip)">
+        <path d="M280 400 L520 540 L520 800 L400 640 Z" fill="#ffffff" opacity=".10"/>
+        <path d="M700 380 L760 430 L760 650 L700 610 Z" fill="#ffffff" opacity=".07"/>
+      </g>
+
+      <!-- ==== frozen browser window inside the cube ==== -->
+      <g>
+        <!-- window body -->
+        <rect x="396" y="452" width="232" height="168" rx="16"
+              fill="#0b1830" fill-opacity=".55" stroke="#dff2ff"
+              stroke-opacity=".85" stroke-width="5"/>
+        <!-- title bar -->
+        <path d="M396 468 a16 16 0 0 1 16 -16 h200 a16 16 0 0 1 16 16 v20 h-232 Z"
+              fill="url(#glass)" fill-opacity=".30"/>
+        <line x1="396" y1="488" x2="628" y2="488" stroke="#dff2ff"
+              stroke-opacity=".55" stroke-width="4"/>
+        <!-- traffic dots -->
+        <circle cx="418" cy="470" r="7" fill="#eaf7ff" fill-opacity=".9"/>
+        <circle cx="442" cy="470" r="7" fill="#eaf7ff" fill-opacity=".55"/>
+        <circle cx="466" cy="470" r="7" fill="#eaf7ff" fill-opacity=".3"/>
+        <!-- content lines -->
+        <rect x="420" y="512" width="120" height="10" rx="5" fill="#cfeaff" fill-opacity=".45"/>
+        <rect x="420" y="536" width="184" height="10" rx="5" fill="#cfeaff" fill-opacity=".30"/>
+        <rect x="420" y="560" width="150" height="10" rx="5" fill="#cfeaff" fill-opacity=".18"/>
+        <!-- snowflake etched on the frozen window -->
+        <g stroke="#eaf7ff" stroke-opacity=".9" stroke-width="6" stroke-linecap="round">
+          <line x1="588" y1="524" x2="588" y2="584"/>
+          <line x1="558" y1="541" x2="618" y2="567"/>
+          <line x1="618" y1="541" x2="558" y2="567"/>
+        </g>
+        <circle cx="588" cy="554" r="6" fill="#eaf7ff"/>
+      </g>
+
+      <!-- frost veins on cube edges -->
+      <g stroke="#dff2ff" stroke-opacity=".4" stroke-width="4" stroke-linecap="round" fill="none">
+        <path d="M340 620 l44 -22 m-30 8 l-4 -26"/>
+        <path d="M684 640 l-40 -20 m26 6 l6 -24"/>
+        <path d="M452 726 l30 -16 m-18 2 l-2 -20"/>
+      </g>
+      <g fill="#ffffff">
+        <circle cx="336" cy="622" r="6"/>
+        <circle cx="688" cy="642" r="6"/>
+        <circle cx="456" cy="728" r="5"/>
+      </g>
+
+      <!-- cube edge highlights -->
+      <path d="M512 264 L748 400" stroke="#ffffff" stroke-opacity=".85" stroke-width="5" stroke-linecap="round"/>
+      <path d="M512 264 L276 400" stroke="#ffffff" stroke-opacity=".55" stroke-width="5" stroke-linecap="round"/>
+      <path d="M276 400 L276 636" stroke="#ffffff" stroke-opacity=".22" stroke-width="5" stroke-linecap="round"/>
+      <path d="M512 536 L512 772" stroke="#ffffff" stroke-opacity=".3" stroke-width="5" stroke-linecap="round"/>
+    </g>
+
+    <!-- ==== sparkles ==== -->
+    <g fill="#eaf7ff">
+      <path d="M800 300 l10 26 26 10 -26 10 -10 26 -10 -26 -26 -10 26 -10 Z" opacity=".95"/>
+      <path d="M238 268 l8 20 20 8 -20 8 -8 20 -8 -20 -20 -8 20 -8 Z" opacity=".7"/>
+      <path d="M838 610 l6 16 16 6 -16 6 -6 16 -6 -16 -16 -6 16 -6 Z" opacity=".55"/>
+    </g>
+    <g fill="#bfe6ff" opacity=".8" filter="url(#blur5)">
+      <circle cx="800" cy="300" r="16"/>
+      <circle cx="238" cy="268" r="12"/>
+    </g>
+  </g>
+</svg>

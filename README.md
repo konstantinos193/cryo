@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/icon.svg" alt="cryo — a frozen tab inside an ice cube" width="200">
+</p>
+
 # cryo
 
 **A memory-obsessed browser shell written in Rust. Tabs freeze. Budgets hold.**
