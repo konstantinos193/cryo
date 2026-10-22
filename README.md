@@ -30,7 +30,7 @@ embeddable engine, and focuses on what existing browsers won't do:
 
 ## Roadmap
 
-- [ ] Phase 0 — Minimal shell: window, tabs, navigation (WebView2 via `wry`)
+- [x] Phase 0 — Minimal shell: window, tabs, navigation (WebView2 via `wry`)
 - [ ] Phase 1 — Tab lifecycle: freeze, discard, restore
 - [ ] Phase 2 — Per-tab memory accounting + budgets
 - [ ] Phase 3 — Memory dashboard UI
