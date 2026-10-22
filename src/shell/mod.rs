@@ -2,6 +2,7 @@
 //! Renders as one engine view (`chrome`) sitting above the content views.
 
 pub mod chrome;
+pub mod error;
 pub mod pages;
 
 use crate::engine::Rect;

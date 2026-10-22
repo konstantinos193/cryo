@@ -6,7 +6,7 @@
 //! static: `PageResolver` hands back `&'static str`, so the parameters travel
 //! in the query string and the document fills itself in.
 
-use crate::engine::{HttpStatus, LoadFailure};
+use crate::engine::LoadFailure;
 use crate::shell::pages::INTERNAL_ORIGIN;
 
 /// Path the error page is served on, relative to [`INTERNAL_ORIGIN`].
@@ -185,6 +185,7 @@ pub const ERROR_HTML: &str = r##"<!doctype html>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::HttpStatus;
 
     const ALL: [LoadFailure; 10] = [
         LoadFailure::Offline,
@@ -209,7 +210,10 @@ mod tests {
 
     #[test]
     fn http_failures_carry_the_status_code() {
-        let url = error_url(LoadFailure::Http(HttpStatus::new(503)), "https://example.com");
+        let url = error_url(
+            LoadFailure::Http(HttpStatus::new(503)),
+            "https://example.com",
+        );
         assert!(url.contains("kind=http"));
         assert!(url.contains("&code=503"));
     }
@@ -221,7 +225,10 @@ mod tests {
 
     #[test]
     fn encoding_cannot_restructure_the_query() {
-        let url = error_url(LoadFailure::Unknown, "https://evil.test/?a=1&kind=offline#x");
+        let url = error_url(
+            LoadFailure::Unknown,
+            "https://evil.test/?a=1&kind=offline#x",
+        );
         assert_eq!(url.matches("kind=").count(), 1);
         assert!(!url.contains('#'));
     }

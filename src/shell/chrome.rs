@@ -214,10 +214,7 @@ mod tests {
     #[test]
     fn canonize_wraps_bare_words_only() {
         assert_eq!(canonize_nav_input("cnn"), "https://www.cnn.com");
-        assert_eq!(
-            canonize_nav_input("example.com"),
-            "https://example.com"
-        );
+        assert_eq!(canonize_nav_input("example.com"), "https://example.com");
         assert_eq!(
             canonize_nav_input("two words"),
             "https://duckduckgo.com/?q=two%20words"
@@ -236,14 +233,9 @@ mod tests {
                 shift: false,
             } if input == "x"
         ));
-        let cmd: ChromeCommand = serde_json::from_str(
-            r#"{"cmd":"navigate","input":"x","alt":true}"#,
-        )
-        .unwrap();
-        assert!(matches!(
-            cmd,
-            ChromeCommand::Navigate { alt: true, .. }
-        ));
+        let cmd: ChromeCommand =
+            serde_json::from_str(r#"{"cmd":"navigate","input":"x","alt":true}"#).unwrap();
+        assert!(matches!(cmd, ChromeCommand::Navigate { alt: true, .. }));
         let cmd: ChromeCommand = serde_json::from_str(r#"{"cmd":"activate","id":3}"#).unwrap();
         assert!(matches!(cmd, ChromeCommand::Activate { id: 3 }));
         assert!(serde_json::from_str::<ChromeCommand>(r#"{"cmd":"bogus"}"#).is_err());

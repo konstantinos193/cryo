@@ -3,3 +3,8 @@
 *.pdb
 .env
 edge-import/
+
+# Local Devin/agent state + test tooling — machine-local, not project
+dev tools.
+.devin/
+nul

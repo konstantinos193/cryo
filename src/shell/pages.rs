@@ -4,11 +4,11 @@
 //! `NavigateToString` HTML: a `data:`-document runs no scripts and its IPC
 //! messages never reach the host (wry drops unparseable Source URIs).
 
-use crate::shell::chrome;
+use crate::shell::{chrome, error};
 
 /// Origin that all internal pages share. `is_internal_url` keys off this —
 /// keep the two in sync if the scheme registration ever changes.
-const INTERNAL_ORIGIN: &str = "http://cryo.localhost";
+pub(crate) const INTERNAL_ORIGIN: &str = "http://cryo.localhost";
 
 pub const CHROME_URL: &str = "http://cryo.localhost/chrome";
 pub const NEW_TAB_URL: &str = "http://cryo.localhost/newtab";
@@ -24,6 +24,9 @@ pub fn internal_page(path: &str) -> Option<&'static str> {
     match path {
         "/chrome" => Some(chrome::CHROME_HTML),
         "/newtab" => Some(NEW_TAB_HTML),
+        // The error page reads its parameters from the query string, which
+        // never reaches this resolver — one document covers every failure.
+        error::ERROR_PATH => Some(error::ERROR_HTML),
         _ => None,
     }
 }

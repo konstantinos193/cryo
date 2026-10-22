@@ -132,8 +132,9 @@ fn key_command(acc: Accelerator) -> Option<(KeyCommand, bool)> {
         // while the view also stops loading.
         (false, false, false, Escape) => (KeyCommand::Stop, false),
         (false, false, false, F(11)) => (KeyCommand::ToggleFullscreen, true),
-        (false, false, false, F(12))
-        | (true, false, true, Character('i' | 'j' | 'c')) => (KeyCommand::DevTools, true),
+        (false, false, false, F(12)) | (true, false, true, Character('i' | 'j' | 'c')) => {
+            (KeyCommand::DevTools, true)
+        }
         (true, false, false, Character('p')) => (KeyCommand::Print, true),
         (true, false, false, Character('s')) => (KeyCommand::SaveAs, true),
         (true, false, false, Character('o')) => (KeyCommand::OpenFile, true),
@@ -475,8 +476,14 @@ impl App {
     fn spawn_tab(&mut self, url: &str, foreground: bool) -> anyhow::Result<()> {
         let id = self.registry.create(url.to_string());
         let (_, content_rect) = shell::layout(self.logical_size.0, self.logical_size.1);
-        let view =
-            Self::spawn_content_view(&*self.engine, &self.proxy, content_rect, id, url, foreground)?;
+        let view = Self::spawn_content_view(
+            &*self.engine,
+            &self.proxy,
+            content_rect,
+            id,
+            url,
+            foreground,
+        )?;
         self.views.insert(id, view);
         if foreground {
             self.activate(id)
@@ -488,7 +495,8 @@ impl App {
     /// Spawn the engine surface for `id`, register it, activate it.
     fn spawn_view_for(&mut self, id: TabId, url: &str) -> anyhow::Result<()> {
         let (_, content_rect) = shell::layout(self.logical_size.0, self.logical_size.1);
-        let view = Self::spawn_content_view(&*self.engine, &self.proxy, content_rect, id, url, true)?;
+        let view =
+            Self::spawn_content_view(&*self.engine, &self.proxy, content_rect, id, url, true)?;
         self.views.insert(id, view);
         self.activate(id)
     }
@@ -632,7 +640,8 @@ impl App {
         let Some(pos) = self.registry.position_of(id) else {
             return Ok(());
         };
-        self.registry.relocate(id, (pos as isize + delta).max(0) as usize)?;
+        self.registry
+            .relocate(id, (pos as isize + delta).max(0) as usize)?;
         self.sync_chrome()
     }
 
@@ -653,7 +662,11 @@ impl App {
         let dup = self.registry.duplicate(id)?;
         let url = self.registry.get(dup).map(|t| t.url().to_string());
         let Some(url) = url else { return Ok(()) };
-        let load = if url == DEFAULT_URL { NEW_TAB_URL } else { &url };
+        let load = if url == DEFAULT_URL {
+            NEW_TAB_URL
+        } else {
+            &url
+        };
         self.spawn_view_for(dup, load)
     }
 

@@ -12,7 +12,7 @@ use wry::{Rect as WryRect, WebView, WebViewBuilder};
 #[cfg(target_os = "windows")]
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2AcceleratorKeyPressedEventArgs, ICoreWebView2AcceleratorKeyPressedEventHandler,
-    ICoreWebView2_13, ICoreWebView2_25, ICoreWebView2_8, ICoreWebView2Profile2,
+    ICoreWebView2Profile2, ICoreWebView2_13, ICoreWebView2_25, ICoreWebView2_8,
     COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
     COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN,
 };
@@ -110,11 +110,10 @@ impl Engine for WryEngine {
             builder = builder.with_navigation_handler(on_nav);
         }
         if let Some(on_new_window) = spec.on_new_window {
-            builder =
-                builder.with_new_window_req_handler(move |url, _features| {
-                    on_new_window(url);
-                    NewWindowResponse::Deny
-                });
+            builder = builder.with_new_window_req_handler(move |url, _features| {
+                on_new_window(url);
+                NewWindowResponse::Deny
+            });
         }
 
         let view = builder
@@ -437,12 +436,10 @@ impl ContentView for WryView {
             let stream = CreateStreamOnHGlobal(HGLOBAL::default(), true)
                 .map_err(|e| EngineError::View(e.to_string()))?;
             let (tx, rx) = std::sync::mpsc::channel();
-            let done = webview2_com::CapturePreviewCompletedHandler::create(Box::new(
-                move |hr| {
-                    let _ = tx.send(hr);
-                    Ok(())
-                },
-            ));
+            let done = webview2_com::CapturePreviewCompletedHandler::create(Box::new(move |hr| {
+                let _ = tx.send(hr);
+                Ok(())
+            }));
             self.view
                 .webview()
                 .CapturePreview(
@@ -488,10 +485,12 @@ impl ContentView for WryView {
                     .webview()
                     .cast()
                     .map_err(|e| EngineError::View(e.to_string()))?;
-                let done = webview2_com::ShowSaveAsUICompletedHandler::create(Box::new(
-                    |_hr, _result| Ok(()),
-                ));
-                wv.ShowSaveAsUI(&done).map_err(|e| EngineError::View(e.to_string()))
+                let done =
+                    webview2_com::ShowSaveAsUICompletedHandler::create(Box::new(|_hr, _result| {
+                        Ok(())
+                    }));
+                wv.ShowSaveAsUI(&done)
+                    .map_err(|e| EngineError::View(e.to_string()))
             }
         }
         #[cfg(not(target_os = "windows"))]
@@ -513,9 +512,8 @@ impl ContentView for WryView {
                     .Profile()
                     .and_then(|p| p.cast())
                     .map_err(|e| EngineError::View(e.to_string()))?;
-                let done = webview2_com::ClearBrowsingDataCompletedHandler::create(Box::new(
-                    |_hr| Ok(()),
-                ));
+                let done =
+                    webview2_com::ClearBrowsingDataCompletedHandler::create(Box::new(|_hr| Ok(())));
                 profile
                     .ClearBrowsingDataAll(&done)
                     .map_err(|e| EngineError::View(e.to_string()))
