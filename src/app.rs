@@ -464,7 +464,10 @@ impl App {
         if let Some(tab) = self.registry.get_mut(id) {
             tab.set_title("New tab".to_string());
         }
-        self.spawn_view_for(id, NEW_TAB_URL)
+        self.spawn_view_for(id, NEW_TAB_URL)?;
+        // A fresh tab means "type an address" — hand focus to the bar
+        // like every browser does, not to the new-tab page.
+        self.focus_address_bar()
     }
 
     /// Bring back the most recently closed tab: respawn an engine surface
