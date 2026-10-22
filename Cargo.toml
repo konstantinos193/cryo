@@ -15,4 +15,4 @@ thiserror = "2"
 wry = "0.57"
 
 [build-dependencies]
-embed-resource = "3.0.12"
+embed-resource = "3.0.1"
