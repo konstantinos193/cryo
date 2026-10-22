@@ -1,0 +1,9 @@
+[package]
+name = "cryo"
+version = "0.0.1"
+edition = "2021"
+description = "A memory-obsessed browser shell written in Rust. Tabs freeze. Budgets hold."
+license = "MIT"
+repository = "https://github.com/konstantinos193/cryo"
+
+[dependencies]
