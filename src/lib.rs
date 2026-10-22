@@ -20,12 +20,17 @@ use crate::engine::Engine;
 
 pub fn run() -> anyhow::Result<()> {
     let event_loop = EventLoopBuilder::<AppEvent>::with_user_event().build();
-    let window = Rc::new(
-        WindowBuilder::new()
-            .with_title("cryo")
-            .with_inner_size(LogicalSize::new(1280.0, 800.0))
-            .build(&event_loop)?,
-    );
+    let mut builder = WindowBuilder::new()
+        .with_title("cryo")
+        .with_inner_size(LogicalSize::new(1280.0, 800.0));
+    #[cfg(windows)]
+    {
+        use tao::platform::windows::IconExtWindows;
+        if let Ok(icon) = tao::window::Icon::from_resource(1, None) {
+            builder = builder.with_window_icon(Some(icon));
+        }
+    }
+    let window = Rc::new(builder.build(&event_loop)?);
 
     let engine: Rc<dyn Engine> =
         Rc::new(WryEngine::new(window.clone(), shell::pages::internal_page));
