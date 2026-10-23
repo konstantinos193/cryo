@@ -36,12 +36,13 @@ impl Keyring {
                         "keychain entry is not a vault key".into(),
                     ));
                 }
-                Ok(Key::clone_from_slice(&raw))
+                raw.as_slice()
+                    .try_into()
+                    .map_err(|_| VaultError::Unseal("keychain entry is not a vault key".into()))
             }
             Err(::keyring::Error::NoEntry) => {
                 let mut key = Key::default();
-                getrandom::getrandom(&mut key)
-                    .map_err(|e| VaultError::Seal(format!("entropy: {e}")))?;
+                getrandom::fill(&mut key).map_err(|e| VaultError::Seal(format!("entropy: {e}")))?;
                 entry
                     .set_secret(&key)
                     .map_err(|e| VaultError::Seal(format!("keychain: {e}")))?;
@@ -56,7 +57,7 @@ impl Protector for Keyring {
     fn protect(&self, plain: &[u8]) -> Result<Vec<u8>, VaultError> {
         let cipher = XChaCha20Poly1305::new(&self.key()?);
         let mut nonce = XNonce::default();
-        getrandom::getrandom(&mut nonce).map_err(|e| VaultError::Seal(format!("entropy: {e}")))?;
+        getrandom::fill(&mut nonce).map_err(|e| VaultError::Seal(format!("entropy: {e}")))?;
         let sealed = cipher
             .encrypt(&nonce, plain)
             .map_err(|_| VaultError::Seal("encryption failed".into()))?;
@@ -70,9 +71,11 @@ impl Protector for Keyring {
         let (nonce, body) = sealed
             .split_at_checked(NONCE_LEN)
             .ok_or_else(|| VaultError::Unseal("sealed vault is too short".into()))?;
+        let nonce = XNonce::try_from(nonce)
+            .map_err(|_| VaultError::Unseal("sealed vault is too short".into()))?;
         let cipher = XChaCha20Poly1305::new(&self.key()?);
         cipher
-            .decrypt(XNonce::from_slice(nonce), body)
+            .decrypt(&nonce, body)
             .map_err(|_| VaultError::Unseal("decryption failed".into()))
     }
 }
