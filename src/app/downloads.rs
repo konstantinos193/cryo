@@ -29,11 +29,7 @@ pub(super) struct Entry {
 impl App {
     /// A view reported download progress — upsert the shelf row and
     /// repaint chrome.
-    pub(super) fn download_update(
-        &mut self,
-        tab: TabId,
-        u: DownloadUpdate,
-    ) -> anyhow::Result<()> {
+    pub(super) fn download_update(&mut self, tab: TabId, u: DownloadUpdate) -> anyhow::Result<()> {
         match self
             .downloads
             .iter_mut()

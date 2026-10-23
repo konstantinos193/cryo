@@ -5,6 +5,8 @@
 mod downloads;
 
 use std::borrow::Cow;
+#[cfg(target_os = "windows")]
+use std::cell::Cell;
 use std::rc::Rc;
 #[cfg(target_os = "windows")]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,11 +27,12 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2ContainsFullScreenElementChangedEventHandler,
     ICoreWebView2DownloadStartingEventHandler, ICoreWebView2FaviconChangedEventHandler,
     ICoreWebView2NavigationCompletedEventArgs, ICoreWebView2NavigationCompletedEventArgs2,
-    ICoreWebView2NavigationCompletedEventHandler, ICoreWebView2ProcessFailedEventHandler,
-    ICoreWebView2Profile2, ICoreWebView2_13, ICoreWebView2_15, ICoreWebView2_25, ICoreWebView2_8, COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
-    COREWEBVIEW2_FAVICON_IMAGE_FORMAT_PNG, COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
-    COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN, COREWEBVIEW2_PROCESS_FAILED_KIND,
-    COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
+    ICoreWebView2NavigationCompletedEventHandler, ICoreWebView2NavigationStartingEventHandler,
+    ICoreWebView2ProcessFailedEventHandler, ICoreWebView2Profile2, ICoreWebView2_13,
+    ICoreWebView2_15, ICoreWebView2_25, ICoreWebView2_8,
+    COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, COREWEBVIEW2_FAVICON_IMAGE_FORMAT_PNG,
+    COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN, COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN,
+    COREWEBVIEW2_PROCESS_FAILED_KIND, COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
     COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE, COREWEBVIEW2_WEB_ERROR_STATUS,
     COREWEBVIEW2_WEB_ERROR_STATUS_CANNOT_CONNECT,
     COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_COMMON_NAME_IS_INCORRECT,
@@ -57,8 +60,9 @@ use wry::{NewWindowResponse, WebViewExtWindows};
 
 use crate::engine::{
     Accelerator, AcceleratorHandler, AcceleratorKey, ContentView, DownloadHandler, DownloadId,
-    Engine, EngineError, FaviconHandler, FullscreenHandler, HttpStatus, LoadFailure,
-    LoadFailureHandler, PageResolver, PermissionDecision, PermissionKind, Rect, ViewSpec,
+    Engine, EngineError, FaviconHandler, FullscreenHandler, HttpStatus, LoadChangeHandler,
+    LoadFailure, LoadFailureHandler, PageResolver, PermissionDecision, PermissionKind, Rect,
+    ViewSpec,
 };
 
 /// Scheme name registered on every view. On Windows wry rewrites it to
@@ -186,12 +190,15 @@ impl Engine for WryEngine {
             .map_err(|e| EngineError::Spawn(e.to_string()))?;
         WryView::new(
             view,
-            spec.on_accelerator,
-            spec.on_load_failure,
-            spec.on_fullscreen,
-            spec.on_favicon,
-            on_navigate,
-            spec.on_download,
+            Handlers {
+                on_accelerator: spec.on_accelerator,
+                on_load_failure: spec.on_load_failure,
+                on_fullscreen: spec.on_fullscreen,
+                on_favicon: spec.on_favicon,
+                on_navigate,
+                on_download: spec.on_download,
+                on_load_change: spec.on_load_change,
+            },
         )
         .map(|v| Box::new(v) as Box<dyn ContentView>)
     }
@@ -315,19 +322,58 @@ fn accelerator_key(vk: u32) -> Option<AcceleratorKey> {
 const EMPTY_BODY_PROBE: &str =
     "(function(){var b=document.body;return !b||(!b.children.length&&!b.textContent.trim());})()";
 
+/// Attach `NavigationStarting`: remembers the newest navigation's id and
+/// reports "loading". A navigation that supersedes one still in flight
+/// replaces the id — the stale completion must not clear the spinner.
+#[cfg(target_os = "windows")]
+fn attach_navigation_starting(
+    view: &WebView,
+    on_load_change: Rc<dyn Fn(bool)>,
+    latest_nav: Rc<Cell<u64>>,
+) -> Result<ICoreWebView2NavigationStartingEventHandler, EngineError> {
+    let handler =
+        webview2_com::NavigationStartingEventHandler::create(Box::new(move |_sender, args| {
+            let Some(args) = args else { return Ok(()) };
+            let mut id = 0u64;
+            unsafe { args.NavigationId(&mut id)? };
+            latest_nav.set(id);
+            on_load_change(true);
+            Ok(())
+        }));
+    let mut token = 0i64;
+    unsafe {
+        view.webview()
+            .add_NavigationStarting(&handler, &mut token)
+            .map_err(|e| EngineError::Spawn(e.to_string()))?;
+    }
+    Ok(handler)
+}
+
 /// Attach `NavigationCompleted`: the event that says a navigation finished,
-/// and whether it produced a document.
+/// and whether it produced a document. `report` may be absent when only
+/// the loading signal is wanted.
 #[cfg(target_os = "windows")]
 fn attach_navigation_completed(
     view: &WebView,
-    report: Arc<dyn Fn(LoadFailure) + Send + Sync>,
+    report: Option<Arc<dyn Fn(LoadFailure) + Send + Sync>>,
     download_started: Arc<AtomicBool>,
+    on_load_change: Option<Rc<dyn Fn(bool)>>,
+    latest_nav: Rc<Cell<u64>>,
 ) -> Result<ICoreWebView2NavigationCompletedEventHandler, EngineError> {
     let webview = view.webview();
     let handler =
         webview2_com::NavigationCompletedEventHandler::create(Box::new(move |_sender, args| {
             let Some(args) = args else { return Ok(()) };
-            unsafe { navigation_completed(&webview, &args, &report, &download_started) }
+            unsafe {
+                navigation_completed(
+                    &webview,
+                    &args,
+                    report.as_ref(),
+                    &download_started,
+                    on_load_change.as_ref(),
+                    &latest_nav,
+                )
+            }
         }));
     let mut token = 0i64;
     unsafe {
@@ -342,9 +388,26 @@ fn attach_navigation_completed(
 unsafe fn navigation_completed(
     webview: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2,
     args: &ICoreWebView2NavigationCompletedEventArgs,
-    report: &Arc<dyn Fn(LoadFailure) + Send + Sync>,
+    report: Option<&Arc<dyn Fn(LoadFailure) + Send + Sync>>,
     download_started: &Arc<AtomicBool>,
+    on_load_change: Option<&Rc<dyn Fn(bool)>>,
+    latest_nav: &Cell<u64>,
 ) -> windows::core::Result<()> {
+    // Clear "loading" only for the navigation that set it: a superseded
+    // navigation's completion arrives too, and must leave the newer
+    // one's spinner running. `0` means no start event was seen — a spec
+    // URL can complete without one, and clearing a never-set flag is
+    // harmless.
+    let mut nav_id = 0u64;
+    args.NavigationId(&mut nav_id)?;
+    if let Some(on_change) = on_load_change {
+        if latest_nav.get() == 0 || nav_id == latest_nav.get() {
+            on_change(false);
+        }
+    }
+    let Some(report) = report else {
+        return Ok(());
+    };
     let mut success = windows::core::BOOL::default();
     args.IsSuccess(&mut success)?;
     if !success.as_bool() {
@@ -557,6 +620,8 @@ struct WryView {
     #[cfg(target_os = "windows")]
     _navigation_handler: Option<ICoreWebView2NavigationCompletedEventHandler>,
     #[cfg(target_os = "windows")]
+    _nav_start_handler: Option<ICoreWebView2NavigationStartingEventHandler>,
+    #[cfg(target_os = "windows")]
     _process_handler: Option<ICoreWebView2ProcessFailedEventHandler>,
     #[cfg(target_os = "windows")]
     _fullscreen_handler: Option<ICoreWebView2ContainsFullScreenElementChangedEventHandler>,
@@ -564,18 +629,31 @@ struct WryView {
     _favicon_handler: Option<ICoreWebView2FaviconChangedEventHandler>,
 }
 
+/// Every callback a fresh view can wire — grouped so `new` doesn't take
+/// one parameter per event kind.
+struct Handlers {
+    on_accelerator: Option<AcceleratorHandler>,
+    on_load_failure: Option<LoadFailureHandler>,
+    on_fullscreen: Option<FullscreenHandler>,
+    on_favicon: Option<FaviconHandler>,
+    on_navigate: Option<Rc<dyn Fn(String) -> bool>>,
+    on_download: Option<DownloadHandler>,
+    on_load_change: Option<LoadChangeHandler>,
+}
+
 impl WryView {
-    fn new(
-        view: WebView,
-        on_accelerator: Option<AcceleratorHandler>,
-        on_load_failure: Option<LoadFailureHandler>,
-        on_fullscreen: Option<FullscreenHandler>,
-        on_favicon: Option<FaviconHandler>,
-        on_navigate: Option<Rc<dyn Fn(String) -> bool>>,
-        on_download: Option<DownloadHandler>,
-    ) -> Result<Self, EngineError> {
+    fn new(view: WebView, handlers: Handlers) -> Result<Self, EngineError> {
         #[cfg(target_os = "windows")]
         {
+            let Handlers {
+                on_accelerator,
+                on_load_failure,
+                on_fullscreen,
+                on_favicon,
+                on_navigate,
+                on_download,
+                on_load_change,
+            } = handlers;
             let _accel_handler = on_accelerator
                 .map(|cb| attach_accelerator(&view, cb))
                 .transpose()?;
@@ -587,9 +665,25 @@ impl WryView {
             // abort that means "this navigation became a download" — in
             // either arrival order.
             let download_started = Arc::new(AtomicBool::new(false));
-            let _navigation_handler = report
+            // NavigationStarting ⇄ NavigationCompleted: the id of the
+            // newest navigation, so a stale completion can't clear the
+            // loading signal a newer navigation is still using.
+            let latest_nav = Rc::new(Cell::new(0u64));
+            let on_load_change: Option<Rc<dyn Fn(bool)>> = on_load_change.map(Rc::from);
+            let _nav_start_handler = on_load_change
                 .clone()
-                .map(|cb| attach_navigation_completed(&view, cb, download_started.clone()))
+                .map(|cb| attach_navigation_starting(&view, cb, latest_nav.clone()))
+                .transpose()?;
+            let _navigation_handler = (report.is_some() || on_load_change.is_some())
+                .then(|| {
+                    attach_navigation_completed(
+                        &view,
+                        report.clone(),
+                        download_started.clone(),
+                        on_load_change.clone(),
+                        latest_nav.clone(),
+                    )
+                })
                 .transpose()?;
             let downloads = downloads::ActiveDownloads::default();
             let _download_handler = downloads::attach(
@@ -615,6 +709,7 @@ impl WryView {
                 _download_handler,
                 downloads,
                 _navigation_handler,
+                _nav_start_handler,
                 _process_handler,
                 _fullscreen_handler,
                 _favicon_handler,
@@ -622,14 +717,7 @@ impl WryView {
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let _ = (
-                on_accelerator,
-                on_load_failure,
-                on_fullscreen,
-                on_favicon,
-                on_navigate,
-                on_download,
-            );
+            let _ = handlers;
             Ok(Self { view })
         }
     }
@@ -707,6 +795,42 @@ impl ContentView for WryView {
         #[cfg(not(target_os = "windows"))]
         {
             self.eval("history.forward()")
+        }
+    }
+
+    fn can_go_back(&self) -> Result<bool, EngineError> {
+        #[cfg(target_os = "windows")]
+        {
+            unsafe {
+                let mut can = windows::core::BOOL::default();
+                self.view
+                    .webview()
+                    .CanGoBack(&mut can)
+                    .map_err(|e| EngineError::Navigate(e.to_string()))?;
+                Ok(can.as_bool())
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Ok(false)
+        }
+    }
+
+    fn can_go_forward(&self) -> Result<bool, EngineError> {
+        #[cfg(target_os = "windows")]
+        {
+            unsafe {
+                let mut can = windows::core::BOOL::default();
+                self.view
+                    .webview()
+                    .CanGoForward(&mut can)
+                    .map_err(|e| EngineError::Navigate(e.to_string()))?;
+                Ok(can.as_bool())
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Ok(false)
         }
     }
 

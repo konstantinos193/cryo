@@ -48,6 +48,11 @@ pub type FullscreenHandler = Box<dyn Fn(bool)>;
 /// later calls carry byte counts and the terminal state. Called on the
 /// event loop thread.
 pub type DownloadHandler = Box<dyn Fn(DownloadUpdate)>;
+/// The view's top-level navigation started (`true`) or the in-flight one
+/// settled — finished, failed, or stopped (`false`). The loading
+/// spinner's data; sub-frame navigations don't count. Called on the
+/// event loop thread.
+pub type LoadChangeHandler = Box<dyn Fn(bool)>;
 /// A page asked for a capability — the app decides. Called on the engine's
 /// thread, so Send + Sync. Views spawned without one get the engine's
 /// default answer, which on WebView2 is a silent deny.
@@ -133,6 +138,8 @@ pub struct ViewSpec {
     /// own dialog and reports every file's progress here. `None` leaves
     /// the engine's default download dialog running.
     pub on_download: Option<DownloadHandler>,
+    /// Navigation start/settle signal — drives the loading spinner.
+    pub on_load_change: Option<LoadChangeHandler>,
 }
 
 impl Default for Rect {
@@ -164,6 +171,10 @@ pub trait ContentView {
     /// Step session history back, no-op when there is none.
     fn go_back(&self) -> Result<(), EngineError>;
     fn go_forward(&self) -> Result<(), EngineError>;
+    /// Whether session history has anywhere to step — the chrome greys
+    /// out the arrows when it doesn't.
+    fn can_go_back(&self) -> Result<bool, EngineError>;
+    fn can_go_forward(&self) -> Result<bool, EngineError>;
     /// Abort an in-flight navigation or load.
     fn stop(&self) -> Result<(), EngineError>;
     fn set_visible(&self, visible: bool) -> Result<(), EngineError>;

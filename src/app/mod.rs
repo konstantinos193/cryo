@@ -82,6 +82,9 @@ pub enum AppEvent {
     /// none. `None` still clears — a page without an icon drops it.
     FaviconChanged(TabId, Option<Vec<u8>>),
     Navigated(TabId, String),
+    /// A view's top-level navigation started or settled — the spinner's
+    /// data (see `LoadChangeHandler` for what counts).
+    LoadChanged(TabId, bool),
     Accelerator(Accelerator),
     /// Page asked for a new window (target=_blank, ctrl/shift/middle-click,
     /// window.open) — we open a tab instead.
@@ -255,6 +258,14 @@ impl App {
                 }
                 self.sync_chrome()
             }
+            AppEvent::LoadChanged(id, loading) => {
+                if let Some(tab) = self.registry.get_mut(id) {
+                    // Same in-flight rule as Navigated — a dropped view's
+                    // last events must not write into a frozen tab.
+                    tab.set_loading(loading);
+                }
+                self.sync_chrome()
+            }
             AppEvent::OpenInNewTab(url) => self.spawn_tab(&url, true),
             AppEvent::PageFullscreen(id, on) => self.page_fullscreen(id, on),
             AppEvent::LoadFailed(id, failure) => self.show_error(id, failure),
@@ -369,6 +380,12 @@ impl App {
     }
 
     pub(super) fn sync_chrome(&self) -> anyhow::Result<()> {
+        // History depth only exists while a view is live — a frozen or
+        // discarded tab's arrows stay grey until it restores.
+        let (can_back, can_fwd) = match self.active_view() {
+            Some(v) => (v.can_go_back()?, v.can_go_forward()?),
+            None => (false, false),
+        };
         let state = ChromeState {
             tabs: self
                 .registry
@@ -379,6 +396,7 @@ impl App {
                     active: self.registry.active_id() == Some(t.id()),
                     state: t.state().as_str(),
                     favicon: t.favicon().map(favicon_data_url),
+                    loading: t.is_loading(),
                 })
                 .collect(),
             active_url: self
@@ -387,6 +405,8 @@ impl App {
                 .map(|t| t.url().to_string())
                 .filter(|u| u != "about:blank")
                 .unwrap_or_default(),
+            can_back,
+            can_fwd,
             update_version: self.pending_update.as_ref().map(|u| u.version.to_string()),
             downloads: self.download_rows(),
         };

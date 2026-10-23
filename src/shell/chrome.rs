@@ -31,6 +31,8 @@ pub enum ChromeCommand {
         shift: bool,
     },
     Reload,
+    /// The reload button's ✕ state — aborts the in-flight load.
+    Stop,
     Back,
     Forward,
     /// Open Google sign-in in a new tab — the profile cookie jar is shared,
@@ -122,6 +124,10 @@ pub struct ChromeDownload {
 pub struct ChromeState {
     pub tabs: Vec<ChromeTab>,
     pub active_url: String,
+    /// Session-history depth of the active tab's surface — the arrows
+    /// grey out when there's nowhere to go.
+    pub can_back: bool,
+    pub can_fwd: bool,
     /// A downloaded, verified installer is staged — the menu shows
     /// "Restart to update" and the ⋮ button gets a badge.
     pub update_version: Option<String>,
@@ -139,6 +145,9 @@ pub struct ChromeTab {
     /// The page icon as a `data:` URL — the pushed state is the wire, so
     /// the PNG travels inline instead of over a second request.
     pub favicon: Option<String>,
+    /// A navigation is in flight — the strip swaps the icon for a
+    /// spinner and the reload button for ✕.
+    pub loading: bool,
 }
 
 /// A tab's icon (PNG bytes) → the `data:` URL `ChromeTab.favicon` carries.
@@ -282,9 +291,41 @@ pub const CHROME_HTML: &str = r##"<!doctype html>
   .nav, #new-tab {
     flex: 0 0 auto; width: 26px; height: 26px; border: 0; border-radius: 6px;
     background: transparent; color: #d7dae0; font-size: 16px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
   }
   .nav:hover, #new-tab:hover { background: #2e323a; }
   .nav { font-size: 14px; }
+  .nav svg { width: 15px; height: 15px; }
+  /* No history to step into — the arrow greys out instead of no-op'ing. */
+  .nav:disabled { color: #525761; cursor: default; }
+  .nav:disabled:hover { background: transparent; }
+  /* Reload ↔ stop: one button, two glyphs — loading swaps them. */
+  #reload .ic-stop { display: none; }
+  #reload.loading .ic-reload { display: none; }
+  #reload.loading .ic-stop { display: block; }
+  /* The load bar: an indeterminate strip sliding along the bar's bottom
+     edge while the active tab loads. */
+  #loadbar {
+    position: fixed; top: 42px; left: 0; right: 0; height: 2px;
+    overflow: hidden; pointer-events: none;
+  }
+  #loadbar i {
+    position: absolute; top: 0; left: -35%; height: 2px; width: 35%;
+    background: #5a8adf; border-radius: 1px; opacity: 0;
+  }
+  #loadbar.on i { opacity: 1; animation: loadslide 1s ease-in-out infinite; }
+  @keyframes loadslide {
+    0%   { left: -35%; width: 35%; }
+    60%  { left: 60%;  width: 45%; }
+    100% { left: 100%; width: 30%; }
+  }
+  /* The loading spinner that replaces a tab's favicon. */
+  .tab .spin {
+    width: 12px; height: 12px; flex: 0 0 auto; border-radius: 50%;
+    border: 2px solid #4a505a; border-top-color: #a2deee;
+    animation: tabspin .7s linear infinite;
+  }
+  @keyframes tabspin { to { transform: rotate(360deg); } }
   #url {
     flex: 1 1 auto; min-width: 120px; height: 28px;
     background: #26292f; border: 1px solid #363a42; border-radius: 7px;
@@ -374,9 +415,9 @@ pub const CHROME_HTML: &str = r##"<!doctype html>
 </head>
 <body>
   <div id="bar">
-    <button class="nav" id="back" title="Back (Alt+Left)">←</button>
-    <button class="nav" id="fwd" title="Forward (Alt+Right)">→</button>
-    <button class="nav" id="reload" title="Reload (F5)">⟳</button>
+    <button class="nav" id="back" title="Back (Alt+Left)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg></button>
+    <button class="nav" id="fwd" title="Forward (Alt+Right)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 5.5 16 12l-6.5 6.5"/></svg></button>
+    <button class="nav" id="reload" title="Reload (F5)"><svg class="ic-reload" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 3.5v4h-4"/></svg><svg class="ic-stop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg></button>
     <div id="tabs"></div>
     <button id="new-tab" title="New tab (Ctrl+T)">+</button>
     <input id="url" type="text" spellcheck="false"
@@ -385,6 +426,7 @@ pub const CHROME_HTML: &str = r##"<!doctype html>
     <button class="nav" id="dl" title="Downloads" hidden><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 1.5v6.8"/><path d="M3.8 5.2 7 8.4l3.2-3.2"/><path d="M2 11.5h10"/></svg><i class="bar"></i></button>
     <button class="nav" id="menu" title="Menu">⋮</button>
   </div>
+  <div id="loadbar"><i></i></div>
   <div id="dial"></div>
   <div id="menu-pop"></div>
   <div id="omni-pop"></div>
@@ -399,10 +441,16 @@ pub const CHROME_HTML: &str = r##"<!doctype html>
   const urlEl = document.getElementById('url');
   ipc({cmd: 'ready'});
 
+  const backBtn = document.getElementById('back');
+  const fwdBtn = document.getElementById('fwd');
+  const reloadBtn = document.getElementById('reload');
+  const loadbar = document.getElementById('loadbar');
   document.getElementById('new-tab').onclick = () => ipc({cmd: 'new_tab'});
-  document.getElementById('back').onclick = () => ipc({cmd: 'back'});
-  document.getElementById('fwd').onclick = () => ipc({cmd: 'forward'});
-  document.getElementById('reload').onclick = () => ipc({cmd: 'reload'});
+  backBtn.onclick = () => ipc({cmd: 'back'});
+  fwdBtn.onclick = () => ipc({cmd: 'forward'});
+  // One button, two jobs: while a page loads it's the stop control.
+  reloadBtn.onclick = () =>
+    ipc({cmd: reloadBtn.classList.contains('loading') ? 'stop' : 'reload'});
   document.getElementById('signin').onclick = () => ipc({cmd: 'sign_in'});
 
   const menuPop = document.getElementById('menu-pop');
@@ -740,9 +788,14 @@ pub const CHROME_HTML: &str = r##"<!doctype html>
       el.addEventListener('auxclick', (e) => {
         if (e.button === 1) ipc({cmd: 'close', id: t.id});
       });
-      // The site icon leads the tab in every state — the strip badges
-      // the page, not the surface's liveness.
-      if (t.favicon) {
+      // A loading tab spins in the icon slot; once settled the site
+      // icon leads the tab in every state — the strip badges the page,
+      // not the surface's liveness.
+      if (t.loading) {
+        const spin = document.createElement('span');
+        spin.className = 'spin';
+        el.appendChild(spin);
+      } else if (t.favicon) {
         const img = document.createElement('img');
         img.className = 'fav';
         img.src = t.favicon;
@@ -776,6 +829,16 @@ pub const CHROME_HTML: &str = r##"<!doctype html>
       tabsEl.appendChild(el);
     }
     if (document.activeElement !== urlEl) urlEl.value = state.active_url;
+    // Loading state: the active tab's flag swaps reload for ✕ and runs
+    // the indeterminate bar; background tabs only spin their own icon.
+    const active = state.tabs.find((t) => t.active);
+    const loading = !!(active && active.loading);
+    reloadBtn.classList.toggle('loading', loading);
+    reloadBtn.title = loading ? 'Stop loading (Esc)' : 'Reload (F5)';
+    loadbar.classList.toggle('on', loading);
+    // The arrows grey out where history has nowhere to step.
+    backBtn.disabled = !state.can_back;
+    fwdBtn.disabled = !state.can_fwd;
     const menuBtn = document.getElementById('menu');
     menuBtn.classList.toggle('has-update', !!state.update_version);
     if (state.update_version) {
@@ -845,6 +908,8 @@ mod tests {
         assert!(matches!(cmd, ChromeCommand::Freeze { id: None }));
         let cmd: ChromeCommand = serde_json::from_str(r#"{"cmd":"discard","id":2}"#).unwrap();
         assert!(matches!(cmd, ChromeCommand::Discard { id: Some(2) }));
+        let cmd: ChromeCommand = serde_json::from_str(r#"{"cmd":"stop"}"#).unwrap();
+        assert!(matches!(cmd, ChromeCommand::Stop));
         assert!(serde_json::from_str::<ChromeCommand>(r#"{"cmd":"bogus"}"#).is_err());
     }
 

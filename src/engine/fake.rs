@@ -96,6 +96,14 @@ impl ContentView for FakeView {
         Ok(())
     }
 
+    fn can_go_back(&self) -> Result<bool, EngineError> {
+        Ok(false)
+    }
+
+    fn can_go_forward(&self) -> Result<bool, EngineError> {
+        Ok(false)
+    }
+
     fn stop(&self) -> Result<(), EngineError> {
         self.calls.borrow_mut().push(FakeCall::Stop);
         Ok(())

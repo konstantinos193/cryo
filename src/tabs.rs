@@ -102,6 +102,10 @@ pub struct Tab {
     /// Kept across freeze/discard — the strip badges the site, not the
     /// surface's liveness.
     favicon: Option<Vec<u8>>,
+    /// A top-level navigation is in flight on this tab's surface — the
+    /// strip's spinner and the reload↔stop swap read it. Cleared by the
+    /// engine's settle event and by any transition that drops the view.
+    loading: bool,
     lifecycle: Lifecycle,
 }
 
@@ -112,6 +116,7 @@ impl Tab {
             title: url.clone(),
             url,
             favicon: None,
+            loading: false,
             lifecycle: Lifecycle::Active,
         }
     }
@@ -141,6 +146,17 @@ impl Tab {
         }
     }
 
+    /// Whether this tab's surface has a navigation in flight.
+    pub fn is_loading(&self) -> bool {
+        self.loading
+    }
+
+    /// The engine's start/settle signal. A non-live tab has no surface —
+    /// nothing can be loading, so the flag drops with the view.
+    pub(crate) fn set_loading(&mut self, loading: bool) {
+        self.loading = loading && matches!(self.lifecycle, Lifecycle::Active);
+    }
+
     /// The snapshot a frozen tab restores from — `None` while live or
     /// discarded. Read-only: callers look before respawning the surface.
     pub fn snapshot(&self) -> Option<&TabSnapshot> {
@@ -156,6 +172,7 @@ impl Tab {
     pub(crate) fn freeze(&mut self, snapshot: TabSnapshot) -> Result<(), TabError> {
         match self.lifecycle {
             Lifecycle::Active => {
+                self.loading = false;
                 self.lifecycle = Lifecycle::Frozen(snapshot);
                 Ok(())
             }
@@ -170,6 +187,7 @@ impl Tab {
         match self.lifecycle {
             Lifecycle::Discarded => Err(TabError::Discard(self.id)),
             _ => {
+                self.loading = false;
                 self.lifecycle = Lifecycle::Discarded;
                 Ok(())
             }

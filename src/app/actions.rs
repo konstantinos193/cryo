@@ -50,6 +50,8 @@ impl App {
                 }
             }
             ChromeCommand::Reload => self.reload_active(),
+            // The reload button becomes ✕ while a page loads.
+            ChromeCommand::Stop => self.stop_active(),
             ChromeCommand::Back => self.back_active(),
             ChromeCommand::Forward => self.forward_active(),
             // The WebView2 profile cookie jar is shared across views, so a

@@ -62,6 +62,7 @@ impl App {
         let fs_proxy = proxy.clone();
         let fail_proxy = proxy.clone();
         let dl_proxy = proxy.clone();
+        let load_proxy = proxy.clone();
         let view = engine.spawn(ViewSpec {
             bounds: content_rect,
             visible,
@@ -88,6 +89,9 @@ impl App {
             })),
             on_download: Some(Box::new(move |update| {
                 post(&dl_proxy, AppEvent::Download(id, update));
+            })),
+            on_load_change: Some(Box::new(move |loading| {
+                post(&load_proxy, AppEvent::LoadChanged(id, loading));
             })),
             // Pages may take the mic and camera — without a handler the
             // engine's default is a silent deny, which is why calls appear
