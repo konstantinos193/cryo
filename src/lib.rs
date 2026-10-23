@@ -7,6 +7,7 @@ pub mod app;
 pub mod engine;
 pub mod shell;
 pub mod tabs;
+pub mod update;
 
 use std::rc::Rc;
 
@@ -40,6 +41,15 @@ pub fn run(incognito: bool, open_url: Option<String>) -> anyhow::Result<()> {
         incognito,
     ));
     let proxy = event_loop.create_proxy();
+    // Update checks only make sense for installed release builds — a dev
+    // binary would just offer to replace itself with a tagged release.
+    #[cfg(all(windows, not(debug_assertions)))]
+    {
+        let update_proxy = proxy.clone();
+        update::spawn_check(move |outcome| {
+            let _ = update_proxy.send_event(AppEvent::UpdateChecked(outcome));
+        });
+    }
     let mut app = App::new(window, engine, proxy, open_url)?;
 
     event_loop.run(move |event, _target, control_flow| {

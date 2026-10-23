@@ -38,6 +38,33 @@ pub type LoadFailureHandler = Box<dyn Fn(LoadFailure)>;
 /// Page element entered or left DOM fullscreen (video fullscreen). The bool
 /// is the engine's `ContainsFullScreenElement` state after the change.
 pub type FullscreenHandler = Box<dyn Fn(bool)>;
+/// A page asked for a capability — the app decides. Called on the engine's
+/// thread, so Send + Sync. Views spawned without one get the engine's
+/// default answer, which on WebView2 is a silent deny.
+pub type PermissionHandler = Box<dyn Fn(PermissionKind) -> PermissionDecision + Send + Sync>;
+
+/// A capability a page requested through a browser API, in our own
+/// vocabulary. Backends map their platform permission kinds onto these.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PermissionKind {
+    Microphone,
+    Camera,
+    Geolocation,
+    Notifications,
+    ClipboardRead,
+    /// Anything we don't name — autoplay, sensors, local fonts, ...
+    Other,
+}
+
+/// The app's answer to a permission request. There is no "ask later":
+/// engines that can't prompt treat indecision as deny anyway, so the
+/// handler must pick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PermissionDecision {
+    Allow,
+    Deny,
+}
 
 /// A key in our own vocabulary — the engine maps platform virtual-key
 /// codes so policy never sees them.
@@ -75,6 +102,14 @@ pub struct ViewSpec {
     pub url: Option<String>,
     pub bounds: Rect,
     pub visible: bool,
+    /// Unpainted pixels let whatever is behind the view show through —
+    /// required for a view that temporarily grows over its siblings (the
+    /// chrome strip covering the window while its menu is open).
+    pub transparent: bool,
+    /// What the engine paints before the first document composites —
+    /// the pre-paint flash guard (RGBA). `None` falls back to the
+    /// engine's default, which is white on WebView2.
+    pub background: Option<(u8, u8, u8, u8)>,
     pub on_ipc: Option<IpcHandler>,
     pub on_title_change: Option<TitleHandler>,
     pub on_navigate: Option<NavigateHandler>,
@@ -82,6 +117,7 @@ pub struct ViewSpec {
     pub on_new_window: Option<NewWindowHandler>,
     pub on_load_failure: Option<LoadFailureHandler>,
     pub on_fullscreen: Option<FullscreenHandler>,
+    pub on_permission: Option<PermissionHandler>,
 }
 
 impl Default for Rect {
@@ -117,6 +153,9 @@ pub trait ContentView {
     fn stop(&self) -> Result<(), EngineError>;
     fn set_visible(&self, visible: bool) -> Result<(), EngineError>;
     fn set_bounds(&self, bounds: Rect) -> Result<(), EngineError>;
+    /// Raise the view above its siblings. Needed when a view overlaps
+    /// others that were spawned later — spawn order is z-order.
+    fn bring_to_front(&self) -> Result<(), EngineError>;
     fn focus(&self) -> Result<(), EngineError>;
     fn eval(&self, js: &str) -> Result<(), EngineError>;
     fn url(&self) -> Option<String>;

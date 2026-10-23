@@ -7,7 +7,10 @@ use std::rc::Rc;
 use tao::window::Window;
 use wry::dpi::{LogicalPosition, LogicalSize, Position, Size};
 use wry::http::{header::CONTENT_TYPE, Response};
-use wry::{Rect as WryRect, WebView, WebViewBuilder};
+use wry::{
+    PermissionKind as WryPermissionKind, PermissionResponse, Rect as WryRect, WebView,
+    WebViewBuilder,
+};
 
 #[cfg(target_os = "windows")]
 use webview2_com::Microsoft::Web::WebView2::Win32::{
@@ -44,7 +47,8 @@ use wry::{NewWindowResponse, WebViewExtWindows};
 
 use crate::engine::{
     Accelerator, AcceleratorHandler, AcceleratorKey, ContentView, Engine, EngineError,
-    FullscreenHandler, HttpStatus, LoadFailure, LoadFailureHandler, PageResolver, Rect, ViewSpec,
+    FullscreenHandler, HttpStatus, LoadFailure, LoadFailureHandler, PageResolver,
+    PermissionDecision, PermissionKind, Rect, ViewSpec,
 };
 
 /// Scheme name registered on every view. On Windows wry rewrites it to
@@ -75,6 +79,19 @@ impl WryEngine {
     }
 }
 
+/// wry's permission kinds → our vocabulary. Everything wry doesn't name
+/// (autoplay, sensors, fonts, ...) collapses to `Other`.
+fn permission_kind(kind: WryPermissionKind) -> PermissionKind {
+    match kind {
+        WryPermissionKind::Microphone => PermissionKind::Microphone,
+        WryPermissionKind::Camera => PermissionKind::Camera,
+        WryPermissionKind::Geolocation => PermissionKind::Geolocation,
+        WryPermissionKind::Notifications => PermissionKind::Notifications,
+        WryPermissionKind::ClipboardRead => PermissionKind::ClipboardRead,
+        _ => PermissionKind::Other,
+    }
+}
+
 fn to_wry_rect(r: Rect) -> WryRect {
     WryRect {
         position: Position::Logical(LogicalPosition::new(r.x, r.y)),
@@ -89,6 +106,7 @@ impl Engine for WryEngine {
         let mut builder = WebViewBuilder::new()
             .with_bounds(to_wry_rect(spec.bounds))
             .with_visible(spec.visible)
+            .with_transparent(spec.transparent)
             .with_devtools(cfg!(debug_assertions))
             // Internal pages must arrive over a real `http` URL: pages loaded
             // via NavigateToString land on a `data:` URI where WebView2 never
@@ -121,6 +139,9 @@ impl Engine for WryEngine {
         if self.incognito {
             builder = builder.with_incognito(true);
         }
+        if let Some(background) = spec.background {
+            builder = builder.with_background_color(background);
+        }
         if let Some(url) = spec.url {
             builder = builder.with_url(&url);
         }
@@ -134,6 +155,14 @@ impl Engine for WryEngine {
             builder = builder.with_new_window_req_handler(move |url, _features| {
                 on_new_window(url);
                 NewWindowResponse::Deny
+            });
+        }
+        if let Some(on_permission) = spec.on_permission {
+            builder = builder.with_permission_handler(move |kind| {
+                match on_permission(permission_kind(kind)) {
+                    PermissionDecision::Allow => PermissionResponse::Allow,
+                    PermissionDecision::Deny => PermissionResponse::Deny,
+                }
             });
         }
 
@@ -548,6 +577,34 @@ impl ContentView for WryView {
         self.view
             .set_bounds(to_wry_rect(bounds))
             .map_err(|e| EngineError::Layout(e.to_string()))
+    }
+
+    /// Views spawned later sit above this one in the sibling z-order —
+    /// wry sizes with `SWP_NOZORDER`, so a view that temporarily overlaps
+    /// newer siblings (chrome grown for its menu) must re-raise itself.
+    fn bring_to_front(&self) -> Result<(), EngineError> {
+        #[cfg(target_os = "windows")]
+        {
+            use windows::Win32::UI::WindowsAndMessaging::{
+                SetWindowPos, HWND_TOP, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+            };
+            unsafe {
+                SetWindowPos(
+                    self.view.hwnd(),
+                    Some(HWND_TOP),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_ASYNCWINDOWPOS | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
+                )
+            }
+            .map_err(|e| EngineError::Layout(e.to_string()))
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Ok(())
+        }
     }
 
     fn focus(&self) -> Result<(), EngineError> {

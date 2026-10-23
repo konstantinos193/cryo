@@ -12,15 +12,22 @@ decide what stays alive. cryo writes no HTML parser — the engine is plumbing
 (WebView2 today, Servo later). All engineering effort goes into the shell:
 tab lifecycle, memory budgets, accounting.
 
-## Status: Phase 0 — working shell
+## Status: Phase 1 — tab lifecycle
 
-Window, tab strip, navigation, internal pages, and a full keyboard-shortcut
-layer — running on WebView2 via `wry`/`tao`. The freeze/budget machinery is
-Phase 1+; the architecture is already built for it.
+Freeze, discard and restore are live: Ctrl+Shift+F (or the ❄ on a tab)
+snapshots a tab and destroys its WebView2 surface; clicking the tab rebuilds
+it. Memory accounting and budgets are Phase 2 — the architecture is already
+built for them.
 
 What exists today:
 
 - Ordered tab registry with closed-tab reopen stack (Ctrl+Shift+T)
+- Tab lifecycle: freeze keeps a snapshot (address, zoom, mute, freeze time)
+  and drops the view; discard keeps only the address; activating either
+  respawns the surface — the same path the closed-tab stack uses
+- Speed dial on both surfaces browsers put it: a dial bar under the
+  toolbar (click = open here, Ctrl/middle-click = new tab) and tiles on
+  the new-tab page — one `/dials` list on the internal protocol feeds both
 - Incognito windows as sibling processes (`--incognito` → WebView2
   `IsInPrivateModeEnabled` — the real InPrivate, not a cosmetic flag)
 - Shell UI rendered by the same engine (`cryo` internal scheme →
@@ -45,6 +52,7 @@ behave identically whether the page or the chrome owns focus.
 | `Ctrl+Shift+Home` / `End` | Move tab to start / end |
 | `Ctrl+Shift+K` | Duplicate tab |
 | `Ctrl+M` | Mute / unmute tab |
+| `Ctrl+Shift+F` | Freeze tab — drops the view, keeps a snapshot; click to restore |
 | `Ctrl+N` / `Ctrl+Shift+N` | New window / new **incognito** window |
 | `Ctrl+Shift+W` / `Ctrl+Shift+Q` / `Alt+F4` | Close window / quit |
 | `Ctrl+L` / `Alt+D` / `Ctrl+K` / `Ctrl+E` | Focus address bar |
@@ -119,7 +127,7 @@ SendKeys for manual shortcut testing (`keys.ps1 -Keys "^t"` = Ctrl+T).
 ## Roadmap
 
 - [x] **Phase 0** — Shell: window, tabs, navigation, shortcuts, incognito
-- [ ] **Phase 1** — Tab lifecycle: freeze, discard, restore
+- [x] **Phase 1** — Tab lifecycle: freeze, discard, restore
 - [ ] **Phase 2** — Per-tab memory accounting + budgets
 - [ ] **Phase 3** — Memory dashboard (the real `Shift+Esc`)
 - [ ] **Phase 4** — WebExtensions (MV3) surface
@@ -127,7 +135,8 @@ SendKeys for manual shortcut testing (`keys.ps1 -Keys "^t"` = Ctrl+T).
 
 Known gaps by design (need subsystems that don't exist yet): find-in-page,
 bookmarks/history/downloads, tab search overlay, task manager. Track them
-in issues, not in wishful code.
+in issues, not in wishful code. (The dial list is a hardcoded default until
+`persist` exists — then it becomes the editable set.)
 
 ## Contributing
 

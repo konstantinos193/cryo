@@ -1,0 +1,89 @@
+name: Release
+
+# Cut a release by pushing a version tag:
+#   git tag v0.2.0 && git push origin v0.2.0
+# The tag must match `version` in Cargo.toml — the pipeline checks.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  # Signing is optional: set CRYO_CERT_BASE64 + CRYO_CERT_PASSWORD secrets
+  # (a PFX exported from a code-signing cert) and both the binary and the
+  # installer get signed. Absent, everything still ships unsigned.
+  HAS_CERT: ${{ secrets.CRYO_CERT_BASE64 != '' && secrets.CRYO_CERT_PASSWORD != '' }}
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Version from tag
+        id: v
+        shell: pwsh
+        run: echo "version=$($env:GITHUB_REF_NAME.TrimStart('v'))" >> $env:GITHUB_OUTPUT
+
+      - name: Tag matches Cargo.toml
+        shell: pwsh
+        run: |
+          $pkg = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"').Matches.Groups[1].Value
+          if ($pkg -ne "${{ steps.v.outputs.version }}") {
+            throw "tag ${{ github.ref_name }} does not match Cargo.toml version $pkg"
+          }
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Decode signing certificate
+        if: env.HAS_CERT == 'true'
+        shell: pwsh
+        run: |
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\cryo-sign.pfx", [Convert]::FromBase64String("${{ secrets.CRYO_CERT_BASE64 }}"))
+
+      - name: Sign binary
+        if: env.HAS_CERT == 'true'
+        shell: pwsh
+        run: |
+          $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Select-Object -Last 1).FullName
+          & $signtool sign /fd sha256 /td sha256 /tr http://timestamp.digicert.com /f "$env:RUNNER_TEMP\cryo-sign.pfx" /p "${{ secrets.CRYO_CERT_PASSWORD }}" target\release\cryo.exe
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress --yes
+
+      - name: Compile installer
+        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=${{ steps.v.outputs.version }} installer\cryo.iss'
+
+      - name: Sign installer
+        if: env.HAS_CERT == 'true'
+        shell: pwsh
+        run: |
+          $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Select-Object -Last 1).FullName
+          & $signtool sign /fd sha256 /td sha256 /tr http://timestamp.digicert.com /f "$env:RUNNER_TEMP\cryo-sign.pfx" /p "${{ secrets.CRYO_CERT_PASSWORD }}" installer\output\cryo-setup.exe
+
+      # The updater fetches releases/latest/download/latest.json — the
+      # version and pinned tag URL in here are what the app compares
+      # against and downloads.
+      - name: Write latest.json
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash installer\output\cryo-setup.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $manifest = @{
+            version       = "${{ steps.v.outputs.version }}"
+            installer_url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/cryo-setup.exe"
+            sha256        = $hash
+          } | ConvertTo-Json -Compress
+          [IO.File]::WriteAllText("$pwd\installer\output\latest.json", $manifest)
+          Get-Content installer\output\latest.json
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            installer/output/cryo-setup.exe
+            installer/output/latest.json

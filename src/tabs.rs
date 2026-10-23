@@ -4,6 +4,7 @@
 //! keyed by `TabId` in the app layer.
 
 use std::fmt;
+use std::time::Instant;
 
 /// Identity of a tab. Opaque outside this module.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -29,11 +30,47 @@ impl fmt::Display for TabId {
 
 /// Lifecycle states per the project vocabulary: a tab is active, frozen
 /// (snapshot kept, engine surface dropped), or discarded (gone except for
-/// the restore record). Phase 0 creates only `Active` tabs.
+/// the address). What each state carries lives in `Lifecycle` — this is
+/// the query type callers and the wire see.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TabState {
     Active,
     Frozen,
+    Discarded,
+}
+
+impl TabState {
+    /// Stable lowercase name for the chrome wire format.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Frozen => "frozen",
+            Self::Discarded => "discarded",
+        }
+    }
+}
+
+/// The state kept when a tab's surface is destroyed by freeze — enough to
+/// rebuild it on restore. A value object: replaced wholesale, never
+/// mutated in place. `frozen_at` comes from the caller, not a clock call
+/// buried here, so budget policy and tests control time.
+#[derive(Clone, Debug)]
+pub struct TabSnapshot {
+    /// The address the surface reloads at.
+    pub url: String,
+    /// When the view was dropped. Phase 2 budgets rank freeze age by it.
+    pub frozen_at: Instant,
+    /// Zoom factor the view had, to reapply on restore.
+    pub zoom: f64,
+    /// Mute state the view had, to reapply on restore.
+    pub muted: bool,
+}
+
+/// A tab's place in the lifecycle, carrying what each phase needs.
+/// `Frozen` owns its snapshot — a frozen tab without one cannot be built.
+enum Lifecycle {
+    Active,
+    Frozen(TabSnapshot),
     Discarded,
 }
 
@@ -44,6 +81,15 @@ pub enum TabError {
     UnknownTab(TabId),
     #[error("no active tab")]
     NoActiveTab,
+    /// Freeze needs a live surface to snapshot.
+    #[error("tab {0} is not live — nothing to freeze")]
+    Freeze(TabId),
+    /// Discarding a discarded tab is a no-op the caller should hear about.
+    #[error("tab {0} is already discarded")]
+    Discard(TabId),
+    /// Restore needs a frozen or discarded tab.
+    #[error("tab {0} is already live — nothing to restore")]
+    Restore(TabId),
 }
 
 /// A browser tab. Mutated only through its methods — fields are private so
@@ -52,7 +98,7 @@ pub struct Tab {
     id: TabId,
     url: String,
     title: String,
-    state: TabState,
+    lifecycle: Lifecycle,
 }
 
 impl Tab {
@@ -61,7 +107,7 @@ impl Tab {
             id,
             title: url.clone(),
             url,
-            state: TabState::Active,
+            lifecycle: Lifecycle::Active,
         }
     }
 
@@ -78,7 +124,59 @@ impl Tab {
     }
 
     pub fn state(&self) -> TabState {
-        self.state
+        match self.lifecycle {
+            Lifecycle::Active => TabState::Active,
+            Lifecycle::Frozen(_) => TabState::Frozen,
+            Lifecycle::Discarded => TabState::Discarded,
+        }
+    }
+
+    /// The snapshot a frozen tab restores from — `None` while live or
+    /// discarded. Read-only: callers look before respawning the surface.
+    pub fn snapshot(&self) -> Option<&TabSnapshot> {
+        match &self.lifecycle {
+            Lifecycle::Frozen(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Freeze = snapshot the state; the caller drops the engine surface
+    /// once this returns. Only a live tab can freeze — a frozen or
+    /// discarded one has nothing left to snapshot.
+    pub(crate) fn freeze(&mut self, snapshot: TabSnapshot) -> Result<(), TabError> {
+        match self.lifecycle {
+            Lifecycle::Active => {
+                self.lifecycle = Lifecycle::Frozen(snapshot);
+                Ok(())
+            }
+            _ => Err(TabError::Freeze(self.id)),
+        }
+    }
+
+    /// Discard keeps only the address — the harsher, cheaper drop a budget
+    /// enforcer uses under pressure. Legal from live and frozen (the
+    /// snapshot dies with it); discarding twice is an error.
+    pub(crate) fn discard(&mut self) -> Result<(), TabError> {
+        match self.lifecycle {
+            Lifecycle::Discarded => Err(TabError::Discard(self.id)),
+            _ => {
+                self.lifecycle = Lifecycle::Discarded;
+                Ok(())
+            }
+        }
+    }
+
+    /// Back to live. The caller respawns the surface *before* calling
+    /// this — if spawning fails the tab must stay frozen so the next
+    /// activation can retry.
+    pub(crate) fn restore(&mut self) -> Result<(), TabError> {
+        match self.lifecycle {
+            Lifecycle::Active => Err(TabError::Restore(self.id)),
+            _ => {
+                self.lifecycle = Lifecycle::Active;
+                Ok(())
+            }
+        }
     }
 
     pub(crate) fn navigate(&mut self, url: String) {
@@ -151,6 +249,17 @@ impl TabRegistry {
         }
     }
 
+    /// The tab that should take focus when `id` leaves the foreground —
+    /// its right neighbour, else its left. Shared by close (which removes
+    /// the tab) and freeze/discard (which keep it in the strip).
+    pub fn focus_fallback(&self, id: TabId) -> Option<TabId> {
+        let pos = self.position_of(id)?;
+        self.tabs
+            .get(pos + 1)
+            .or_else(|| pos.checked_sub(1).and_then(|i| self.tabs.get(i)))
+            .map(|t| t.id)
+    }
+
     /// Removes the tab, stashes it for `reopen_closed`, and returns the id
     /// the caller should activate next (the neighbour), if any remain.
     /// The active selection is only *suggested* — the caller owns the
@@ -161,6 +270,7 @@ impl TabRegistry {
             .iter()
             .position(|t| t.id == id)
             .ok_or(TabError::UnknownTab(id))?;
+        let fallback = self.focus_fallback(id);
         let tab = self.tabs.remove(pos);
         if self.closed.len() >= MAX_CLOSED {
             self.closed.remove(0);
@@ -168,11 +278,7 @@ impl TabRegistry {
         self.closed.push(ClosedTab { tab, index: pos });
         if self.active == Some(id) {
             self.active = None;
-            Ok(self
-                .tabs
-                .get(pos)
-                .or_else(|| self.tabs.last())
-                .map(|t| t.id))
+            Ok(fallback)
         } else {
             Ok(self.active)
         }
@@ -405,5 +511,102 @@ mod tests {
         assert_eq!(tab.title(), "about:blank");
         tab.set_title("Example".into());
         assert_eq!(tab.title(), "Example");
+    }
+
+    fn snapshot(url: &str) -> TabSnapshot {
+        TabSnapshot {
+            url: url.to_string(),
+            frozen_at: Instant::now(),
+            zoom: 1.5,
+            muted: true,
+        }
+    }
+
+    #[test]
+    fn freeze_keeps_the_snapshot_and_restore_flips_back() {
+        let mut reg = TabRegistry::new();
+        let id = reg.create("https://a".into());
+        let tab = reg.get_mut(id).unwrap();
+
+        tab.freeze(snapshot("https://a")).unwrap();
+        assert_eq!(tab.state(), TabState::Frozen);
+        assert_eq!(tab.snapshot().unwrap().url, "https://a");
+        assert_eq!(tab.snapshot().unwrap().zoom, 1.5);
+
+        tab.restore().unwrap();
+        assert_eq!(tab.state(), TabState::Active);
+        assert!(tab.snapshot().is_none());
+    }
+
+    #[test]
+    fn freeze_and_restore_reject_the_wrong_state() {
+        let mut reg = TabRegistry::new();
+        let id = reg.create("https://a".into());
+        let tab = reg.get_mut(id).unwrap();
+
+        // Restoring a live tab is a bug, not a no-op.
+        assert!(matches!(tab.restore(), Err(TabError::Restore(_))));
+
+        tab.freeze(snapshot("https://a")).unwrap();
+        // A frozen tab has nothing left to snapshot.
+        assert!(matches!(
+            tab.freeze(snapshot("https://a")),
+            Err(TabError::Freeze(_))
+        ));
+
+        tab.restore().unwrap();
+        tab.discard().unwrap();
+        assert!(matches!(
+            tab.freeze(snapshot("https://a")),
+            Err(TabError::Freeze(_))
+        ));
+    }
+
+    #[test]
+    fn discard_drops_the_snapshot_but_keeps_the_address() {
+        let mut reg = TabRegistry::new();
+        let id = reg.create("https://a".into());
+        let tab = reg.get_mut(id).unwrap();
+
+        tab.freeze(snapshot("https://a")).unwrap();
+        tab.discard().unwrap();
+        assert_eq!(tab.state(), TabState::Discarded);
+        assert!(tab.snapshot().is_none());
+        assert_eq!(tab.url(), "https://a");
+
+        // Discarding twice is reported; restoring still works.
+        assert!(matches!(tab.discard(), Err(TabError::Discard(_))));
+        tab.restore().unwrap();
+        assert_eq!(tab.state(), TabState::Active);
+    }
+
+    #[test]
+    fn focus_fallback_prefers_right_then_left_neighbour() {
+        let mut reg = TabRegistry::new();
+        let a = reg.create("a".into());
+        let b = reg.create("b".into());
+        let c = reg.create("c".into());
+        assert_eq!(reg.focus_fallback(a), Some(b));
+        assert_eq!(reg.focus_fallback(b), Some(c));
+        assert_eq!(reg.focus_fallback(c), Some(b));
+        assert_eq!(reg.focus_fallback(TabId(99)), None);
+
+        reg.close(b).unwrap();
+        reg.close(c).unwrap();
+        assert_eq!(reg.focus_fallback(a), None);
+    }
+
+    #[test]
+    fn a_frozen_tab_stays_frozen_through_close_and_reopen() {
+        let mut reg = TabRegistry::new();
+        let a = reg.create("a".into());
+        let b = reg.create("b".into());
+        reg.get_mut(b).unwrap().freeze(snapshot("b")).unwrap();
+        reg.close(b).unwrap();
+        assert_eq!(reg.reopen_closed(), Some(b));
+        // The surface comes back through restore, not through reopen —
+        // the domain still says Frozen so the caller spawns one first.
+        assert_eq!(reg.get(b).unwrap().state(), TabState::Frozen);
+        assert!(reg.get(a).unwrap().state() == TabState::Active);
     }
 }

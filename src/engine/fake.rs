@@ -16,6 +16,7 @@ pub enum FakeCall {
     Stop,
     SetVisible(bool),
     SetBounds(Rect),
+    BringToFront,
     Focus,
     Eval(String),
     SetMuted(bool),
@@ -93,6 +94,11 @@ impl ContentView for FakeView {
 
     fn set_bounds(&self, bounds: Rect) -> Result<(), EngineError> {
         self.calls.borrow_mut().push(FakeCall::SetBounds(bounds));
+        Ok(())
+    }
+
+    fn bring_to_front(&self) -> Result<(), EngineError> {
+        self.calls.borrow_mut().push(FakeCall::BringToFront);
         Ok(())
     }
 

@@ -4,7 +4,7 @@
 //! `NavigateToString` HTML: a `data:`-document runs no scripts and its IPC
 //! messages never reach the host (wry drops unparseable Source URIs).
 
-use crate::shell::{chrome, error};
+use crate::shell::{chrome, dial, error};
 
 /// Origin that all internal pages share. `is_internal_url` keys off this —
 /// keep the two in sync if the scheme registration ever changes.
@@ -12,6 +12,7 @@ pub(crate) const INTERNAL_ORIGIN: &str = "http://cryo.localhost";
 
 pub const CHROME_URL: &str = "http://cryo.localhost/chrome";
 pub const NEW_TAB_URL: &str = "http://cryo.localhost/newtab";
+pub const SETTINGS_URL: &str = "http://cryo.localhost/settings";
 
 /// A URL that belongs to the shell, not to any web destination.
 pub fn is_internal_url(url: &str) -> bool {
@@ -24,6 +25,9 @@ pub fn internal_page(path: &str) -> Option<&'static str> {
     match path {
         "/chrome" => Some(chrome::CHROME_HTML),
         "/newtab" => Some(NEW_TAB_HTML),
+        "/settings" => Some(SETTINGS_HTML),
+        // The dial list both shell surfaces fetch at load.
+        dial::PATH => Some(dial::JSON),
         // The error page reads its parameters from the query string, which
         // never reaches this resolver — one document covers every failure.
         error::ERROR_PATH => Some(error::ERROR_HTML),
@@ -70,6 +74,22 @@ pub const NEW_TAB_HTML: &str = r##"<!doctype html>
     outline: none; border-color: #2a7089;
     box-shadow: 0 0 0 3px rgba(42, 112, 137, .25);
   }
+  #dial {
+    margin-top: 40px; display: flex; flex-wrap: wrap; gap: 12px;
+    justify-content: center;
+  }
+  .tile {
+    width: 96px; padding: 12px 6px 10px; border-radius: 10px;
+    background: #1d2026; border: 1px solid #272b33;
+    color: #c9cdd4; text-decoration: none; text-align: center;
+    font-size: 12px; overflow: hidden;
+  }
+  .tile:hover { border-color: #2a7089; background: #22262d; }
+  .tile .dot {
+    width: 34px; height: 34px; margin: 0 auto 6px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    background: #17455a; color: #a2deee; font-size: 16px; font-weight: 600;
+  }
 </style></head>
 <body>
   <main>
@@ -81,6 +101,7 @@ pub const NEW_TAB_HTML: &str = r##"<!doctype html>
              placeholder="Search DuckDuckGo or type a URL"
              aria-label="Search or type a URL">
     </form>
+    <div id="dial"></div>
   </main>
 <script>
   // Mirrors `normalize_nav_input` in shell::chrome so this box and the
@@ -103,7 +124,84 @@ pub const NEW_TAB_HTML: &str = r##"<!doctype html>
     if (url) location.href = url;
   });
   box.focus();
+
+  // Speed dial — the same list the chrome's dial bar reads. Plain links:
+  // this page is a content view, so it deliberately has no command
+  // channel, and a normal navigation is all a tile needs.
+  fetch("/dials").then(function (r) { return r.json(); }).then(function (dials) {
+    var wrap = document.getElementById("dial");
+    dials.forEach(function (d) {
+      var a = document.createElement("a");
+      a.className = "tile";
+      a.href = d.url;
+      var dot = document.createElement("span");
+      dot.className = "dot";
+      dot.textContent = d.name.charAt(0);
+      var label = document.createElement("div");
+      label.textContent = d.name;
+      a.append(dot, label);
+      wrap.appendChild(a);
+    });
+  }).catch(function () {});
 </script>
+</body>
+</html>
+"##;
+
+/// Settings: a read-only reference page — shortcuts, profile location,
+/// and what the engine cannot do. Actions that mutate state live in the
+/// chrome menu because internal pages in content tabs have no IPC (any
+/// website could drive the browser otherwise — see `NEW_TAB_HTML`).
+pub const SETTINGS_HTML: &str = r##"<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Settings</title><style>
+  :root { color-scheme: dark; }
+  body {
+    max-width: 640px; margin: 0 auto; padding: 40px 24px;
+    background: #16181c; color: #d7dae0;
+    font: 14px/1.6 system-ui, "Segoe UI", sans-serif;
+  }
+  h1 { font-size: 22px; font-weight: 600; margin-bottom: 4px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
+       color: #8a8f98; margin: 28px 0 8px; }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 6px 0; border-bottom: 1px solid #23262c; vertical-align: top; }
+  td.k { width: 220px; color: #9ec2f5; white-space: nowrap;
+         font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+  .note { color: #8a8f98; }
+</style></head>
+<body>
+  <h1>Settings</h1>
+  <div class="note">cryo — a memory-obsessed browser shell.</div>
+
+  <h2>Profile &amp; sign-in</h2>
+  <table>
+    <tr><td class="k">Google sign-in</td><td>Use the Sign in button in the toolbar. Cookies live in the shared profile, so every site sees the session.</td></tr>
+    <tr><td class="k">Profile folder</td><td><code>cryo.exe.WebView2</code> next to the executable. Delete it (or Ctrl+Shift+Del) for a clean slate.</td></tr>
+  </table>
+
+  <h2>Permissions</h2>
+  <table>
+    <tr><td class="k">Microphone / camera</td><td>Granted automatically — WebView2 has no prompt UI. Everything else is denied.</td></tr>
+    <tr><td class="k">Extensions</td><td>Not supported — WebView2 cannot run Chrome extensions.</td></tr>
+  </table>
+
+  <h2>Shortcuts</h2>
+  <table>
+    <tr><td class="k">Ctrl+T / Ctrl+W</td><td>New / close tab</td></tr>
+    <tr><td class="k">Ctrl+Shift+T</td><td>Reopen closed tab</td></tr>
+    <tr><td class="k">Ctrl+Tab / Ctrl+Shift+Tab</td><td>Next / previous tab</td></tr>
+    <tr><td class="k">Ctrl+1..9</td><td>Jump to tab</td></tr>
+    <tr><td class="k">Ctrl+L, F6</td><td>Address bar; F6 toggles bar ↔ page</td></tr>
+    <tr><td class="k">F5 / Ctrl+Shift+R</td><td>Reload / hard reload</td></tr>
+    <tr><td class="k">Alt+Left / Alt+Right</td><td>Back / forward</td></tr>
+    <tr><td class="k">Ctrl+M</td><td>Mute tab</td></tr>
+    <tr><td class="k">Ctrl+Shift+F</td><td>Freeze tab — drops the surface, keeps a snapshot; click the tab to restore. ⋮ menu also has Discard.</td></tr>
+    <tr><td class="k">F11 / F12</td><td>Fullscreen / DevTools</td></tr>
+    <tr><td class="k">Ctrl+Shift+N</td><td>Incognito window</td></tr>
+    <tr><td class="k">Ctrl+Shift+Del</td><td>Clear browsing data</td></tr>
+    <tr><td class="k">Ctrl+Shift+Q</td><td>Quit</td></tr>
+  </table>
 </body>
 </html>
 "##;
@@ -116,6 +214,8 @@ mod tests {
     fn resolves_known_pages_only() {
         assert!(internal_page("/chrome").is_some());
         assert!(internal_page("/newtab").is_some());
+        assert!(internal_page("/settings").is_some());
+        assert!(internal_page(dial::PATH).is_some());
         assert!(internal_page("/etc/passwd").is_none());
     }
 

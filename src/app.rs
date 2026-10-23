@@ -11,19 +11,32 @@ use tao::keyboard::{Key, ModifiersState};
 use tao::window::{Fullscreen, Window};
 
 use crate::engine::{
-    Accelerator, AcceleratorHandler, AcceleratorKey, ContentView, Engine, LoadFailure, ViewSpec,
+    Accelerator, AcceleratorHandler, AcceleratorKey, ContentView, Engine, LoadFailure,
+    PermissionDecision, PermissionKind, ViewSpec,
 };
 use crate::shell::chrome::{
     canonize_nav_input, normalize_nav_input, ChromeCommand, ChromeState, ChromeTab,
 };
 use crate::shell::pages::{self, CHROME_URL, NEW_TAB_URL};
 use crate::shell::{self, error};
-use crate::tabs::{TabId, TabRegistry};
+use crate::tabs::{TabId, TabRegistry, TabSnapshot, TabState};
+use crate::update;
 
 /// Domain URL recorded for a fresh tab. The view actually loads
 /// `NEW_TAB_URL`; `about:blank` stays the tab's logical address so the
 /// address bar starts empty and internal URLs never escape into it.
 const DEFAULT_URL: &str = "about:blank";
+
+/// The address to hand the engine for a tab's domain URL. `about:blank`
+/// is a never-painting document in WebView2 — the internal new-tab page
+/// stands in for it everywhere a view (re)loads a tab's address.
+fn content_url_for(domain_url: &str) -> &str {
+    if domain_url == DEFAULT_URL {
+        NEW_TAB_URL
+    } else {
+        domain_url
+    }
+}
 
 /// Events that reach the loop from view callbacks (`AppEvent`) — chrome
 /// IPC, title changes, navigations, keys the engine yielded to us.
@@ -39,6 +52,9 @@ pub enum AppEvent {
     PageFullscreen(TabId, bool),
     /// A navigation ended with no document, or the renderer died under one.
     LoadFailed(TabId, LoadFailure),
+    /// A background update check finished — started at launch and by the
+    /// menu's "Check for updates".
+    UpdateChecked(update::Outcome),
 }
 
 /// What a keypress should do. One mapping serves both input paths —
@@ -83,6 +99,9 @@ enum KeyCommand {
     Zoom(i32),
     Screenshot,
     ClearBrowsingData,
+    /// Freeze the active tab: snapshot it, drop its view, hand focus to
+    /// a neighbour. Clicking it later restores it.
+    FreezeActive,
 }
 
 /// Map a key to the browser command it triggers, plus whether the key is
@@ -148,10 +167,26 @@ fn key_command(acc: Accelerator) -> Option<(KeyCommand, bool)> {
         (true, false, _, Character('-')) => (KeyCommand::Zoom(-1), true),
         (true, false, false, Character('0')) => (KeyCommand::Zoom(0), true),
         (true, false, true, Character('s')) => (KeyCommand::Screenshot, true),
+        (true, false, true, Character('f')) => (KeyCommand::FreezeActive, true),
         (true, false, true, Delete) => (KeyCommand::ClearBrowsingData, true),
         _ => return None,
     };
     Some((cmd, steal))
+}
+
+/// "Restart to update now?" — shown when a *manual* check finds a staged
+/// installer. `true` means apply immediately.
+fn update_dialog(u: &update::Update) -> bool {
+    rfd::MessageDialog::new()
+        .set_title("Update ready")
+        .set_description(format!(
+            "cryo v{} is downloaded and verified. Restart to update?",
+            u.version
+        ))
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .set_level(rfd::MessageLevel::Info)
+        .show()
+        == rfd::MessageDialogResult::Yes
 }
 
 /// tao delivers `KeyEvent`s in its own key type — normalize into our
@@ -207,6 +242,16 @@ pub struct App {
     chrome_focused: bool,
     /// The active view is in DOM fullscreen — it covers the chrome strip.
     page_fullscreen: bool,
+    /// A chrome overlay (⋮ menu, omnibox dropdown) is open — the chrome
+    /// view is stretched over the whole window so the popup can paint
+    /// above the content views.
+    overlay_open: bool,
+    /// Downloaded, checksum-verified installer waiting for a restart.
+    /// Surfaced as the ⋮ badge and the "Restart to update" menu item.
+    pending_update: Option<update::Update>,
+    /// A manual check was requested — the next `UpdateChecked` outcome
+    /// gets a dialog instead of staying silent.
+    update_prompt: bool,
 }
 
 impl App {
@@ -246,6 +291,11 @@ impl App {
         let chrome = engine.spawn(ViewSpec {
             bounds: chrome_rect,
             visible: true,
+            // The view grows over the whole window while its menu is open;
+            // transparent lets the content view show through the parts of
+            // the document that don't paint anything.
+            transparent: true,
+            background: Some(shell::CHROME_BACKGROUND),
             on_accelerator: Some(Self::accelerator_forwarder(&proxy)),
             on_ipc: Some(Box::new(move |body| {
                 if let Ok(cmd) = serde_json::from_str::<ChromeCommand>(&body) {
@@ -269,6 +319,9 @@ impl App {
             modifiers: ModifiersState::empty(),
             chrome_focused: false,
             page_fullscreen: false,
+            overlay_open: false,
+            pending_update: None,
+            update_prompt: false,
         };
         Ok(app)
     }
@@ -307,7 +360,12 @@ impl App {
                     return;
                 }
                 if let Some(tab) = self.registry.get_mut(id) {
-                    tab.navigate(url);
+                    // A view that already froze can still have events in
+                    // flight from before the drop — they must not move the
+                    // frozen tab's address away from its snapshot's.
+                    if tab.state() == TabState::Active {
+                        tab.navigate(url);
+                    }
                 }
                 if self.registry.active_id() == Some(id) {
                     self.sync_chrome()
@@ -318,6 +376,7 @@ impl App {
             AppEvent::OpenInNewTab(url) => self.spawn_tab(&url, true),
             AppEvent::PageFullscreen(id, on) => self.page_fullscreen(id, on),
             AppEvent::LoadFailed(id, failure) => self.show_error(id, failure),
+            AppEvent::UpdateChecked(outcome) => self.on_update(outcome, control_flow),
         };
         if let Err(e) = result {
             eprintln!("cryo: {e:?}");
@@ -355,7 +414,90 @@ impl App {
                 }
             }
             ChromeCommand::Reload => self.reload_active(),
+            ChromeCommand::Back => self.back_active(),
+            ChromeCommand::Forward => self.forward_active(),
+            // The WebView2 profile cookie jar is shared across views, so a
+            // Google sign-in tab authenticates every tab — and persists.
+            ChromeCommand::SignIn => self.spawn_tab("https://accounts.google.com", true),
+            ChromeCommand::NewIncognito => Self::spawn_window(true, None),
+            ChromeCommand::DevTools => self.devtools_active(),
+            ChromeCommand::ClearData => self
+                .chrome
+                .clear_browsing_data()
+                .map_err(|e| anyhow::anyhow!(e)),
+            ChromeCommand::Settings => self.spawn_tab(pages::SETTINGS_URL, true),
+            ChromeCommand::CheckUpdates => {
+                self.request_update_check(true);
+                Ok(())
+            }
+            ChromeCommand::UpdateApply => self.apply_update(control_flow),
+            ChromeCommand::Freeze { id } => {
+                match id
+                    .map(TabId::from_raw)
+                    .or_else(|| self.registry.active_id())
+                {
+                    Some(id) => self.freeze_tab(id),
+                    None => Ok(()),
+                }
+            }
+            ChromeCommand::Discard { id } => {
+                match id
+                    .map(TabId::from_raw)
+                    .or_else(|| self.registry.active_id())
+                {
+                    Some(id) => self.discard_tab(id),
+                    None => Ok(()),
+                }
+            }
+            ChromeCommand::Overlay { open } => self.set_overlay_open(open),
         }
+    }
+
+    /// Chrome bounds for the current overlay state: the strip normally,
+    /// the whole window while an overlay is open.
+    fn chrome_rect(&self) -> crate::engine::Rect {
+        let (w, h) = self.logical_size;
+        if self.overlay_open {
+            crate::engine::Rect {
+                x: 0.0,
+                y: 0.0,
+                w,
+                h,
+            }
+        } else {
+            shell::layout(w, h).0
+        }
+    }
+
+    /// Chrome overlays (the ⋮ menu, the omnibox dropdown) are part of the
+    /// chrome document, but a view can't paint outside its own bounds —
+    /// while one is open the chrome view is raised above the content
+    /// views and stretched over the whole window. Its background is
+    /// transparent, so only the strip and the popup paint; the page shows
+    /// through and any click outside lands on the chrome document, which
+    /// dismisses the overlay.
+    fn set_overlay_open(&mut self, open: bool) -> anyhow::Result<()> {
+        if self.overlay_open == open {
+            return Ok(());
+        }
+        self.overlay_open = open;
+        self.chrome.set_bounds(self.chrome_rect())?;
+        if open {
+            self.chrome.bring_to_front()?;
+        }
+        Ok(())
+    }
+
+    /// App-side actions that replace what's on screen must close overlays —
+    /// the document can't see them, so it's synced through `__cryo_overlay`
+    /// before the bounds come back down.
+    fn dismiss_overlays(&mut self) -> anyhow::Result<()> {
+        if !self.overlay_open {
+            return Ok(());
+        }
+        self.chrome
+            .eval("window.__cryo_overlay && window.__cryo_overlay(false)")?;
+        self.set_overlay_open(false)
     }
 
     /// Fallback key path: fires only while no view holds focus — the
@@ -425,6 +567,10 @@ impl App {
                 .chrome
                 .clear_browsing_data()
                 .map_err(|e| anyhow::anyhow!(e)),
+            KeyCommand::FreezeActive => match self.registry.active_id() {
+                Some(id) => self.freeze_tab(id),
+                None => Ok(()),
+            },
         }
     }
 
@@ -470,17 +616,14 @@ impl App {
         self.focus_address_bar()
     }
 
-    /// Bring back the most recently closed tab: respawn an engine surface
-    /// at its recorded address and focus it.
+    /// Bring back the most recently closed tab — `activate` respawns the
+    /// surface, so a tab that was closed while frozen comes back through
+    /// the same restore path.
     fn reopen_closed(&mut self) -> anyhow::Result<()> {
-        let Some(id) = self.registry.reopen_closed() else {
-            return Ok(());
-        };
-        let load = match self.registry.get(id).map(|t| t.url().to_string()) {
-            Some(u) if u != DEFAULT_URL => u,
-            _ => NEW_TAB_URL.to_string(),
-        };
-        self.spawn_view_for(id, &load)
+        match self.registry.reopen_closed() {
+            Some(id) => self.activate(id),
+            None => Ok(()),
+        }
     }
 
     /// Open `url` in a fresh tab — foreground for target=_blank /
@@ -529,6 +672,7 @@ impl App {
         let view = engine.spawn(ViewSpec {
             bounds: content_rect,
             visible,
+            background: Some(shell::CONTENT_BACKGROUND),
             on_title_change: Some(Box::new(move |t| {
                 let _ = title_proxy.send_event(AppEvent::TitleChanged(id, t));
             })),
@@ -546,34 +690,154 @@ impl App {
             on_load_failure: Some(Box::new(move |failure| {
                 let _ = fail_proxy.send_event(AppEvent::LoadFailed(id, failure));
             })),
+            // Pages may take the mic and camera — without a handler the
+            // engine's default is a silent deny, which is why calls appear
+            // to connect but transmit nothing. Everything else is denied.
+            on_permission: Some(Box::new(|kind| match kind {
+                PermissionKind::Microphone | PermissionKind::Camera => PermissionDecision::Allow,
+                _ => PermissionDecision::Deny,
+            })),
             ..ViewSpec::url(url)
         })?;
         Ok(view)
     }
 
+    /// Freeze `id`: snapshot its surface state, destroy the view, leave a
+    /// dimmed marker in the strip. Freezing the active tab hands focus to
+    /// the same neighbour a close would; a lone tab can't freeze because
+    /// nothing would be left to paint, so the command just does nothing.
+    fn freeze_tab(&mut self, id: TabId) -> anyhow::Result<()> {
+        if !self.leave_foreground(id)? {
+            return Ok(());
+        }
+        // Only a live surface has anything worth snapshotting — a view
+        // missing here means the tab is already frozen or discarded.
+        let Some(view) = self.views.get(&id) else {
+            return Ok(());
+        };
+        let zoom = view.zoom_factor().unwrap_or(1.0);
+        let muted = view.muted().unwrap_or(false);
+        let Some(tab) = self.registry.get_mut(id) else {
+            return Ok(());
+        };
+        tab.freeze(TabSnapshot {
+            url: tab.url().to_string(),
+            frozen_at: std::time::Instant::now(),
+            zoom,
+            muted,
+        })?;
+        drop(self.views.remove(&id));
+        self.sync_chrome()
+    }
+
+    /// Discard `id`: drop the surface keeping nothing but the address —
+    /// freeze without a snapshot. Under memory pressure this is what the
+    /// (Phase 2) enforcer will pick; the trigger here is manual.
+    fn discard_tab(&mut self, id: TabId) -> anyhow::Result<()> {
+        if !self.leave_foreground(id)? {
+            return Ok(());
+        }
+        let Some(tab) = self.registry.get_mut(id) else {
+            return Ok(());
+        };
+        tab.discard()?;
+        drop(self.views.remove(&id));
+        self.sync_chrome()
+    }
+
+    /// Move focus off `id` when it's the showing tab — freeze and discard
+    /// leave the tab in the strip, so the neighbour a close would pick
+    /// takes over first. Returns `false` when `id` is the only tab: with
+    /// nothing left to paint, its view must stay alive.
+    fn leave_foreground(&mut self, id: TabId) -> anyhow::Result<bool> {
+        if self.registry.active_id() != Some(id) {
+            return Ok(true);
+        }
+        let Some(next) = self.registry.focus_fallback(id) else {
+            return Ok(false);
+        };
+        // A fullscreen page owns the whole window — leave fullscreen
+        // before the switch or the strip stays hidden under it.
+        if self.page_fullscreen {
+            self.page_fullscreen(id, false)?;
+        }
+        self.activate(next)?;
+        Ok(true)
+    }
+
+    /// Give a view-less tab — frozen, discarded, or one coming back from
+    /// the closed stack — a fresh surface, then flip it back to live.
+    /// Spawned invisible: `activate` owns the show/hide ordering.
+    fn restore_view(&mut self, id: TabId) -> anyhow::Result<()> {
+        let Some(tab) = self.registry.get(id) else {
+            return Ok(());
+        };
+        let snap = tab.snapshot();
+        let url = snap.map(|s| s.url.as_str()).unwrap_or_else(|| tab.url());
+        let load = content_url_for(url).to_string();
+        let zoom = snap.map(|s| s.zoom).unwrap_or(1.0);
+        let muted = snap.map(|s| s.muted).unwrap_or(false);
+        let (_, content_rect) = shell::layout(self.logical_size.0, self.logical_size.1);
+        let view =
+            Self::spawn_content_view(&*self.engine, &self.proxy, content_rect, id, &load, false)?;
+        // Snapshot extras exist only for frozen tabs; discarded starts clean.
+        if zoom != 1.0 {
+            view.set_zoom_factor(zoom)?;
+        }
+        if muted {
+            view.set_muted(true)?;
+        }
+        self.views.insert(id, view);
+        // The surface exists — the domain may flip back to live. If spawn
+        // had failed above we'd have bailed, leaving the tab frozen.
+        if let Some(tab) = self.registry.get_mut(id) {
+            if tab.state() != TabState::Active {
+                tab.restore()?;
+            }
+        }
+        Ok(())
+    }
+
     fn activate(&mut self, id: TabId) -> anyhow::Result<()> {
+        self.dismiss_overlays()?;
         let prev = self.registry.active_id();
         if prev == Some(id) {
             return Ok(());
         }
-        if let Some(p) = prev.and_then(|p| self.views.get(&p)) {
-            p.set_visible(false)?;
+        // Frozen, discarded, and reopened tabs have no surface — clicking
+        // them is what "restore" means.
+        if !self.views.contains_key(&id) {
+            self.restore_view(id)?;
         }
         self.registry.set_active(id)?;
         if let Some(view) = self.views.get(&id) {
             let (_, content_rect) = shell::layout(self.logical_size.0, self.logical_size.1);
-            view.set_visible(true)?;
+            // Show before hiding: the incoming view becomes visible while
+            // the outgoing one is still painted, so no frame ever shows
+            // the bare window behind them. Both changes settle in this
+            // same event turn, so z-order between the two never reaches
+            // the screen.
             view.set_bounds(content_rect)?;
+            view.set_visible(true)?;
             view.focus()?;
             self.chrome_focused = false;
+        }
+        if let Some(p) = prev.and_then(|p| self.views.get(&p)) {
+            p.set_visible(false)?;
         }
         self.sync_chrome()
     }
 
     fn close_tab(&mut self, id: TabId, control_flow: &mut ControlFlow) -> anyhow::Result<()> {
-        self.views.remove(&id);
         match self.registry.close(id)? {
-            Some(next) => self.activate(next),
+            // Reveal the neighbour first, then destroy the dead view —
+            // dropping it while it's still the only painted surface
+            // leaves a one-frame hole where the window shows through.
+            Some(next) => {
+                self.activate(next)?;
+                drop(self.views.remove(&id));
+                self.sync_chrome()
+            }
             None => {
                 *control_flow = ControlFlow::Exit;
                 Ok(())
@@ -589,17 +853,12 @@ impl App {
     }
 
     fn navigate_active(&mut self, url: &str) -> anyhow::Result<()> {
+        self.dismiss_overlays()?;
         let Some(id) = self.registry.active_id() else {
             return Ok(());
         };
         if let Some(view) = self.views.get(&id) {
-            // Navigating to about:blank renders a never-painting document in
-            // WebView2 — substitute the internal new-tab page instead.
-            if url == "about:blank" {
-                view.load_url(NEW_TAB_URL)?;
-            } else {
-                view.load_url(url)?;
-            }
+            view.load_url(content_url_for(url))?;
             // Hand keyboard focus to the page — a committed navigation in a
             // real browser moves focus out of the address bar.
             view.focus()?;
@@ -682,12 +941,8 @@ impl App {
         let dup = self.registry.duplicate(id)?;
         let url = self.registry.get(dup).map(|t| t.url().to_string());
         let Some(url) = url else { return Ok(()) };
-        let load = if url == DEFAULT_URL {
-            NEW_TAB_URL
-        } else {
-            &url
-        };
-        self.spawn_view_for(dup, load)
+        let load = content_url_for(&url).to_string();
+        self.spawn_view_for(dup, &load)
     }
 
     fn mute_active(&mut self) -> anyhow::Result<()> {
@@ -791,6 +1046,9 @@ impl App {
         if self.registry.active_id() != Some(id) {
             return Ok(());
         }
+        if on {
+            self.dismiss_overlays()?;
+        }
         self.page_fullscreen = on;
         // Video fullscreen in a real browser is OS fullscreen — the window
         // goes borderless over the taskbar too, not just over the strip.
@@ -876,8 +1134,8 @@ impl App {
         let w = width_px as f64 / scale;
         let h = height_px as f64 / scale;
         self.logical_size = (w, h);
-        let (chrome_rect, content_rect) = shell::layout(w, h);
-        if let Err(e) = self.chrome.set_bounds(chrome_rect) {
+        let (_, content_rect) = shell::layout(w, h);
+        if let Err(e) = self.chrome.set_bounds(self.chrome_rect()) {
             eprintln!("cryo: {e:?}");
         }
         // A DOM-fullscreen view keeps covering the whole window on resize.
@@ -899,6 +1157,66 @@ impl App {
         }
     }
 
+    /// Ask the release feed for a newer build. `prompt` means the user
+    /// asked (menu item) — the outcome gets a dialog; silent checks only
+    /// surface the ⋮ badge once an installer is downloaded and verified.
+    fn request_update_check(&mut self, prompt: bool) {
+        self.update_prompt = prompt;
+        let proxy = self.proxy.clone();
+        update::spawn_check(move |outcome| {
+            let _ = proxy.send_event(AppEvent::UpdateChecked(outcome));
+        });
+    }
+
+    fn on_update(
+        &mut self,
+        outcome: update::Outcome,
+        control_flow: &mut ControlFlow,
+    ) -> anyhow::Result<()> {
+        let prompt = std::mem::take(&mut self.update_prompt);
+        match outcome {
+            update::Outcome::Ready(u) => {
+                let apply = prompt && update_dialog(&u);
+                self.pending_update = Some(u);
+                self.sync_chrome()?;
+                if apply {
+                    self.apply_update(control_flow)?;
+                }
+            }
+            update::Outcome::UpToDate if prompt => {
+                rfd::MessageDialog::new()
+                    .set_title("cryo")
+                    .set_description(format!(
+                        "cryo is up to date (v{})",
+                        env!("CARGO_PKG_VERSION")
+                    ))
+                    .set_level(rfd::MessageLevel::Info)
+                    .show();
+            }
+            update::Outcome::UpToDate => {}
+            update::Outcome::Failed(e) if prompt => {
+                rfd::MessageDialog::new()
+                    .set_title("Update check failed")
+                    .set_description(e.to_string())
+                    .set_level(rfd::MessageLevel::Error)
+                    .show();
+            }
+            update::Outcome::Failed(e) => return Err(e.into()),
+        }
+        Ok(())
+    }
+
+    /// Launch the staged installer and leave. Inno runs fully silent and
+    /// relaunches cryo itself (the `[Run]` entry in `cryo.iss`).
+    fn apply_update(&mut self, control_flow: &mut ControlFlow) -> anyhow::Result<()> {
+        let Some(u) = &self.pending_update else {
+            return Ok(());
+        };
+        update::launch_installer(u)?;
+        *control_flow = ControlFlow::Exit;
+        Ok(())
+    }
+
     fn sync_chrome(&self) -> anyhow::Result<()> {
         let state = ChromeState {
             tabs: self
@@ -908,6 +1226,7 @@ impl App {
                     id: t.id().get(),
                     title: t.title().to_string(),
                     active: self.registry.active_id() == Some(t.id()),
+                    state: t.state().as_str(),
                 })
                 .collect(),
             active_url: self
@@ -916,6 +1235,7 @@ impl App {
                 .map(|t| t.url().to_string())
                 .filter(|u| u != "about:blank")
                 .unwrap_or_default(),
+            update_version: self.pending_update.as_ref().map(|u| u.version.to_string()),
         };
         let json = serde_json::to_string(&state)?;
         self.chrome.eval(&format!("window.__cryo_update({json})"))?;

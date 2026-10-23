@@ -3,8 +3,10 @@
 *.pdb
 .env
 edge-import/
+installer/output/
 
 # Local Devin/agent state + test tooling — machine-local, not project
 dev tools.
 .devin/
+.playwright-mcp/
 nul
