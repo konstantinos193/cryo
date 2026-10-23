@@ -416,17 +416,19 @@ fn an_export_of_nothing_is_still_a_file_the_other_browsers_accept() {
     assert!(bundle.is_empty());
 }
 
-/// Windows seals the vault with the signed-in account's DPAPI key; the
-/// other platforms use their keychain. Either way the test wants the
-/// shipped protector — the point is that the file is unreadable.
+/// Windows seals the vault with the signed-in account's DPAPI key, so
+/// the test gets the shipped protector there. Everywhere else the
+/// shipped protector wants an OS keychain a CI runner does not have —
+/// `fake::Masked` stands in, because what the tests check is that the
+/// file is unreadable, not which daemon holds the key.
 #[cfg(windows)]
 fn protector() -> vault::Dpapi {
     vault::Dpapi
 }
 
 #[cfg(not(windows))]
-fn protector() -> vault::Keyring {
-    vault::Keyring::new()
+fn protector() -> vault::fake::Masked {
+    vault::fake::Masked
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {

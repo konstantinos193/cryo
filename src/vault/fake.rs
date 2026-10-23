@@ -51,6 +51,22 @@ impl Protector for Unsealed {
     }
 }
 
+/// A protector that hides the bytes without holding a real key — every
+/// byte XORed with a fixed mask. Machines with no keychain at all (a CI
+/// runner, a container) can still test that the sealed file is
+/// unreadable. It masks, it does not encrypt: never for production.
+pub struct Masked;
+
+impl Protector for Masked {
+    fn protect(&self, plain: &[u8]) -> Result<Vec<u8>, VaultError> {
+        Ok(plain.iter().map(|b| b ^ 0xC7).collect())
+    }
+
+    fn unprotect(&self, sealed: &[u8]) -> Result<Vec<u8>, VaultError> {
+        self.protect(sealed)
+    }
+}
+
 /// A protector that always fails — the seam for "this file was written
 /// by another Windows account".
 pub struct Wrongkey;

@@ -114,7 +114,7 @@ Middle-click a tab to close it.
             └──────┬──────┘
                    ▼
             ┌─────────────┐      ┌──────────────────────────────┐
-            │     app     │─────▶│ persist, bookmarks, vault,   │
+            │     app     │────▶│ persist, bookmarks, vault,   │
             │ (event loop)│      │ transfer, instance, update   │
             └──────┬──────┘      └──────────────────────────────┘
                    ▼
