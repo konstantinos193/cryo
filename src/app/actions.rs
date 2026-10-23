@@ -6,7 +6,10 @@ use tao::event_loop::ControlFlow;
 use tao::window::Fullscreen;
 
 use crate::shell;
-use crate::shell::chrome::{canonize_nav_input, normalize_nav_input, ChromeCommand};
+use crate::shell::chrome::{
+    canonize_nav_input, normalize_nav_input, ChromeCommand, SuggestReply, Suggestion,
+};
+use crate::shell::dial;
 use crate::shell::pages::{self, NEW_TAB_URL};
 use crate::tabs::TabId;
 
@@ -29,6 +32,9 @@ impl App {
                 alt,
                 shift,
             } => {
+                // What the user typed is itself worth remembering — the
+                // resolved URL gets recorded when the navigation commits.
+                self.remember(&input);
                 let url = if ctrl && !alt && !shift {
                     canonize_nav_input(&input)
                 } else {
@@ -80,7 +86,72 @@ impl App {
                 }
             }
             ChromeCommand::Overlay { open } => self.set_overlay_open(open),
+            ChromeCommand::Suggest { q } => self.suggest(&q),
+            ChromeCommand::DownloadCancel { key } => self.cancel_download(key),
+            ChromeCommand::DownloadShow { key } => {
+                self.reveal_download(key);
+                Ok(())
+            }
+            ChromeCommand::DownloadsClear => self.clear_finished_downloads(),
         }
+    }
+
+    /// The omnibox asks on every keystroke; the app owns what it can
+    /// offer — a search/go row, then remembered inputs and visits, then
+    /// dial matches — and answers with a `__cryo_suggest` eval. History
+    /// is never fetchable: `/cmd` reaches us only from the chrome view
+    /// (content views carry no `on_ipc`), and the page resolver would
+    /// hand it to any origin.
+    fn suggest(&self, q: &str) -> anyhow::Result<()> {
+        let q = q.trim();
+        let mut rows: Vec<Suggestion> = Vec::new();
+        if !q.is_empty() {
+            // The first row mirrors `normalize_nav_input`'s verdict: a
+            // URL-looking input says "Go to", anything else is a search.
+            let url = normalize_nav_input(q);
+            let is_search = url.starts_with("https://duckduckgo.com/?q=");
+            rows.push(Suggestion {
+                label: if is_search {
+                    format!("Search DuckDuckGo for \"{q}\"")
+                } else {
+                    format!("Go to {url}")
+                },
+                input: q.to_string(),
+            });
+            if let Some(rec) = &self.recorder {
+                for e in rec.matches(q, 8) {
+                    let label = match e.title.as_deref().filter(|t| !t.is_empty()) {
+                        Some(t) => format!("{t} — {}", e.text),
+                        None => e.text.clone(),
+                    };
+                    rows.push(Suggestion {
+                        label,
+                        input: e.text.clone(),
+                    });
+                }
+            }
+            let ql = q.to_lowercase();
+            for d in dial::entries() {
+                if d.name.to_lowercase().contains(&ql) || d.url.to_lowercase().contains(&ql) {
+                    rows.push(Suggestion {
+                        label: format!("{} — {}", d.name, d.url),
+                        input: d.url,
+                    });
+                }
+            }
+            // Same destination from two sources — the first wins.
+            let mut seen = std::collections::HashSet::new();
+            rows.retain(|r| seen.insert(r.input.clone()));
+            rows.truncate(8);
+        }
+        let reply = SuggestReply {
+            q: q.to_string(),
+            rows,
+        };
+        let json = serde_json::to_string(&reply)?;
+        self.chrome
+            .eval(&format!("window.__cryo_suggest({json})"))?;
+        Ok(())
     }
 
     /// One window per process: a "new window" key spawns a sibling cryo
@@ -125,7 +196,7 @@ impl App {
     /// Alt+Enter, background for Alt+Shift+Enter.
     pub(super) fn spawn_tab(&mut self, url: &str, foreground: bool) -> anyhow::Result<()> {
         let id = self.registry.create(url.to_string());
-        self.spawn_view_at(id, url, foreground)?;
+        self.spawn_view_at(id, url)?;
         if foreground {
             self.activate(id)
         } else {
@@ -135,7 +206,7 @@ impl App {
 
     /// Spawn the engine surface for `id`, register it, activate it.
     pub(super) fn spawn_view_for(&mut self, id: TabId, url: &str) -> anyhow::Result<()> {
-        self.spawn_view_at(id, url, true)?;
+        self.spawn_view_at(id, url)?;
         self.activate(id)
     }
 
@@ -180,6 +251,7 @@ impl App {
             // leaves a one-frame hole where the window shows through.
             Some(next) => {
                 self.activate(next)?;
+                self.drop_downloads_of(id);
                 drop(self.views.remove(&id));
                 self.sync_chrome()
             }
@@ -319,6 +391,15 @@ impl App {
         if let Some(view) = self.active_view() {
             view.save_as()?;
         }
+        Ok(())
+    }
+
+    /// Ctrl+J toggles the download shelf — the popover is a chrome-side
+    /// overlay, so the key just evals its toggle. Stealing the chord in
+    /// `key_command` is what keeps the engine's own downloads UI shut.
+    pub(super) fn toggle_downloads(&mut self) -> anyhow::Result<()> {
+        self.chrome
+            .eval("window.__cryo_downloads && window.__cryo_downloads()")?;
         Ok(())
     }
 

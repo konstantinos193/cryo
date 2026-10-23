@@ -61,6 +61,7 @@ impl App {
         let nw_proxy = proxy.clone();
         let fs_proxy = proxy.clone();
         let fail_proxy = proxy.clone();
+        let dl_proxy = proxy.clone();
         let view = engine.spawn(ViewSpec {
             bounds: content_rect,
             visible,
@@ -85,6 +86,9 @@ impl App {
             on_load_failure: Some(Box::new(move |failure| {
                 post(&fail_proxy, AppEvent::LoadFailed(id, failure));
             })),
+            on_download: Some(Box::new(move |update| {
+                post(&dl_proxy, AppEvent::Download(id, update));
+            })),
             // Pages may take the mic and camera — without a handler the
             // engine's default is a silent deny, which is why calls appear
             // to connect but transmit nothing. Everything else is denied.
@@ -98,24 +102,20 @@ impl App {
     }
 
     /// Spawn `id`'s engine surface at the content rect, keeping the
-    /// registry entry and the view in step. `visible` only decides the
-    /// initial visibility — `activate` owns the switch.
-    pub(super) fn spawn_view_at(
-        &mut self,
-        id: TabId,
-        url: &str,
-        visible: bool,
-    ) -> anyhow::Result<()> {
+    /// registry entry and the view in step. Always spawned hidden —
+    /// `activate` owns the switch. A view created visible paints the
+    /// engine's white default for a frame before its background colour
+    /// applies; one that is shown only once it exists never does.
+    pub(super) fn spawn_view_at(&mut self, id: TabId, url: &str) -> anyhow::Result<()> {
         let (_, content_rect) = shell::layout(self.logical_size.0, self.logical_size.1);
         let view =
-            Self::spawn_content_view(&*self.engine, &self.proxy, content_rect, id, url, visible)?;
+            Self::spawn_content_view(&*self.engine, &self.proxy, content_rect, id, url, false)?;
         self.views.insert(id, view);
         Ok(())
     }
 
     /// Give a view-less tab — frozen, discarded, or one coming back from
     /// the closed stack — a fresh surface, then flip it back to live.
-    /// Spawned invisible: `activate` owns the show/hide ordering.
     pub(super) fn restore_view(&mut self, id: TabId) -> anyhow::Result<()> {
         let Some(tab) = self.registry.get(id) else {
             return Ok(());
@@ -125,7 +125,7 @@ impl App {
         let load = content_url_for(url).to_string();
         let zoom = snap.map(|s| s.zoom).unwrap_or(1.0);
         let muted = snap.map(|s| s.muted).unwrap_or(false);
-        self.spawn_view_at(id, &load, false)?;
+        self.spawn_view_at(id, &load)?;
         // Snapshot extras exist only for frozen tabs; discarded starts clean.
         if let Some(view) = self.views.get(&id) {
             if zoom != 1.0 {
@@ -169,6 +169,7 @@ impl App {
             zoom,
             muted,
         })?;
+        self.drop_downloads_of(id);
         drop(self.views.remove(&id));
         self.sync_chrome()
     }
@@ -184,6 +185,7 @@ impl App {
             return Ok(());
         };
         tab.discard()?;
+        self.drop_downloads_of(id);
         drop(self.views.remove(&id));
         self.sync_chrome()
     }

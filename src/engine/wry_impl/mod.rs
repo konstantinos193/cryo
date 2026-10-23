@@ -1,10 +1,15 @@
 //! WebView2 backend: adapts `wry` to the `Engine`/`ContentView` traits.
 //! The only module allowed to name `wry` types.
 
-use std::borrow::Cow;
 #[cfg(target_os = "windows")]
-use std::cell::Cell;
+mod downloads;
+
+use std::borrow::Cow;
 use std::rc::Rc;
+#[cfg(target_os = "windows")]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "windows")]
+use std::sync::Arc;
 
 use tao::window::Window;
 use wry::dpi::{LogicalPosition, LogicalSize, Position, Size};
@@ -21,8 +26,7 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2DownloadStartingEventHandler, ICoreWebView2FaviconChangedEventHandler,
     ICoreWebView2NavigationCompletedEventArgs, ICoreWebView2NavigationCompletedEventArgs2,
     ICoreWebView2NavigationCompletedEventHandler, ICoreWebView2ProcessFailedEventHandler,
-    ICoreWebView2Profile2, ICoreWebView2_13, ICoreWebView2_15, ICoreWebView2_25, ICoreWebView2_4,
-    ICoreWebView2_8, COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
+    ICoreWebView2Profile2, ICoreWebView2_13, ICoreWebView2_15, ICoreWebView2_25, ICoreWebView2_8, COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
     COREWEBVIEW2_FAVICON_IMAGE_FORMAT_PNG, COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
     COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN, COREWEBVIEW2_PROCESS_FAILED_KIND,
     COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
@@ -52,9 +56,9 @@ use windows::Win32::System::Com::IStream;
 use wry::{NewWindowResponse, WebViewExtWindows};
 
 use crate::engine::{
-    Accelerator, AcceleratorHandler, AcceleratorKey, ContentView, Engine, EngineError,
-    FaviconHandler, FullscreenHandler, HttpStatus, LoadFailure, LoadFailureHandler, PageResolver,
-    PermissionDecision, PermissionKind, Rect, ViewSpec,
+    Accelerator, AcceleratorHandler, AcceleratorKey, ContentView, DownloadHandler, DownloadId,
+    Engine, EngineError, FaviconHandler, FullscreenHandler, HttpStatus, LoadFailure,
+    LoadFailureHandler, PageResolver, PermissionDecision, PermissionKind, Rect, ViewSpec,
 };
 
 /// Scheme name registered on every view. On Windows wry rewrites it to
@@ -187,6 +191,7 @@ impl Engine for WryEngine {
             spec.on_fullscreen,
             spec.on_favicon,
             on_navigate,
+            spec.on_download,
         )
         .map(|v| Box::new(v) as Box<dyn ContentView>)
     }
@@ -310,51 +315,19 @@ fn accelerator_key(vk: u32) -> Option<AcceleratorKey> {
 const EMPTY_BODY_PROBE: &str =
     "(function(){var b=document.body;return !b||(!b.children.length&&!b.textContent.trim());})()";
 
-/// Attach `DownloadStarting` purely to flag that a download began on this
-/// view: WebView2 reports the navigation that triggered it as a *failed*
-/// `CONNECTION_ABORTED` in `NavigationCompleted`, and without the flag the
-/// completed handler can't tell a download from a dropped connection. The
-/// args are left untouched (`Handled`/`Cancel` unset) so the engine's own
-/// download dialog still runs. `Ok(None)` on runtimes older than _4 — a
-/// download there keeps the old behavior of reporting a connection failure.
-#[cfg(target_os = "windows")]
-fn attach_download_started(
-    view: &WebView,
-    download_started: Rc<Cell<bool>>,
-) -> Result<Option<ICoreWebView2DownloadStartingEventHandler>, EngineError> {
-    let Ok(webview) = view.webview().cast::<ICoreWebView2_4>() else {
-        return Ok(None);
-    };
-    let handler =
-        webview2_com::DownloadStartingEventHandler::create(Box::new(move |_sender, _args| {
-            download_started.set(true);
-            Ok(())
-        }));
-    let mut token = 0i64;
-    unsafe {
-        webview
-            .add_DownloadStarting(&handler, &mut token)
-            .map_err(|e| EngineError::Spawn(e.to_string()))?;
-    }
-    Ok(Some(handler))
-}
-
 /// Attach `NavigationCompleted`: the event that says a navigation finished,
 /// and whether it produced a document.
 #[cfg(target_os = "windows")]
 fn attach_navigation_completed(
     view: &WebView,
-    report: Rc<dyn Fn(LoadFailure)>,
-    download_started: Rc<Cell<bool>>,
-    on_navigate: Option<Rc<dyn Fn(String) -> bool>>,
+    report: Arc<dyn Fn(LoadFailure) + Send + Sync>,
+    download_started: Arc<AtomicBool>,
 ) -> Result<ICoreWebView2NavigationCompletedEventHandler, EngineError> {
     let webview = view.webview();
     let handler =
         webview2_com::NavigationCompletedEventHandler::create(Box::new(move |_sender, args| {
             let Some(args) = args else { return Ok(()) };
-            unsafe {
-                navigation_completed(&webview, &args, &report, &download_started, &on_navigate)
-            }
+            unsafe { navigation_completed(&webview, &args, &report, &download_started) }
         }));
     let mut token = 0i64;
     unsafe {
@@ -369,28 +342,30 @@ fn attach_navigation_completed(
 unsafe fn navigation_completed(
     webview: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2,
     args: &ICoreWebView2NavigationCompletedEventArgs,
-    report: &Rc<dyn Fn(LoadFailure)>,
-    download_started: &Cell<bool>,
-    on_navigate: &Option<Rc<dyn Fn(String) -> bool>>,
+    report: &Arc<dyn Fn(LoadFailure) + Send + Sync>,
+    download_started: &Arc<AtomicBool>,
 ) -> windows::core::Result<()> {
     let mut success = windows::core::BOOL::default();
     args.IsSuccess(&mut success)?;
     if !success.as_bool() {
         let mut status = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
         args.WebErrorStatus(&mut status)?;
-        // A navigation that became a download completes "aborted" by design —
-        // DownloadStarting ran first and set the flag, and the engine's
-        // download UI owns the file now. The document never left this view,
-        // so re-report the address it still shows: the nav-start callback
-        // already wrote the download's URL into the tab. The flag is consumed
-        // either way so a stale one can't swallow a later real abort.
-        if status == COREWEBVIEW2_WEB_ERROR_STATUS_CONNECTION_ABORTED
-            && download_started.replace(false)
-        {
-            if let Some(on_nav) = on_navigate {
-                let mut source = windows::core::PWSTR::null();
-                webview.Source(&mut source)?;
-                on_nav(webview2_com::take_pwstr(source));
+        // A navigation that became a download completes "aborted" by
+        // design — but the two events race: DownloadStarting can land a
+        // few ms *after* this abort. A flag already set is claimed now;
+        // otherwise the report waits a beat on a worker so a download on
+        // its way can still claim it. The abort arrives alone often
+        // enough that delaying real failures by this much is fine.
+        if status == COREWEBVIEW2_WEB_ERROR_STATUS_CONNECTION_ABORTED {
+            if !download_started.swap(false, Ordering::SeqCst) {
+                let report = report.clone();
+                let flag = download_started.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(400));
+                    if !flag.swap(false, Ordering::SeqCst) {
+                        (*report)(LoadFailure::ConnectionFailed);
+                    }
+                });
             }
             return Ok(());
         }
@@ -399,7 +374,7 @@ unsafe fn navigation_completed(
         }
         return Ok(());
     }
-    download_started.set(false);
+    download_started.store(false, Ordering::SeqCst);
 
     // A 4xx or 5xx is still a successful navigation — the server answered.
     // Only step in when it answered with nothing to render, so a site's own
@@ -430,7 +405,7 @@ unsafe fn navigation_completed(
 #[cfg(target_os = "windows")]
 fn attach_process_failed(
     view: &WebView,
-    report: Rc<dyn Fn(LoadFailure)>,
+    report: Arc<dyn Fn(LoadFailure) + Send + Sync>,
 ) -> Result<ICoreWebView2ProcessFailedEventHandler, EngineError> {
     let handler =
         webview2_com::ProcessFailedEventHandler::create(Box::new(move |_sender, args| {
@@ -575,6 +550,10 @@ struct WryView {
     _accel_handler: Option<ICoreWebView2AcceleratorKeyPressedEventHandler>,
     #[cfg(target_os = "windows")]
     _download_handler: Option<ICoreWebView2DownloadStartingEventHandler>,
+    /// Live downloads on this view — `cancel_download` looks them up;
+    /// each download's `StateChanged` removes its own entry at the end.
+    #[cfg(target_os = "windows")]
+    downloads: downloads::ActiveDownloads,
     #[cfg(target_os = "windows")]
     _navigation_handler: Option<ICoreWebView2NavigationCompletedEventHandler>,
     #[cfg(target_os = "windows")]
@@ -593,24 +572,33 @@ impl WryView {
         on_fullscreen: Option<FullscreenHandler>,
         on_favicon: Option<FaviconHandler>,
         on_navigate: Option<Rc<dyn Fn(String) -> bool>>,
+        on_download: Option<DownloadHandler>,
     ) -> Result<Self, EngineError> {
         #[cfg(target_os = "windows")]
         {
             let _accel_handler = on_accelerator
                 .map(|cb| attach_accelerator(&view, cb))
                 .transpose()?;
-            // Both events feed one callback, so they share a refcount.
-            let report: Option<Rc<dyn Fn(LoadFailure)>> = on_load_failure.map(Rc::from);
-            // DownloadStarting → NavigationCompleted: the flag marks the
-            // abort that means "this navigation became a download".
-            let download_started = Rc::new(Cell::new(false));
+            // Both events feed one callback; the download-abort check may
+            // also report it from a worker, so it needs Arc + Send + Sync.
+            let report: Option<Arc<dyn Fn(LoadFailure) + Send + Sync>> =
+                on_load_failure.map(Arc::from);
+            // DownloadStarting ⇄ NavigationCompleted: the flag marks the
+            // abort that means "this navigation became a download" — in
+            // either arrival order.
+            let download_started = Arc::new(AtomicBool::new(false));
             let _navigation_handler = report
                 .clone()
-                .map(|cb| {
-                    attach_navigation_completed(&view, cb, download_started.clone(), on_navigate)
-                })
+                .map(|cb| attach_navigation_completed(&view, cb, download_started.clone()))
                 .transpose()?;
-            let _download_handler = attach_download_started(&view, download_started)?;
+            let downloads = downloads::ActiveDownloads::default();
+            let _download_handler = downloads::attach(
+                &view,
+                download_started,
+                on_navigate,
+                on_download.map(Rc::from),
+                downloads.clone(),
+            )?;
             let _process_handler = report
                 .map(|cb| attach_process_failed(&view, cb))
                 .transpose()?;
@@ -625,6 +613,7 @@ impl WryView {
                 view,
                 _accel_handler,
                 _download_handler,
+                downloads,
                 _navigation_handler,
                 _process_handler,
                 _fullscreen_handler,
@@ -639,6 +628,7 @@ impl WryView {
                 on_fullscreen,
                 on_favicon,
                 on_navigate,
+                on_download,
             );
             Ok(Self { view })
         }
@@ -959,6 +949,18 @@ impl ContentView for WryView {
         }
         #[cfg(not(target_os = "windows"))]
         {
+            Ok(())
+        }
+    }
+
+    fn cancel_download(&self, id: DownloadId) -> Result<(), EngineError> {
+        #[cfg(target_os = "windows")]
+        {
+            downloads::cancel(&self.downloads, id)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = id;
             Ok(())
         }
     }

@@ -10,6 +10,7 @@
 //! the window-layout plumbing.
 
 mod actions;
+mod downloads;
 mod keys;
 mod surfaces;
 mod update;
@@ -22,7 +23,8 @@ use tao::event_loop::{ControlFlow, EventLoopProxy};
 use tao::keyboard::ModifiersState;
 use tao::window::Window;
 
-use crate::engine::{Accelerator, ContentView, Engine, LoadFailure, Rect};
+use crate::engine::{Accelerator, ContentView, DownloadUpdate, Engine, LoadFailure, Rect};
+use crate::persist::Recorder;
 use crate::shell;
 use crate::shell::chrome::{
     favicon_data_url, normalize_nav_input, ChromeCommand, ChromeState, ChromeTab,
@@ -62,6 +64,15 @@ pub(crate) fn report(err: impl std::fmt::Debug) {
     eprintln!("cryo: {err:?}");
 }
 
+/// Wall-clock stamp for history entries — the caller stamps so `persist`
+/// keeps no ambient clock of its own.
+pub(crate) fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 /// Events that reach the loop from view callbacks (`AppEvent`) — chrome
 /// IPC, title changes, navigations, keys the engine yielded to us.
 pub enum AppEvent {
@@ -79,6 +90,8 @@ pub enum AppEvent {
     PageFullscreen(TabId, bool),
     /// A navigation ended with no document, or the renderer died under one.
     LoadFailed(TabId, LoadFailure),
+    /// A view's download started, progressed, or settled — the shelf.
+    Download(TabId, DownloadUpdate),
     /// A background update check finished — started at launch and by the
     /// menu's "Check for updates".
     UpdateChecked(Outcome),
@@ -109,6 +122,13 @@ pub struct App {
     /// view is stretched over the whole window so the popup can paint
     /// above the content views.
     overlay_open: bool,
+    /// Typed inputs and visited URLs — the omnibox's memory. `None` in
+    /// incognito windows: forgetting is their whole point.
+    recorder: Option<Recorder>,
+    /// The download shelf — see `downloads.rs`. Newest at the back.
+    downloads: Vec<downloads::Entry>,
+    /// Shelf key counter — chrome commands carry it back to us.
+    download_seq: u64,
     /// Downloaded, checksum-verified installer waiting for a restart.
     /// Surfaced as the ⋮ badge and the "Restart to update" menu item.
     pending_update: Option<Update>,
@@ -123,6 +143,7 @@ impl App {
         engine: Rc<dyn Engine>,
         proxy: EventLoopProxy<AppEvent>,
         open_url: Option<String>,
+        recorder: Option<Recorder>,
     ) -> anyhow::Result<Self> {
         let logical = window.inner_size().to_logical::<f64>(window.scale_factor());
         let logical_size = (logical.width, logical.height);
@@ -161,6 +182,9 @@ impl App {
             chrome_focused: false,
             page_fullscreen: false,
             overlay_open: false,
+            recorder,
+            downloads: Vec::new(),
+            download_seq: 0,
             pending_update: None,
             update_prompt: false,
         })
@@ -185,8 +209,15 @@ impl App {
             AppEvent::Accelerator(acc) => self.on_accelerator(acc, control_flow),
             AppEvent::Chrome(cmd) => self.on_chrome(cmd, control_flow),
             AppEvent::TitleChanged(id, title) => {
+                let url = self.registry.get(id).map(|t| t.url().to_string());
                 if let Some(tab) = self.registry.get_mut(id) {
-                    tab.set_title(title);
+                    tab.set_title(title.clone());
+                }
+                // Titles arrive after the URL was already recorded — this
+                // attaches it so suggestions can match on it. Internal
+                // pages no-op: they were never recorded.
+                if let Some(url) = url {
+                    self.note_title(&url, &title);
                 }
                 self.sync_chrome()
             }
@@ -196,6 +227,9 @@ impl App {
                 if pages::is_internal_url(&url) {
                     return;
                 }
+                // The visit counts whether the load works out or not —
+                // real omniboxes remember typed destinations too.
+                self.remember(&url);
                 if let Some(tab) = self.registry.get_mut(id) {
                     // A view that already froze can still have events in
                     // flight from before the drop — they must not move the
@@ -224,6 +258,7 @@ impl App {
             AppEvent::OpenInNewTab(url) => self.spawn_tab(&url, true),
             AppEvent::PageFullscreen(id, on) => self.page_fullscreen(id, on),
             AppEvent::LoadFailed(id, failure) => self.show_error(id, failure),
+            AppEvent::Download(id, update) => self.download_update(id, update),
             AppEvent::UpdateChecked(outcome) => self.on_update(outcome, control_flow),
         };
         if let Err(e) = result {
@@ -276,6 +311,26 @@ impl App {
         self.chrome
             .eval("window.__cryo_overlay && window.__cryo_overlay(false)")?;
         self.set_overlay_open(false)
+    }
+
+    /// Remember a visit or a typed input — the one door into `persist`.
+    /// No recorder (incognito), no memory.
+    pub(super) fn remember(&mut self, text: &str) {
+        if let Some(rec) = &mut self.recorder {
+            if let Err(e) = rec.record(text, None, unix_now()) {
+                report(e);
+            }
+        }
+    }
+
+    /// Attach a title to a remembered URL — `TitleChanged` events arrive
+    /// after the visit was recorded.
+    fn note_title(&mut self, url: &str, title: &str) {
+        if let Some(rec) = &mut self.recorder {
+            if let Err(e) = rec.note_title(url, title) {
+                report(e);
+            }
+        }
     }
 
     /// The engine surface of the selected tab, if one is live.
@@ -333,6 +388,7 @@ impl App {
                 .filter(|u| u != "about:blank")
                 .unwrap_or_default(),
             update_version: self.pending_update.as_ref().map(|u| u.version.to_string()),
+            downloads: self.download_rows(),
         };
         let json = serde_json::to_string(&state)?;
         self.chrome.eval(&format!("window.__cryo_update({json})"))?;

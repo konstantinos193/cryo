@@ -28,6 +28,12 @@ What exists today:
 - Speed dial on both surfaces browsers put it: a dial bar under the
   toolbar (click = open here, Ctrl/middle-click = new tab) and tiles on
   the new-tab page — one `/dials` list on the internal protocol feeds both
+- Omnibox memory: typed input and visited URLs are remembered and
+  suggested on the next keystroke — history lives in
+  `%LOCALAPPDATA%\cryo\history.json`, bounded at 5000 entries, and
+  incognito windows keep none. It never rides the fetchable protocol —
+  the document asks, the app answers by eval (any origin could read a
+  `/history` endpoint, so there isn't one)
 - Incognito windows as sibling processes (`--incognito` → WebView2
   `IsInPrivateModeEnabled` — the real InPrivate, not a cosmetic flag)
 - Shell UI rendered by the same engine (`cryo` internal scheme →
@@ -134,9 +140,10 @@ SendKeys for manual shortcut testing (`keys.ps1 -Keys "^t"` = Ctrl+T).
 - [ ] **Phase 5** — Evaluate Servo as alternate engine backend
 
 Known gaps by design (need subsystems that don't exist yet): find-in-page,
-bookmarks/history/downloads, tab search overlay, task manager. Track them
-in issues, not in wishful code. (The dial list is a hardcoded default until
-`persist` exists — then it becomes the editable set.)
+bookmarks, downloads, a history *surface* (the store exists; there's no
+history page to browse it), tab search overlay, task manager. Track them
+in issues, not in wishful code. (The dial list is a hardcoded default —
+`persist` is in now, so making it editable is unblocked.)
 
 ## Contributing
 

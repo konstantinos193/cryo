@@ -26,19 +26,23 @@ pub const JSON: &str = r#"[
   {"name":"DuckDuckGo","url":"https://duckduckgo.com"}
 ]"#;
 
+/// One pinned destination, parsed from [`JSON`]. The app matches these
+/// for omnibox suggestions; the shell documents read the JSON directly.
+#[derive(Debug, serde::Deserialize)]
+pub struct Entry {
+    pub name: String,
+    pub url: String,
+}
+
+/// The dial set parsed. Called per keystroke from `suggest` — cheap at
+/// this list's size; if it ever grows, cache it.
+pub fn entries() -> Vec<Entry> {
+    serde_json::from_str(JSON).expect("dial JSON parses — the tests pin it")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[derive(serde::Deserialize)]
-    struct Entry {
-        name: String,
-        url: String,
-    }
-
-    fn entries() -> Vec<Entry> {
-        serde_json::from_str(JSON).expect("dial list is valid JSON")
-    }
 
     #[test]
     fn list_is_nonempty_with_https_destinations_only() {

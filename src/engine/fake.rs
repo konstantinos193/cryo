@@ -4,7 +4,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::engine::{ContentView, Engine, EngineError, Rect, ViewSpec};
+use crate::engine::{ContentView, DownloadId, Engine, EngineError, Rect, ViewSpec};
 
 #[derive(Clone, Debug)]
 pub enum FakeCall {
@@ -24,6 +24,7 @@ pub enum FakeCall {
     CapturePng,
     SaveAs,
     ClearBrowsingData,
+    CancelDownload(DownloadId),
 }
 
 #[derive(Default)]
@@ -165,6 +166,11 @@ impl ContentView for FakeView {
 
     fn clear_browsing_data(&self) -> Result<(), EngineError> {
         self.calls.borrow_mut().push(FakeCall::ClearBrowsingData);
+        Ok(())
+    }
+
+    fn cancel_download(&self, id: DownloadId) -> Result<(), EngineError> {
+        self.calls.borrow_mut().push(FakeCall::CancelDownload(id));
         Ok(())
     }
 }

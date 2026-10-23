@@ -36,11 +36,18 @@ pub type AcceleratorHandler = Box<dyn Fn(Accelerator) -> bool>;
 /// the only thing the app needs.
 pub type NewWindowHandler = Box<dyn Fn(String)>;
 /// Called when a navigation ended without a document. See [`LoadFailure`] for
-/// what counts — cancelled loads and credential prompts do not.
-pub type LoadFailureHandler = Box<dyn Fn(LoadFailure)>;
+/// what counts — cancelled loads and credential prompts do not. `Send + Sync`
+/// because the backend may report from a worker: a download's abort can
+/// arrive *before* `DownloadStarting`, so the report is held briefly on a
+/// thread while the engine decides which it is.
+pub type LoadFailureHandler = Box<dyn Fn(LoadFailure) + Send + Sync>;
 /// Page element entered or left DOM fullscreen (video fullscreen). The bool
 /// is the engine's `ContainsFullScreenElement` state after the change.
 pub type FullscreenHandler = Box<dyn Fn(bool)>;
+/// A download started or made progress — first call announces the file,
+/// later calls carry byte counts and the terminal state. Called on the
+/// event loop thread.
+pub type DownloadHandler = Box<dyn Fn(DownloadUpdate)>;
 /// A page asked for a capability — the app decides. Called on the engine's
 /// thread, so Send + Sync. Views spawned without one get the engine's
 /// default answer, which on WebView2 is a silent deny.
@@ -122,6 +129,10 @@ pub struct ViewSpec {
     pub on_load_failure: Option<LoadFailureHandler>,
     pub on_fullscreen: Option<FullscreenHandler>,
     pub on_permission: Option<PermissionHandler>,
+    /// When set the app owns the download UI — the engine suppresses its
+    /// own dialog and reports every file's progress here. `None` leaves
+    /// the engine's default download dialog running.
+    pub on_download: Option<DownloadHandler>,
 }
 
 impl Default for Rect {
@@ -179,6 +190,43 @@ pub trait ContentView {
     /// Wipe every kind of browsing data for this view's profile —
     /// profile-scoped, so calling it on any view clears them all.
     fn clear_browsing_data(&self) -> Result<(), EngineError>;
+    /// Cancel an in-flight download this view started. Finished or
+    /// unknown ids are a no-op.
+    fn cancel_download(&self, id: DownloadId) -> Result<(), EngineError>;
+}
+
+/// A download's identity within its view — a per-view sequence, so the
+/// app pairs it with the tab id before putting it on the wire.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DownloadId(pub u64);
+
+/// Where a download stands, in our own vocabulary. `Cancelled` is the
+/// user stopping it — an interrupt reason on the wire, but a distinct
+/// state here because the UI paints them differently.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DownloadState {
+    InProgress,
+    Done,
+    /// The engine stopped it mid-flight — network drop, policy block,
+    /// disk full, shutdown.
+    Interrupted,
+    /// The user asked to stop it.
+    Cancelled,
+}
+
+/// One report about a file the engine is saving. `total` is `None`
+/// until the server declares a length (some never do).
+#[derive(Clone, Debug)]
+pub struct DownloadUpdate {
+    pub id: DownloadId,
+    /// Suggested filename, deduplicated against the download folder.
+    pub name: String,
+    /// Where the bytes are going.
+    pub path: String,
+    pub received: u64,
+    pub total: Option<u64>,
+    pub state: DownloadState,
 }
 
 /// An HTTP response status. A newtype so a status cannot be mistaken for any

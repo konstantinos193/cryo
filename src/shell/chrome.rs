@@ -64,6 +64,57 @@ pub enum ChromeCommand {
     Overlay {
         open: bool,
     },
+    /// The omnibox asks for suggestions per keystroke. The app answers
+    /// with a `__cryo_suggest` eval — history never travels the other
+    /// direction: `/cmd` reaches the app only from this view (content
+    /// views carry no `on_ipc`), and the page resolver would hand a
+    /// fetchable list to any origin.
+    Suggest {
+        q: String,
+    },
+    /// The ✕ on a live download row.
+    DownloadCancel {
+        key: u64,
+    },
+    /// The 📁 on a finished row — Explorer selects the file.
+    DownloadShow {
+        key: u64,
+    },
+    /// "Clear finished" drops every settled row off the shelf.
+    DownloadsClear,
+}
+
+/// `__cryo_suggest` payload — `q` is the query echoed back so the
+/// document can drop a reply that lands after the user typed on.
+#[derive(Debug, Serialize)]
+pub struct SuggestReply {
+    pub q: String,
+    pub rows: Vec<Suggestion>,
+}
+
+/// One omnibox row.
+#[derive(Debug, Serialize)]
+pub struct Suggestion {
+    pub label: String,
+    /// What goes back through `navigate` — a URL for sites, the raw
+    /// text for remembered input (the app normalizes it again).
+    pub input: String,
+}
+
+/// One download shelf row — pushed inside `ChromeState` so progress
+/// repaints with every update.
+#[derive(Debug, Serialize)]
+pub struct ChromeDownload {
+    /// App-assigned shelf key — row commands send it back unchanged.
+    pub key: u64,
+    pub name: String,
+    /// Absolute path — the row's tooltip, and `reveal` resolves it.
+    pub path: String,
+    pub received: u64,
+    /// Declared size; `null` until the server says (some never do).
+    pub total: Option<u64>,
+    /// "progress" | "done" | "interrupted" | "cancelled"
+    pub state: &'static str,
 }
 
 /// State pushed to the chrome UI after every change.
@@ -74,6 +125,8 @@ pub struct ChromeState {
     /// A downloaded, verified installer is staged — the menu shows
     /// "Restart to update" and the ⋮ button gets a badge.
     pub update_version: Option<String>,
+    /// The download shelf, newest first. The ⬇ button hides while empty.
+    pub downloads: Vec<ChromeDownload>,
 }
 
 #[derive(Debug, Serialize)]
@@ -245,6 +298,50 @@ pub const CHROME_HTML: &str = r##"<!doctype html>
     background: transparent; color: #9ec2f5; font: inherit; cursor: pointer;
   }
   #signin:hover { background: #2a2f38; }
+  /* Downloads button: hidden until a file starts; the thin bar under
+     the glyph is aggregate in-flight progress. */
+  #dl { position: relative; }
+  #dl svg, .dl-row .act svg { display: block; margin: 0 auto; }
+  /* First appearance and each new transfer pop the icon. */
+  @keyframes dlpop {
+    0% { transform: scale(.4); } 60% { transform: scale(1.25); }
+    100% { transform: scale(1); }
+  }
+  #dl.pop { animation: dlpop .35s ease-out; }
+  #dl .bar {
+    position: absolute; left: 5px; bottom: 3px; height: 2px; width: 0;
+    background: #5a8adf; border-radius: 1px; transition: width .15s linear;
+  }
+  /* No declared size: the fill can't be computed, so a segment sweeps
+     the track instead — something visibly alive while bytes move. */
+  #dl .bar.ind { animation: dlsweep 1.1s ease-in-out infinite; }
+  @keyframes dlsweep {
+    0% { left: 5px; } 50% { left: 60%; } 100% { left: 5px; }
+  }
+  /* A row that just finished flashes once. */
+  @keyframes dlflash {
+    0% { background: rgba(78,201,111,.28); } 100% { background: transparent; }
+  }
+  .dl-row.flash { animation: dlflash .9s ease-out; }
+  #dl-pop {
+    display: none; position: fixed; top: 40px; right: 36px; z-index: 10;
+    min-width: 260px; max-width: 340px; max-height: 300px; overflow-y: auto;
+    padding: 4px 0;
+    background: #26292f; border: 1px solid #3a3f47; border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.45);
+  }
+  #dl-pop.open { display: block; }
+  .dl-row { padding: 6px 14px; }
+  .dl-row .top { display: flex; align-items: center; gap: 8px; }
+  .dl-row .nm {
+    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .dl-row .act {
+    flex: 0 0 auto; border: 0; border-radius: 4px; padding: 1px 5px;
+    background: transparent; color: #9fb4c8; font-size: 12px; cursor: pointer;
+  }
+  .dl-row .act:hover { background: #4a505a; color: #fff; }
+  .dl-row .meta { color: #8a8f98; font-size: 11px; }
   #menu-pop {
     display: none; position: fixed; top: 40px; right: 8px; z-index: 10;
     min-width: 220px; padding: 6px 0;
@@ -285,11 +382,13 @@ pub const CHROME_HTML: &str = r##"<!doctype html>
     <input id="url" type="text" spellcheck="false"
            placeholder="Search or enter address">
     <button id="signin" title="Sign in with your Google account">Sign in</button>
+    <button class="nav" id="dl" title="Downloads" hidden><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 1.5v6.8"/><path d="M3.8 5.2 7 8.4l3.2-3.2"/><path d="M2 11.5h10"/></svg><i class="bar"></i></button>
     <button class="nav" id="menu" title="Menu">⋮</button>
   </div>
   <div id="dial"></div>
   <div id="menu-pop"></div>
   <div id="omni-pop"></div>
+  <div id="dl-pop"></div>
 <script>
   // wry's window.ipc channel is dead on this backend: attaching
   // with_ipc_handler leaves the document's own scripts unexecuted.
@@ -308,15 +407,17 @@ pub const CHROME_HTML: &str = r##"<!doctype html>
 
   const menuPop = document.getElementById('menu-pop');
   const omniPop = document.getElementById('omni-pop');
+  const dlPop = document.getElementById('dl-pop');
+  const dlBtn = document.getElementById('dl');
   // Popups live in this document, but the view's bounds are only the
   // strip — a view can't paint outside them. While any overlay (menu,
-  // omnibox) is open the app raises this view above the content and
-  // stretches it over the whole window; the aggregate state is reported
-  // so the bounds stay in sync. Clicks anywhere outside a popup land on
-  // this document and dismiss.
-  let menuOpen = false, omniOpen = false;
+  // omnibox, downloads) is open the app raises this view above the
+  // content and stretches it over the whole window; the aggregate state
+  // is reported so the bounds stay in sync. Clicks anywhere outside a
+  // popup land on this document and dismiss.
+  let menuOpen = false, omniOpen = false, dlOpen = false;
   const reportOverlay = () =>
-    ipc({cmd: 'overlay', open: menuOpen || omniOpen});
+    ipc({cmd: 'overlay', open: menuOpen || omniOpen || dlOpen});
   const setMenu = (open) => {
     if (open === menuOpen) return;
     menuOpen = open;
@@ -329,10 +430,22 @@ pub const CHROME_HTML: &str = r##"<!doctype html>
     omniPop.classList.toggle('open', open);
     reportOverlay();
   };
+  const setDl = (open) => {
+    if (open === dlOpen) return;
+    dlOpen = open;
+    dlPop.classList.toggle('open', open);
+    reportOverlay();
+  };
   // The app calls this when it replaces what's on screen (tab switch,
   // navigation, fullscreen) — the document can't see those actions.
   window.__cryo_overlay = (open) => {
-    if (!open) { setMenu(false); setOmni(false); }
+    if (!open) { setMenu(false); setOmni(false); setDl(false); }
+  };
+  // Ctrl+J lands here — the engine's own downloads page is kept shut by
+  // stealing the chord in key_command; this shelf is the replacement.
+  window.__cryo_downloads = () => {
+    setMenu(false); setOmni(false);
+    setDl(!dlOpen);
   };
   // Last pushed state — menu guards (freeze/discard need a second tab to
   // hand focus to) read it at click time.
@@ -378,18 +491,30 @@ pub const CHROME_HTML: &str = r##"<!doctype html>
   }
   document.getElementById('menu').onclick = (e) => {
     e.stopPropagation();
+    setDl(false); setOmni(false);
     setMenu(!menuOpen);
   };
-  document.addEventListener('click', () => { setMenu(false); setOmni(false); });
+  dlBtn.onclick = (e) => {
+    e.stopPropagation();
+    setMenu(false); setOmni(false);
+    setDl(!dlOpen);
+  };
+  // Row buttons live inside the pop — clicks there must not bubble to
+  // the document's dismiss-all.
+  dlPop.onclick = (e) => e.stopPropagation();
+  document.addEventListener('click', () => {
+    setMenu(false); setOmni(false); setDl(false);
+  });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { setMenu(false); setOmni(false); }
+    if (e.key === 'Escape') { setMenu(false); setOmni(false); setDl(false); }
   });
 
-  // The dial list feeds the bar below and the omnibox suggestions.
+  // The dial list feeds the bar below; omnibox suggestions are computed
+  // app-side instead — history never reaches this document.
   let dialEntries = [];
 
-  // Omnibox dropdown: a "search/go to" row plus dial matches — the two
-  // sources the shell has until history exists (persist lands Phase 1+).
+  // Omnibox dropdown: each keystroke asks the app, __cryo_suggest paints
+  // the reply. Rows keep `input` — what gets sent back through navigate.
   let omniSel = -1;
   let omniRows = [];
 
@@ -410,18 +535,18 @@ pub const CHROME_HTML: &str = r##"<!doctype html>
     omniRows = [];
     omniPop.innerHTML = '';
     if (!q) { setOmni(false); return; }
-    const isUrl = q.indexOf(' ') === -1 &&
-                  (q.indexOf('.') !== -1 || q.indexOf('://') !== -1);
-    const rows = [{label: (isUrl ? 'Go to ' : 'Search DuckDuckGo for ') + q,
-                   input: q}];
-    const ql = q.toLowerCase();
-    for (const d of dialEntries) {
-      if (d.name.toLowerCase().indexOf(ql) !== -1 ||
-          d.url.toLowerCase().indexOf(ql) !== -1) {
-        rows.push({label: d.name + ' — ' + d.url, input: d.url});
-      }
+    ipc({cmd: 'suggest', q});
+  };
+
+  window.__cryo_suggest = (reply) => {
+    // Drop a stale reply — the user typed on or blurred meanwhile.
+    if (document.activeElement !== urlEl || urlEl.value.trim() !== reply.q) {
+      return;
     }
-    for (const r of rows.slice(0, 8)) {
+    omniSel = -1;
+    omniRows = [];
+    omniPop.innerHTML = '';
+    for (const r of reply.rows.slice(0, 8)) {
       const el = document.createElement('div');
       el.className = 'mi omni-row';
       el.textContent = r.label;
@@ -432,6 +557,7 @@ pub const CHROME_HTML: &str = r##"<!doctype html>
       omniPop.appendChild(el);
       omniRows.push(r);
     }
+    if (!omniRows.length) { setOmni(false); return; }
     const rect = urlEl.getBoundingClientRect();
     omniPop.style.left = rect.left + 'px';
     omniPop.style.width = rect.width + 'px';
@@ -492,7 +618,116 @@ pub const CHROME_HTML: &str = r##"<!doctype html>
   // accelerator to the app before the page sees it, for chrome and content
   // views alike.
 
+  // Download shelf: the ⬇ button appears once the first file lands;
+  // the bar under the glyph is aggregate in-flight progress.
+  const fmtBytes = (n) => {
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return Math.round(n / 1024) + ' KB';
+    if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+    return (n / 1073741824).toFixed(2) + ' GB';
+  };
+
+  let dlCloseTimer = null;
+
+  const renderDl = (dls, prev) => {
+    const prevDls = prev.downloads || [];
+    const wasProg = new Set(
+      prevDls.filter((d) => d.state === 'progress').map((d) => d.key));
+    const prevState = new Map(prevDls.map((d) => [d.key, d.state]));
+    const nowProg = dls.filter((d) => d.state === 'progress');
+
+    dlBtn.hidden = !dls.length;
+
+    // A download that wasn't in flight last update just started: pop
+    // the icon and open the shelf, the way Chrome opens its bubble.
+    const started = nowProg.some((d) => !wasProg.has(d.key));
+    if (started) {
+      dlBtn.classList.remove('pop');
+      void dlBtn.offsetWidth;   // restart the animation
+      dlBtn.classList.add('pop');
+      setDl(true);
+      if (dlCloseTimer) { clearTimeout(dlCloseTimer); dlCloseTimer = null; }
+    }
+    // The last transfer settled — the shelf lingers a beat, then tucks.
+    if (!nowProg.length && wasProg.size && dlOpen && !dlCloseTimer) {
+      dlCloseTimer = setTimeout(() => {
+        dlCloseTimer = null;
+        if (dlOpen) setDl(false);
+      }, 3000);
+    }
+
+    // Aggregate bar under the glyph: mean of known shares, or the
+    // sweeping segment when nothing declares a size.
+    let share = 0, parts = 0;
+    for (const d of nowProg) {
+      if (d.total) { share += d.received / d.total; parts++; }
+    }
+    const any = nowProg.length > 0;
+    const bar = dlBtn.querySelector('.bar');
+    bar.style.width = any ? Math.round((parts ? share / parts : 0.4) * 100) + '%' : '0';
+    bar.classList.toggle('ind', any && !parts);
+
+    dlPop.innerHTML = '';
+    if (!dls.length) {
+      const empty = document.createElement('div');
+      empty.className = 'mi off';
+      empty.textContent = 'No downloads';
+      dlPop.appendChild(empty);
+    }
+    for (const d of dls) {
+      const row = document.createElement('div');
+      row.className = 'dl-row';
+      // progress → done between updates gets one green flash.
+      if (prevState.get(d.key) === 'progress' && d.state === 'done') {
+        row.classList.add('flash');
+      }
+      const top = document.createElement('div');
+      top.className = 'top';
+      const nm = document.createElement('span');
+      nm.className = 'nm';
+      nm.textContent = d.name;
+      nm.title = d.path;
+      top.appendChild(nm);
+      if (d.state === 'progress') {
+        const b = document.createElement('button');
+        b.className = 'act';
+        b.textContent = '×';
+        b.title = 'Cancel';
+        b.onclick = () => ipc({cmd: 'download_cancel', key: d.key});
+        top.appendChild(b);
+      } else if (d.state === 'done') {
+        const b = document.createElement('button');
+        b.className = 'act';
+        b.title = 'Show in folder';
+        b.innerHTML = '<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M1.5 3.5h4l1.5 1.8h5.5v5.9h-11z"/></svg>';
+        b.onclick = () => ipc({cmd: 'download_show', key: d.key});
+        top.appendChild(b);
+      }
+      row.appendChild(top);
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      if (d.state === 'progress') {
+        meta.textContent = (d.total ? Math.round(100 * d.received / d.total) + '% — ' : '') +
+          fmtBytes(d.received) + (d.total ? ' / ' + fmtBytes(d.total) : '');
+      } else if (d.state === 'done') {
+        meta.textContent = fmtBytes(d.received);
+      } else {
+        meta.textContent = d.state === 'cancelled' ? 'Cancelled' : 'Interrupted';
+      }
+      row.appendChild(meta);
+      dlPop.appendChild(row);
+    }
+    if (dls.some((d) => d.state !== 'progress')) {
+      const c = document.createElement('div');
+      c.className = 'mi';
+      c.textContent = 'Clear finished';
+      c.onclick = () => ipc({cmd: 'downloads_clear'});
+      dlPop.appendChild(c);
+    }
+  };
+
   window.__cryo_update = (state) => {
+    const prev = lastState;
     lastState = state;
     tabsEl.innerHTML = '';
     for (const t of state.tabs) {
@@ -549,6 +784,7 @@ pub const CHROME_HTML: &str = r##"<!doctype html>
     } else {
       updateItem.remove();
     }
+    renderDl(state.downloads || [], prev);
   };
 </script>
 </body>

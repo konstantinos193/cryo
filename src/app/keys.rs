@@ -45,6 +45,9 @@ enum KeyCommand {
     DevTools,
     Print,
     SaveAs,
+    /// Ctrl+J: toggle the download shelf. Must be stolen — otherwise the
+    /// engine opens its own built-in downloads UI over the page.
+    Downloads,
     OpenFile,
     ViewSource,
     /// +1 zoom step in, -1 out, 0 reset to 100%.
@@ -111,6 +114,7 @@ fn key_command(acc: Accelerator) -> Option<(KeyCommand, bool)> {
             (KeyCommand::DevTools, true)
         }
         (true, false, false, Character('p')) => (KeyCommand::Print, true),
+        (true, false, false, Character('j')) => (KeyCommand::Downloads, true),
         (true, false, false, Character('s')) => (KeyCommand::SaveAs, true),
         (true, false, false, Character('o')) => (KeyCommand::OpenFile, true),
         (true, false, false, Character('u')) => (KeyCommand::ViewSource, true),
@@ -233,6 +237,7 @@ impl App {
             KeyCommand::ToggleFullscreen => self.toggle_fullscreen(),
             KeyCommand::DevTools => self.devtools_active(),
             KeyCommand::Print => self.print_active(),
+            KeyCommand::Downloads => self.toggle_downloads(),
             KeyCommand::SaveAs => self.save_active(),
             KeyCommand::OpenFile => self.open_file(),
             KeyCommand::ViewSource => self.view_source(),

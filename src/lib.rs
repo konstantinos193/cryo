@@ -5,6 +5,7 @@
 
 pub mod app;
 pub mod engine;
+pub mod persist;
 pub mod shell;
 pub mod tabs;
 pub mod update;
@@ -26,9 +27,13 @@ pub fn run(incognito: bool, open_url: Option<String>) -> anyhow::Result<()> {
     } else {
         "cryo"
     };
+    // The window itself paints the content colour: whatever shows through
+    // between one view hiding and the next painting is then the same dark
+    // the pages use, not the system's white.
     let mut builder = WindowBuilder::new()
         .with_title(title)
-        .with_inner_size(LogicalSize::new(1280.0, 800.0));
+        .with_inner_size(LogicalSize::new(1280.0, 800.0))
+        .with_background_color(shell::CONTENT_BACKGROUND);
     #[cfg(windows)]
     {
         builder = with_icons(builder)?;
@@ -50,7 +55,16 @@ pub fn run(incognito: bool, open_url: Option<String>) -> anyhow::Result<()> {
             app::post(&update_proxy, AppEvent::UpdateChecked(outcome));
         });
     }
-    let mut app = App::new(window, engine, proxy, open_url)?;
+    // Incognito keeps no history — not even in memory. Everything else
+    // remembers typed input and visits under %LOCALAPPDATA%\cryo.
+    let recorder = if incognito {
+        None
+    } else {
+        Some(persist::Recorder::open(persist::JsonFile::new(
+            persist::JsonFile::default_path(),
+        )))
+    };
+    let mut app = App::new(window, engine, proxy, open_url, recorder)?;
 
     event_loop.run(move |event, _target, control_flow| {
         *control_flow = ControlFlow::Wait;
