@@ -2,10 +2,10 @@
 //! the COM event handlers; the trait impl calls wry where its API
 //! reaches and dispatches to `ops` (raw WebView2/Win32) where it doesn't.
 
-use std::rc::Rc;
-
 #[cfg(target_os = "windows")]
 use std::cell::Cell;
+#[cfg(target_os = "windows")]
+use std::rc::Rc;
 #[cfg(target_os = "windows")]
 use std::sync::atomic::AtomicBool;
 #[cfg(target_os = "windows")]
@@ -23,10 +23,12 @@ use wry::WebView;
 
 #[cfg(target_os = "windows")]
 use crate::engine::LoadFailure;
+#[cfg(target_os = "windows")]
 use crate::engine::{
-    AcceleratorHandler, ContentView, DownloadHandler, DownloadId, EngineError, FaviconHandler,
-    FullscreenHandler, LoadChangeHandler, LoadFailureHandler, Rect,
+    AcceleratorHandler, DownloadHandler, FaviconHandler, FullscreenHandler, LoadChangeHandler,
+    LoadFailureHandler,
 };
+use crate::engine::{ContentView, DownloadId, EngineError, Rect};
 
 #[cfg(target_os = "windows")]
 use super::delay::Delayer;
@@ -38,12 +40,19 @@ use super::{downloads, events, ops};
 /// one parameter per event kind. `delayer` is plumbing, not a callback:
 /// the shared worker the download-abort grace re-check runs on.
 pub(super) struct Handlers {
+    #[cfg(target_os = "windows")]
     pub on_accelerator: Option<AcceleratorHandler>,
+    #[cfg(target_os = "windows")]
     pub on_load_failure: Option<LoadFailureHandler>,
+    #[cfg(target_os = "windows")]
     pub on_fullscreen: Option<FullscreenHandler>,
+    #[cfg(target_os = "windows")]
     pub on_favicon: Option<FaviconHandler>,
+    #[cfg(target_os = "windows")]
     pub on_navigate: Option<Rc<dyn Fn(String) -> bool>>,
+    #[cfg(target_os = "windows")]
     pub on_download: Option<DownloadHandler>,
+    #[cfg(target_os = "windows")]
     pub on_load_change: Option<LoadChangeHandler>,
     #[cfg(target_os = "windows")]
     pub delayer: Delayer,
