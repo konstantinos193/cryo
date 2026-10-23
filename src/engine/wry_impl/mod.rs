@@ -22,11 +22,10 @@ use std::rc::Rc;
 use raw_window_handle::{RawWindowHandle, WindowHandle};
 use wry::dpi::{LogicalPosition, LogicalSize, Position, Size};
 #[cfg(target_os = "windows")]
-use wry::NewWindowResponse;
-#[cfg(target_os = "windows")]
 use wry::WebViewBuilderExtWindows;
 use wry::{
-    PermissionKind as WryPermissionKind, PermissionResponse, Rect as WryRect, WebViewBuilder,
+    NewWindowResponse, PermissionKind as WryPermissionKind, PermissionResponse, Rect as WryRect,
+    WebViewBuilder,
 };
 
 #[cfg(target_os = "windows")]

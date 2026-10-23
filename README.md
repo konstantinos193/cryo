@@ -4,49 +4,69 @@
 
 <h1 align="center">cryo</h1>
 
-<p align="center"><b>A memory-obsessed browser shell written in Rust.<br>Tabs freeze. Budgets hold.</b></p>
+<p align="center">
+  <a href="https://github.com/konstantinos193/cryo/actions/workflows/ci.yml"><img src="https://github.com/konstantinos193/cryo/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/konstantinos193/cryo/releases/latest"><img src="https://img.shields.io/github/v/release/konstantinos193/cryo" alt="latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
+  <a href="#status"><img src="https://img.shields.io/badge/tabs-on%20ice-informational" alt="tabs on ice"></a>
+</p>
 
-cryo is a browser built around one thesis: the RAM problem in modern browsers
-is not an engine problem, it's a **policy** problem. Engines render; shells
-decide what stays alive. cryo writes no HTML parser — the engine is plumbing
-(WebView2 today, Servo later). All engineering effort goes into the shell:
-tab lifecycle, memory budgets, accounting.
+<p align="center"><b>A memory-obsessed browser shell in Rust. Tabs freeze. Budgets hold.</b></p>
 
-## Status: Phase 1 — tab lifecycle
+Your browser's plan for 40 open tabs is to let them eat until something dies.
+cryo's plan is a freezer.
 
-Freeze, discard and restore are live: Ctrl+Shift+F (or the ❄ on a tab)
-snapshots a tab and destroys its WebView2 surface; clicking the tab rebuilds
-it. Memory accounting and budgets are Phase 2 — the architecture is already
-built for them.
+cryo is a browser shell with one job: decide which tabs deserve to stay alive.
+It ships no HTML parser. The engine is plumbing (WebView2 on Windows, WebKitGTK
+on Linux, WKWebView on macOS), swappable behind traits, and the engineering goes
+into the policy layer instead: lifecycle, budgets, accounting. A tab that stops
+earning its RAM gets frozen. cryo takes a snapshot, destroys the webview and
+hands your memory back. Click the tab and it respawns where it left off, none
+the wiser. Discard is the same mercy killing without the keepsake.
+
+## Status
+
+The shell works and tabs freeze, discard and restore on Windows, Linux and
+macOS. Phase 2 (per-tab memory accounting and budgets) is the actual thesis of
+the project and it is next. Until then a tab freezes because you asked it to,
+not because a budget told it to.
 
 What exists today:
 
-- Ordered tab registry with closed-tab reopen stack (Ctrl+Shift+T)
-- Tab lifecycle: freeze keeps a snapshot (address, zoom, mute, freeze time)
-  and drops the view; discard keeps only the address; activating either
-  respawns the surface — the same path the closed-tab stack uses
-- Speed dial on both surfaces browsers put it: a dial bar under the
-  toolbar (click = open here, Ctrl/middle-click = new tab) and tiles on
-  the new-tab page — one `/dials` list on the internal protocol feeds both
-- Omnibox memory: typed input and visited URLs are remembered and
-  suggested on the next keystroke — history lives in
-  `%LOCALAPPDATA%\cryo\history.json`, bounded at 5000 entries, and
-  incognito windows keep none. It never rides the fetchable protocol —
-  the document asks, the app answers by eval (any origin could read a
-  `/history` endpoint, so there isn't one)
-- Incognito windows as sibling processes (`--incognito` → WebView2
-  `IsInPrivateModeEnabled` — the real InPrivate, not a cosmetic flag)
-- Shell UI rendered by the same engine (`cryo` internal scheme →
-  `http://cryo.localhost/...` on Windows): chrome strip, new-tab page
-- Engine seam: everything WebView2/COM lives behind `engine::{Engine,
-  ContentView}` traits in our own types — a fake in-memory engine exists
-  for tests, Servo can slot in without touching policy code
+- Freeze, discard, restore: `Ctrl+Shift+F` (or the button on the tab) snapshots
+  a tab and drops its webview; activating it rebuilds the surface through the
+  same path the closed-tab stack uses.
+- One ordered tab registry: reopen closed (`Ctrl+Shift+T`, restores strip
+  position), duplicate, mute, reorder, middle-click to close.
+- Speed dial in both places browsers put it: a bar under the toolbar and tiles
+  on the new-tab page, both fed by one `/dials` list on the internal protocol.
+- Omnibox memory: typed input and visits are remembered and suggested, bounded
+  at 5000 entries. Incognito windows keep none, and none of it is fetchable.
+  Any origin could read a `/history` endpoint, so there isn't one.
+- Bookmarks: `Ctrl+D` keeps the page, a bar under the toolbar shows the kept
+  pages, `Ctrl+Shift+O` opens the library panel (kept pages, saved passwords,
+  import, export).
+- A password vault sealed by DPAPI on Windows, the OS keychain elsewhere. Copy
+  the file to another account and it decrypts to nothing.
+- A download shelf (`Ctrl+J`): pause, resume, retry, cancel, show in folder,
+  drag files straight out of the shelf.
+- Import and export for other browsers' formats. Foreign bytes become drafts
+  here, then pass through the same constructors as homegrown data.
+  `edge-import/` holds a real Edge profile as the fixture.
+- Incognito windows as real InPrivate sibling processes (`--incognito`), not a
+  cosmetic flag.
+- On Windows, external links reach the running window over a named pipe and
+  become tabs instead of a second browser.
+- Self-update on Windows: check the release feed, verify the checksum, run the
+  installer.
+- The shell UI itself (chrome strip, new-tab page, settings) is rendered by the
+  same engine it manages, served from `http://cryo.localhost`.
 
 ## Keyboard shortcuts
 
-Two input paths — WebView2's `AcceleratorKeyPressed` while a view has focus,
-tao's `KeyboardInput` otherwise — feed one `key_command()` mapping, so keys
-behave identically whether the page or the chrome owns focus.
+Two input paths (WebView2's `AcceleratorKeyPressed` while a view has focus,
+tao's `KeyboardInput` otherwise) feed one `key_command()` mapping, so keys
+behave the same whether the page or the chrome owns focus.
 
 | Keys | Action |
 |---|---|
@@ -58,31 +78,33 @@ behave identically whether the page or the chrome owns focus.
 | `Ctrl+Shift+Home` / `End` | Move tab to start / end |
 | `Ctrl+Shift+K` | Duplicate tab |
 | `Ctrl+M` | Mute / unmute tab |
-| `Ctrl+Shift+F` | Freeze tab — drops the view, keeps a snapshot; click to restore |
-| `Ctrl+N` / `Ctrl+Shift+N` | New window / new **incognito** window |
+| `Ctrl+Shift+F` | Freeze tab: drops the view, keeps a snapshot. Click to restore |
+| `Ctrl+D` / `Ctrl+Shift+O` | Keep page / open the library |
+| `Ctrl+J` | Download shelf |
+| `Ctrl+N` / `Ctrl+Shift+N` | New window / new incognito window |
 | `Ctrl+Shift+W` / `Ctrl+Shift+Q` / `Alt+F4` | Close window / quit |
 | `Ctrl+L` / `Alt+D` / `Ctrl+K` / `Ctrl+E` | Focus address bar |
 | `F6` / `Ctrl+F6` | Cycle focus address bar ↔ page / jump to page |
-| `Alt+Enter` / `Alt+Shift+Enter` | Open address-bar input in new fg / bg tab |
+| `Alt+Enter` / `Alt+Shift+Enter` | Open address-bar input in new foreground / background tab |
 | `Ctrl+Enter` | `www.<word>.com` canonize + open |
 | `Ctrl+Shift+Enter` | Open input in a new window |
 | `Ctrl+Shift+L` | Paste-and-go (Edge) |
 | `Alt+←` / `Alt+→` | Back / forward |
 | `F5` / `Ctrl+R` | Reload |
 | `Ctrl+F5` / `Ctrl+Shift+R` / `Shift+F5` | Hard reload (DevTools-protocol cache bypass) |
-| `Esc` | Stop loading (still reaches the page for dialogs/menus) |
-| `Ctrl+P` / `Ctrl+S` / `Ctrl+O` | Print / save-as UI / open file dialog → `file://` |
+| `Esc` | Stop loading (still reaches the page for dialogs and menus) |
+| `Ctrl+P` / `Ctrl+S` / `Ctrl+O` | Print / save-as / open file into `file://` |
 | `Ctrl+U` | `view-source:` in a new tab |
-| `Ctrl+=` `+` / `Ctrl+-` / `Ctrl+0` | Zoom in / out / reset (×1.25 steps, 25–500%) |
-| `Ctrl+Shift+S` | Screenshot → `Pictures\cryo\shot-*.png` |
+| `Ctrl+=`/`+` / `Ctrl+-` / `Ctrl+0` | Zoom in / out / reset (×1.25 steps, 25 to 500%) |
+| `Ctrl+Shift+S` | Screenshot into `Pictures\cryo\shot-*.png` |
 | `Ctrl+Shift+Del` | Clear all browsing data for the profile |
 | `F11` | Borderless fullscreen |
 | `F12` / `Ctrl+Shift+I` / `J` / `C` | DevTools |
 | `Alt+Home` | Home (new-tab page) |
 
-Mouse: `target=_blank`, ctrl/shift/middle-click and `window.open` are all
-captured via `NewWindowRequested`, denied as popups, and reopened as
-foreground tabs. Middle-click a tab to close it.
+Mouse: `target=_blank`, ctrl/shift/middle-click and `window.open` are captured
+via `NewWindowRequested`, denied as popups, and reopened as foreground tabs.
+Middle-click a tab to close it.
 
 ## Architecture
 
@@ -91,10 +113,10 @@ foreground tabs. Middle-click a tab to close it.
             │    main     │   arg parsing only (--incognito, URL seed)
             └──────┬──────┘
                    ▼
-            ┌─────────────┐      ┌──────────────┐
-            │     app     │─────▶│   memory/    │   (Phase 1+)
-            │ (event loop)│      │   budgets    │
-            └──────┬──────┘      └──────────────┘
+            ┌─────────────┐      ┌──────────────────────────────┐
+            │     app     │─────▶│ persist, bookmarks, vault,   │
+            │ (event loop)│      │ transfer, instance, update   │
+            └──────┬──────┘      └──────────────────────────────┘
                    ▼
             ┌─────────────┐
             │    tabs     │   Tab entity, ordered registry, closed stack
@@ -102,55 +124,64 @@ foreground tabs. Middle-click a tab to close it.
                    ▼
             ┌─────────────┐
             │   engine    │   Engine/ContentView traits in OUR types;
-            │  (wry impl) │   fake engine for tests; WebView2 isolated here
+            │  (wry impl) │   fake engine for tests; the platform
+            │             │   webview is quarantined in here
             └─────────────┘
 ```
 
-Dependency direction is one-way: policy never imports plumbing. `wry` types
-exist only inside `engine/`; `tao` types only in `app`/`lib`. Per-tab state
-lives in one `Tab` struct in one ordered `Vec` — no parallel
-`HashMap<TabId, _>` scatter.
+Dependencies point one way: policy never imports plumbing. `wry` types exist
+only inside `engine/`, `tao` types only in `app`/`lib`. Per-tab state is one
+`Tab` struct in one ordered `Vec`, not a `HashMap<TabId, _>` farm. Serde never
+touches a domain type; snapshots and wire formats are versioned DTOs at the
+boundary.
 
-The enforceable version of this is [AGENTS.md](AGENTS.md) — module
-boundaries, banned names, hydration rules, error taxonomy. Read it before
-opening a PR.
+The enforceable version of this is [AGENTS.md](AGENTS.md): module boundaries,
+banned names (`util`, `manager`, `helper`), hydration rules, one error enum
+per module. It is the only thing standing between this codebase and spaghetti,
+and it gets checked in review.
 
-## Build & run
+## Install and run
 
-Windows + Rust stable. WebView2 runtime is preinstalled on Windows 10/11.
+Prebuilt binaries for Windows, Linux and macOS are on the
+[releases page](https://github.com/konstantinos193/cryo/releases). WebView2
+ships with Windows 10/11; on Linux wry wants WebKitGTK; macOS brings WKWebView
+for free.
+
+Or build it. Rust stable:
 
 ```powershell
 cargo run                      # normal window
-cargo run -- --incognito       # InPrivate window (in-memory profile)
+cargo run -- --incognito       # private window, in-memory profile
 cargo run -- https://site.com  # seed the first tab with an address
 cargo run --release            # no console window
 ```
 
-CI gates: `cargo fmt`, `cargo clippy -D warnings`, `cargo build`,
-`cargo test`. `.devin/tools/keys.ps1` drives the running window with
-SendKeys for manual shortcut testing (`keys.ps1 -Keys "^t"` = Ctrl+T).
+CI gates: `cargo fmt`, `cargo clippy -D warnings`, `cargo build`, `cargo test`.
+`.devin/tools/keys.ps1` drives a running window with SendKeys for manual
+shortcut testing (`keys.ps1 -Keys "^t"` = Ctrl+T).
 
 ## Roadmap
 
-- [x] **Phase 0** — Shell: window, tabs, navigation, shortcuts, incognito
-- [x] **Phase 1** — Tab lifecycle: freeze, discard, restore
-- [ ] **Phase 2** — Per-tab memory accounting + budgets
-- [ ] **Phase 3** — Memory dashboard (the real `Shift+Esc`)
-- [ ] **Phase 4** — WebExtensions (MV3) surface
-- [ ] **Phase 5** — Evaluate Servo as alternate engine backend
+- [x] Phase 0: shell. Window, tabs, navigation, shortcuts, incognito.
+- [x] Phase 1: tab lifecycle. Freeze, discard, restore.
+- [x] The parts a browser needs anyway: bookmarks, vault, downloads, history,
+  import/export, self-update.
+- [ ] Phase 2: per-tab memory accounting and budgets, so the freezing stops
+  being vibes-based.
+- [ ] Phase 3: memory dashboard (the real `Shift+Esc`).
+- [ ] Phase 4: a WebExtensions (MV3) surface.
+- [ ] Phase 5: evaluate Servo as a second engine backend. If it earns the slot.
 
-Known gaps by design (need subsystems that don't exist yet): find-in-page,
-bookmarks, downloads, a history *surface* (the store exists; there's no
-history page to browse it), tab search overlay, task manager. Track them
-in issues, not in wishful code. (The dial list is a hardcoded default —
-`persist` is in now, so making it editable is unblocked.)
+Known gaps by design: find-in-page, a browsable history surface (the store
+exists, the page doesn't), tab search overlay, a task manager. They go in
+issues, not in half-built code.
 
 ## Contributing
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) for the ground rules (PRs only,
-`main` is protected) and [AGENTS.md](AGENTS.md) for the anti-spaghetti
-architecture rules — both are enforced in review.
+PRs only, `main` is protected. [CONTRIBUTING.md](CONTRIBUTING.md) has the
+ground rules and [AGENTS.md](AGENTS.md) has the anti-spaghetti laws. Review
+enforces both; clippy enforces the rest.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE).

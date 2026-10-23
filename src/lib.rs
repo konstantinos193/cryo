@@ -94,14 +94,12 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
     // The window itself paints the content colour: whatever shows through
     // between one view hiding and the next painting is then the same dark
     // the pages use, not the system's white.
-    let mut builder = WindowBuilder::new()
+    let builder = WindowBuilder::new()
         .with_title(title)
         .with_inner_size(LogicalSize::new(1280.0, 800.0))
         .with_background_color(shell::CONTENT_BACKGROUND);
     #[cfg(windows)]
-    {
-        builder = with_icons(builder)?;
-    }
+    let builder = with_icons(builder)?;
     let window = Rc::new(builder.build(&event_loop)?);
 
     let engine: Rc<dyn Engine> = Rc::new(WryEngine::new(

@@ -30,8 +30,14 @@ impl Keyring {
         let entry = ::keyring::Entry::new(SERVICE, ACCOUNT)
             .map_err(|e| VaultError::Seal(format!("keychain: {e}")))?;
         match entry.get_secret() {
-            Ok(raw) => Key::try_from(raw.as_slice())
-                .map_err(|_| VaultError::Unseal("keychain entry is not a vault key".into())),
+            Ok(raw) => {
+                if raw.len() != KEY_LEN {
+                    return Err(VaultError::Unseal(
+                        "keychain entry is not a vault key".into(),
+                    ));
+                }
+                Ok(Key::clone_from_slice(&raw))
+            }
             Err(::keyring::Error::NoEntry) => {
                 let mut key = Key::default();
                 getrandom::getrandom(&mut key)

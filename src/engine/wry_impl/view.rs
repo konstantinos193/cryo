@@ -21,9 +21,11 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
 };
 use wry::WebView;
 
+#[cfg(target_os = "windows")]
+use crate::engine::LoadFailure;
 use crate::engine::{
     AcceleratorHandler, ContentView, DownloadHandler, DownloadId, EngineError, FaviconHandler,
-    FullscreenHandler, LoadChangeHandler, LoadFailure, LoadFailureHandler, Rect,
+    FullscreenHandler, LoadChangeHandler, LoadFailureHandler, Rect,
 };
 
 #[cfg(target_os = "windows")]

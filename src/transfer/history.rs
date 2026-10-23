@@ -55,7 +55,7 @@ pub fn parse(text: &str) -> Result<(Vec<Entry>, usize), TransferError> {
 /// ranks them in, so the file reads like the browser behaves.
 pub fn render(entries: &[Entry]) -> String {
     let mut rows: Vec<&Entry> = entries.iter().collect();
-    rows.sort_by(|a, b| (b.uses, b.last_seen).cmp(&(a.uses, a.last_seen)));
+    rows.sort_by_key(|e| std::cmp::Reverse((e.uses, e.last_seen)));
     let mut out = Writer::new(&EXPORT_HEADER);
     for e in rows {
         out.row(

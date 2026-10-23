@@ -1,3 +1,6 @@
+//! Binary entry point — a shell, not a program (AGENTS §1): parse the
+//! CLI flags and hand the thread to `cryo::run()`.
+
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() -> anyhow::Result<()> {

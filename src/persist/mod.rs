@@ -238,7 +238,7 @@ impl History {
             // Strongest first, then cut: same rule as `record`'s
             // eviction — fewest uses, then oldest, goes.
             self.entries
-                .sort_by(|a, b| (b.uses, b.last_seen).cmp(&(a.uses, a.last_seen)));
+                .sort_by_key(|e| std::cmp::Reverse((e.uses, e.last_seen)));
             // What falls off can be an entry that was already here, so
             // this counts rows dropped, not rows refused.
             report.overflowed = self.entries.len() - MAX_ENTRIES;
@@ -261,7 +261,7 @@ impl History {
                         .is_some_and(|t| t.to_lowercase().contains(&needle))
             })
             .collect();
-        hits.sort_by(|a, b| (b.uses, b.last_seen).cmp(&(a.uses, a.last_seen)));
+        hits.sort_by_key(|e| std::cmp::Reverse((e.uses, e.last_seen)));
         hits.truncate(limit.min(MAX_MATCHES));
         hits
     }

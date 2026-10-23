@@ -24,7 +24,7 @@ mod imp {
     use windows::core::{implement, Error, Interface, Result, BOOL, HRESULT};
     use windows::Win32::Foundation::{
         DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, DV_E_FORMATETC,
-        E_NOTIMPL, OLE_E_ADVISENOTSUPPORTED, S_FALSE, S_OK,
+        E_NOTIMPL, OLE_E_ADVISENOTSUPPORTED, RPC_E_CHANGED_MODE, S_FALSE, S_OK,
     };
     use windows::Win32::System::Com::{
         IAdviseSink, IDataObject, IDataObject_Impl, IEnumFORMATETC, IEnumFORMATETC_Impl,
@@ -257,18 +257,28 @@ mod imp {
     pub(super) fn run(path: &Path) {
         unsafe {
             // Already initialized on this thread — S_FALSE counts as
-            // success; a mismatched apartment is ignored, the drag
-            // still runs on the ambient one.
-            let _ = OleInitialize(None);
+            // success. A mismatched apartment (RPC_E_CHANGED_MODE) is
+            // the expected Err and is ignored: the drag still runs on
+            // the ambient one. Anything else means OLE is not up and
+            // DoDragDrop will fail too, so report it and try anyway.
+            if let Err(e) = OleInitialize(None) {
+                if e.code() != RPC_E_CHANGED_MODE {
+                    crate::report!("drag-out: OleInitialize failed: {e}");
+                }
+            }
             let data: IDataObject = FileDrag {
                 blob: hdrop_blob(path),
             }
             .into();
-            let Ok(source) = data.cast::<IDropSource>() else {
-                return;
-            };
+            let source = data
+                .cast::<IDropSource>()
+                .expect("FileDrag implements IDropSource");
             let mut effect = DROPEFFECT_NONE;
-            let _ = DoDragDrop(&data, &source, DROPEFFECT_COPY, &mut effect);
+            // Drop and cancel come back as success codes; only a real
+            // failure is worth reporting.
+            if let Err(e) = DoDragDrop(&data, &source, DROPEFFECT_COPY, &mut effect).ok() {
+                crate::report!("drag-out: DoDragDrop failed: {e}");
+            }
         }
     }
 }
