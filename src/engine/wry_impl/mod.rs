@@ -115,15 +115,13 @@ impl Engine for WryEngine {
     fn spawn(&self, spec: ViewSpec) -> Result<Box<dyn ContentView>, EngineError> {
         let resolve_page = self.resolve_page;
         let on_ipc = spec.on_ipc;
-        let mut builder = WebViewBuilder::new()
+        let builder = WebViewBuilder::new()
             .with_bounds(to_wry_rect(spec.bounds))
             .with_visible(spec.visible)
             .with_transparent(spec.transparent)
             .with_devtools(cfg!(debug_assertions));
         #[cfg(target_os = "windows")]
-        {
-            builder = builder.with_additional_browser_args(browser_args());
-        }
+        let builder = builder.with_additional_browser_args(browser_args());
         let mut builder = builder
             // The scheme exists for chrome IPC as much as for pages —
             // see `protocol::respond` for why it must be a real URL.
@@ -193,12 +191,19 @@ impl Engine for WryEngine {
         WryView::new(
             view,
             Handlers {
+                #[cfg(target_os = "windows")]
                 on_accelerator: spec.on_accelerator,
+                #[cfg(target_os = "windows")]
                 on_load_failure: spec.on_load_failure,
+                #[cfg(target_os = "windows")]
                 on_fullscreen: spec.on_fullscreen,
+                #[cfg(target_os = "windows")]
                 on_favicon: spec.on_favicon,
+                #[cfg(target_os = "windows")]
                 on_navigate,
+                #[cfg(target_os = "windows")]
                 on_download: spec.on_download,
+                #[cfg(target_os = "windows")]
                 on_load_change: spec.on_load_change,
                 #[cfg(target_os = "windows")]
                 delayer: self.delayer.clone(),

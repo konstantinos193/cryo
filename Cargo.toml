@@ -11,14 +11,14 @@ anyhow = "1"
 raw-window-handle = "0.6"
 # gtk3 backend on Linux (gtk is already linked via tao/wry); the native
 # backends on Windows and macOS are unconditional inside rfd.
-rfd = { version = "0.15", default-features = false, features = ["gtk3"] }
+rfd = { version = "0.17", default-features = false, features = ["gtk3"] }
 semver = "1.0.28"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11.1"
 tao = "0.37"
 thiserror = "2"
-ureq = "2"
+ureq = "3.5"
 wry = "0.57"
 
 # The vault protector off Windows: a random key in the OS keychain
