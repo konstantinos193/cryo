@@ -47,7 +47,7 @@ pub fn run(incognito: bool, open_url: Option<String>) -> anyhow::Result<()> {
     {
         let update_proxy = proxy.clone();
         update::spawn_check(move |outcome| {
-            let _ = update_proxy.send_event(AppEvent::UpdateChecked(outcome));
+            app::post(&update_proxy, AppEvent::UpdateChecked(outcome));
         });
     }
     let mut app = App::new(window, engine, proxy, open_url)?;

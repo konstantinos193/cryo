@@ -83,6 +83,39 @@ pub struct ChromeTab {
     pub active: bool,
     /// "active" | "frozen" | "discarded" — the strip dims and badges by it.
     pub state: &'static str,
+    /// The page icon as a `data:` URL — the pushed state is the wire, so
+    /// the PNG travels inline instead of over a second request.
+    pub favicon: Option<String>,
+}
+
+/// A tab's icon (PNG bytes) → the `data:` URL `ChromeTab.favicon` carries.
+pub(crate) fn favicon_data_url(png: &[u8]) -> String {
+    format!("data:image/png;base64,{}", base64(png))
+}
+
+/// Standard base64 with padding — one small encoder beats a dependency
+/// for the single place a `data:` URL is built.
+fn base64(bytes: &[u8]) -> String {
+    const ALPHA: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = u32::from(chunk[0]) << 16
+            | u32::from(*chunk.get(1).unwrap_or(&0)) << 8
+            | u32::from(*chunk.get(2).unwrap_or(&0));
+        out.push(ALPHA[(n >> 18) as usize & 63] as char);
+        out.push(ALPHA[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHA[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHA[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
 }
 
 /// Turn address-bar text into a URL: full URLs pass through, domain-looking
@@ -180,7 +213,11 @@ pub const CHROME_HTML: &str = r##"<!doctype html>
   .tab .title { overflow: hidden; text-overflow: ellipsis; }
   .tab .x { color: #8a8f98; padding: 0 3px; border-radius: 3px; }
   .tab .x:hover { background: #4a505a; color: #fff; }
-  /* The per-tab freeze button — sits where a favicon would. */
+  /* The site icon at the tab's leading edge. */
+  .tab .fav {
+    width: 14px; height: 14px; flex: 0 0 auto; border-radius: 3px;
+  }
+  /* The per-tab freeze button. */
   .tab .fz {
     color: #7fb6c9; padding: 0 3px; border-radius: 3px; cursor: default;
   }
@@ -468,8 +505,17 @@ pub const CHROME_HTML: &str = r##"<!doctype html>
       el.addEventListener('auxclick', (e) => {
         if (e.button === 1) ipc({cmd: 'close', id: t.id});
       });
-      // Live tabs get a freeze button in the favicon slot; a frozen tab
-      // shows the same flake as a state marker (clicking the tab restores).
+      // The site icon leads the tab in every state — the strip badges
+      // the page, not the surface's liveness.
+      if (t.favicon) {
+        const img = document.createElement('img');
+        img.className = 'fav';
+        img.src = t.favicon;
+        img.alt = '';
+        el.appendChild(img);
+      }
+      // Live tabs get a freeze button; a frozen tab shows the same flake
+      // as a state marker (clicking the tab restores).
       if (t.state === 'active') {
         const fz = document.createElement('span');
         fz.className = 'fz';
@@ -564,5 +610,21 @@ mod tests {
         let cmd: ChromeCommand = serde_json::from_str(r#"{"cmd":"discard","id":2}"#).unwrap();
         assert!(matches!(cmd, ChromeCommand::Discard { id: Some(2) }));
         assert!(serde_json::from_str::<ChromeCommand>(r#"{"cmd":"bogus"}"#).is_err());
+    }
+
+    #[test]
+    fn base64_pads_to_quads() {
+        // Vectors from RFC 4648.
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"foob"), "Zm9vYg==");
+        assert_eq!(base64(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+        assert_eq!(
+            favicon_data_url(b"\x89PNG"),
+            "data:image/png;base64,iVBORw=="
+        );
     }
 }

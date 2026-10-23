@@ -98,6 +98,10 @@ pub struct Tab {
     id: TabId,
     url: String,
     title: String,
+    /// The page's icon as PNG bytes, last thing the engine reported.
+    /// Kept across freeze/discard — the strip badges the site, not the
+    /// surface's liveness.
+    favicon: Option<Vec<u8>>,
     lifecycle: Lifecycle,
 }
 
@@ -107,6 +111,7 @@ impl Tab {
             id,
             title: url.clone(),
             url,
+            favicon: None,
             lifecycle: Lifecycle::Active,
         }
     }
@@ -121,6 +126,11 @@ impl Tab {
 
     pub fn title(&self) -> &str {
         &self.title
+    }
+
+    /// PNG bytes of the page's icon, if the engine reported one.
+    pub fn favicon(&self) -> Option<&[u8]> {
+        self.favicon.as_deref()
     }
 
     pub fn state(&self) -> TabState {
@@ -187,6 +197,12 @@ impl Tab {
         if !title.is_empty() {
             self.title = title;
         }
+    }
+
+    /// The engine reports the icon it just fetched; `None` clears — a
+    /// document without an icon drops the previous page's.
+    pub(crate) fn set_favicon(&mut self, png: Option<Vec<u8>>) {
+        self.favicon = png;
     }
 }
 

@@ -15,14 +15,19 @@ AppPublisherURL=https://github.com/konstantinos193/cryo
 AppSupportURL=https://github.com/konstantinos193/cryo/issues
 DefaultDirName={localappdata}\Programs\cryo
 PrivilegesRequired=lowest
-; Skip every wizard page we can — install is one Next and done.
+; Minimal wizard: destination dir picker, tasks, ready — no welcome
+; or program-group pages. Installs default to %LOCALAPPDATA%\Programs
+; but any user-writable path works (other drives included).
 DisableWelcomePage=yes
-DisableDirPage=yes
 DisableProgramGroupPage=yes
 OutputDir=output
 OutputBaseFilename=cryo-setup
 SetupIconFile=..\assets\icon.ico
 UninstallDisplayIcon={app}\cryo.exe
+; Wizard art — regenerate with installer\gen-images.ps1. Each slot takes
+; a comma list of DPI variants; Inno picks the closest to the scaling.
+WizardImageFile=images\wizard.bmp,images\wizard@150.bmp,images\wizard@200.bmp
+WizardSmallImageFile=images\wizard-small.bmp,images\wizard-small@150.bmp,images\wizard-small@200.bmp
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern

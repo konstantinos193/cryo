@@ -51,7 +51,14 @@ pub fn download_installer(manifest: &ReleaseManifest) -> Result<PathBuf, UpdateE
     drop(file);
 
     if sha256_hex(&path)? != manifest.sha256 {
-        let _ = std::fs::remove_file(&path);
+        // A corrupt download must not survive to a re-check — the delete
+        // is best-effort, but a failure gets a note, not silence.
+        if let Err(e) = std::fs::remove_file(&path) {
+            eprintln!(
+                "cryo: could not remove bad installer {}: {e}",
+                path.display()
+            );
+        }
         return Err(UpdateError::Checksum);
     }
     Ok(path)

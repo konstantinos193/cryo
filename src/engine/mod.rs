@@ -23,6 +23,9 @@ pub type PageResolver = fn(&str) -> Option<&'static str>;
 /// `/cmd` on the internal protocol — see `wry_impl`), so Send + Sync.
 pub type IpcHandler = Box<dyn Fn(String) + Send + Sync>;
 pub type TitleHandler = Box<dyn Fn(String)>;
+/// The document's icon changed — PNG bytes of the new one, `None` when
+/// the page has none (which clears whatever icon it had before).
+pub type FaviconHandler = Box<dyn Fn(Option<Vec<u8>>)>;
 /// Return `true` to allow the navigation, `false` to block it.
 pub type NavigateHandler = Box<dyn Fn(String) -> bool>;
 /// Called before the engine consumes a key. Return `true` to swallow it,
@@ -112,6 +115,7 @@ pub struct ViewSpec {
     pub background: Option<(u8, u8, u8, u8)>,
     pub on_ipc: Option<IpcHandler>,
     pub on_title_change: Option<TitleHandler>,
+    pub on_favicon: Option<FaviconHandler>,
     pub on_navigate: Option<NavigateHandler>,
     pub on_accelerator: Option<AcceleratorHandler>,
     pub on_new_window: Option<NewWindowHandler>,
