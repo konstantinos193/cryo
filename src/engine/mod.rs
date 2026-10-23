@@ -1,5 +1,5 @@
 //! Engine seam: the traits the shell needs from a web engine, expressed in
-//! our own types. `wry`/`tao` types appear only in `wry_impl`; `fake` exists
+//! our own types. `wry` types appear only in `wry_impl`; `fake` exists
 //! for tests. A Servo backend slots in here later without touching policy.
 
 pub mod fake;
@@ -48,6 +48,10 @@ pub type FullscreenHandler = Box<dyn Fn(bool)>;
 /// later calls carry byte counts and the terminal state. Called on the
 /// event loop thread.
 pub type DownloadHandler = Box<dyn Fn(DownloadUpdate)>;
+/// An OS file drag entered, moved over, or dropped onto the view. The
+/// engine reports; the app decides what a drop means. Called on the
+/// event loop thread.
+pub type DropHandler = Box<dyn Fn(DropEvent)>;
 /// The view's top-level navigation started (`true`) or the in-flight one
 /// settled — finished, failed, or stopped (`false`). The loading
 /// spinner's data; sub-frame navigations don't count. Called on the
@@ -138,6 +142,11 @@ pub struct ViewSpec {
     /// own dialog and reports every file's progress here. `None` leaves
     /// the engine's default download dialog running.
     pub on_download: Option<DownloadHandler>,
+    /// When set the view reports OS file drags crossing it (enter, hover,
+    /// drop, leave) instead of feeding them to the document. `None`
+    /// leaves the engine's default: drops go to the page's own DOM
+    /// handlers.
+    pub on_drop: Option<DropHandler>,
     /// Navigation start/settle signal — drives the loading spinner.
     pub on_load_change: Option<LoadChangeHandler>,
 }
@@ -204,6 +213,12 @@ pub trait ContentView {
     /// Cancel an in-flight download this view started. Finished or
     /// unknown ids are a no-op.
     fn cancel_download(&self, id: DownloadId) -> Result<(), EngineError>;
+    /// Hold an in-flight download — it stays in the shelf, resumable.
+    /// Unknown ids are a no-op; an engine that can't pause answers with
+    /// an error and the row keeps moving.
+    fn pause_download(&self, id: DownloadId) -> Result<(), EngineError>;
+    /// Restart a paused download. Unknown ids are a no-op.
+    fn resume_download(&self, id: DownloadId) -> Result<(), EngineError>;
 }
 
 /// A download's identity within its view — a per-view sequence, so the
@@ -218,6 +233,9 @@ pub struct DownloadId(pub u64);
 #[non_exhaustive]
 pub enum DownloadState {
     InProgress,
+    /// The user held it mid-flight — an interrupt reason on the wire,
+    /// but the transfer is still alive and resumable.
+    Paused,
     Done,
     /// The engine stopped it mid-flight — network drop, policy block,
     /// disk full, shutdown.
@@ -235,9 +253,34 @@ pub struct DownloadUpdate {
     pub name: String,
     /// Where the bytes are going.
     pub path: String,
+    /// The address the bytes come from — a retry re-navigates to it.
+    /// Empty when the engine won't say.
+    pub uri: String,
     pub received: u64,
     pub total: Option<u64>,
     pub state: DownloadState,
+}
+
+/// An OS file drag crossing a view, in our own vocabulary. `paths` are
+/// the files being dragged; `position` is view-relative in the engine's
+/// pixel space.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum DropEvent {
+    /// The drag entered the view carrying `paths`.
+    Entered {
+        paths: Vec<std::path::PathBuf>,
+        position: (i32, i32),
+    },
+    /// The drag is hovering — `position` tracks the cursor.
+    Over { position: (i32, i32) },
+    /// `paths` landed on the view.
+    Dropped {
+        paths: Vec<std::path::PathBuf>,
+        position: (i32, i32),
+    },
+    /// The drag left the view or was cancelled.
+    Left,
 }
 
 /// An HTTP response status. A newtype so a status cannot be mistaken for any

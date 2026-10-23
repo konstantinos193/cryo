@@ -8,7 +8,7 @@ use tao::event_loop::EventLoopProxy;
 use tao::window::Fullscreen;
 
 use crate::engine::{
-    ContentView, Engine, LoadFailure, PermissionDecision, PermissionKind, Rect, ViewSpec,
+    ContentView, DropEvent, Engine, LoadFailure, PermissionDecision, PermissionKind, Rect, ViewSpec,
 };
 use crate::shell::chrome::ChromeCommand;
 use crate::shell::pages::CHROME_URL;
@@ -30,12 +30,21 @@ impl App {
         // which is Sync-bound — the proxy goes behind a Mutex (uncontended;
         // WebView2 calls it on the UI thread anyway).
         let ipc_proxy = Mutex::new(proxy.clone());
+        let drop_proxy = proxy.clone();
         let chrome = engine.spawn(ViewSpec {
             bounds,
             visible: true,
             transparent: true,
             background: Some(shell::CHROME_BACKGROUND),
             on_accelerator: Some(Self::accelerator_forwarder(proxy)),
+            // File drops on the strip are ours, not the document's: a
+            // file landing anywhere on it (a shelf row dragged back, or
+            // one dragged in from Explorer) opens in a new tab.
+            on_drop: Some(Box::new(move |event| {
+                if let DropEvent::Dropped { paths, .. } = event {
+                    post(&drop_proxy, AppEvent::FilesDropped(paths));
+                }
+            })),
             on_ipc: Some(Box::new(move |body| {
                 if let Ok(cmd) = serde_json::from_str::<ChromeCommand>(&body) {
                     let proxy = ipc_proxy.lock().expect("ipc proxy lock");
@@ -118,6 +127,15 @@ impl App {
         Ok(())
     }
 
+    /// Destroy `id`'s surface and the shelf entries hanging off it.
+    /// Every removal — freeze, discard, close — funnels here, so
+    /// `views` has exactly one deleter keeping it in step with
+    /// `registry`.
+    pub(super) fn drop_view(&mut self, id: TabId) {
+        self.drop_downloads_of(id);
+        drop(self.views.remove(&id));
+    }
+
     /// Give a view-less tab — frozen, discarded, or one coming back from
     /// the closed stack — a fresh surface, then flip it back to live.
     pub(super) fn restore_view(&mut self, id: TabId) -> anyhow::Result<()> {
@@ -173,8 +191,7 @@ impl App {
             zoom,
             muted,
         })?;
-        self.drop_downloads_of(id);
-        drop(self.views.remove(&id));
+        self.drop_view(id);
         self.sync_chrome()
     }
 
@@ -189,8 +206,7 @@ impl App {
             return Ok(());
         };
         tab.discard()?;
-        self.drop_downloads_of(id);
-        drop(self.views.remove(&id));
+        self.drop_view(id);
         self.sync_chrome()
     }
 
@@ -268,5 +284,29 @@ impl App {
             view.set_bounds(rect)?;
         }
         Ok(())
+    }
+
+    /// The `views`/`registry` invariant in types' place: a surface exists
+    /// exactly while its tab is `Active`. `dispatch` runs this after every
+    /// event in debug builds — a mutation path that forgets a side panics
+    /// here, near the cause, instead of leaking the one resource this app
+    /// exists to free.
+    #[cfg(debug_assertions)]
+    pub(super) fn assert_views_consistent(&self) {
+        for id in self.views.keys() {
+            debug_assert!(
+                self.registry
+                    .get(*id)
+                    .is_some_and(|t| t.state() == TabState::Active),
+                "view {id} exists but its tab is not active"
+            );
+        }
+        for tab in self.registry.iter() {
+            debug_assert!(
+                tab.state() != TabState::Active || self.views.contains_key(&tab.id()),
+                "active tab {} has no view",
+                tab.id()
+            );
+        }
     }
 }

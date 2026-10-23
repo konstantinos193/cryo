@@ -31,6 +31,25 @@ pub struct Entry {
     pub uses: u32,
     /// Unix seconds of the last visit — stamped by the caller.
     pub last_seen: u64,
+    /// The site's icon as a `data:` URL — the omnibox paints it beside
+    /// the row. Only ever set for visited URLs; typed input has none.
+    pub favicon: Option<String>,
+}
+
+/// What `merge` did to the history — reported to the user after an
+/// import, the same shape `bookmarks` and `vault` report.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MergeReport {
+    /// Destinations the history had never seen.
+    pub added: usize,
+    /// Destinations already remembered: the stronger count and the
+    /// later visit win.
+    pub merged: usize,
+    /// Rows with nothing to remember.
+    pub rejected: usize,
+    /// Rows dropped because the history is full and they were weaker
+    /// than what was already there.
+    pub overflowed: usize,
 }
 
 /// Hard bound on kept history. Past it, the weakest entry (fewest uses,
@@ -62,6 +81,41 @@ pub enum PersistError {
     Parse(#[source] serde_json::Error),
     #[error("stored state has version {0}, this build reads {CURRENT_VERSION}")]
     Version(u32),
+    /// An imported row carried no destination to remember.
+    #[error("an entry needs text")]
+    NoText,
+}
+
+impl Entry {
+    /// The door imports come through (AGENTS §6): an `Entry` built from
+    /// a foreign file is validated here, so `History::merge` can trust
+    /// everything it is handed. Visits recorded in the browser go
+    /// through `History::record` instead, which stamps them itself.
+    pub fn new(
+        text: &str,
+        title: Option<&str>,
+        uses: u32,
+        last_seen: u64,
+    ) -> Result<Self, PersistError> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(PersistError::NoText);
+        }
+        Ok(Self {
+            text: text.to_string(),
+            title: title
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .map(std::string::ToString::to_string),
+            // A visit that happened at least once — an imported zero
+            // would rank below everything, including unvisited input.
+            uses: uses.max(1),
+            last_seen,
+            // Foreign formats carry no icons we can read — the first
+            // visit after the import fills it in.
+            favicon: None,
+        })
+    }
 }
 
 /// Ordered visit memory. Dedupes by `text`, ranks matches by uses then
@@ -117,6 +171,7 @@ impl History {
                         .map(std::string::ToString::to_string),
                     uses: 1,
                     last_seen: seen_at,
+                    favicon: None,
                 });
             }
         }
@@ -131,6 +186,65 @@ impl History {
         if let Some(e) = self.entries.iter_mut().find(|e| e.text == text) {
             e.title = Some(title.to_string());
         }
+    }
+
+    /// Attach a site's icon to a remembered URL — favicons arrive after
+    /// the visit was recorded, like titles. No entry, no write. Returns
+    /// whether anything changed so the caller only flushes on a real
+    /// update — icon events repeat a `data:` URL we may already hold.
+    pub fn note_favicon(&mut self, text: &str, data_url: &str) -> bool {
+        if data_url.is_empty() {
+            return false;
+        }
+        match self.entries.iter_mut().find(|e| e.text == text) {
+            Some(e) if e.favicon.as_deref() != Some(data_url) => {
+                e.favicon = Some(data_url.to_string());
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Fold an imported history into this one.
+    ///
+    /// Counts take the stronger of the two rather than adding: importing
+    /// the same file twice must not inflate what the omnibox ranks
+    /// first. Titles already here are kept — ours came from a document
+    /// we actually loaded. Trimming to `MAX_ENTRIES` happens once, at
+    /// the end, by strength, so a 50,000-row file costs one sort rather
+    /// than 50,000 evictions.
+    pub fn merge(&mut self, imported: Vec<Entry>) -> MergeReport {
+        let mut report = MergeReport::default();
+        for row in imported {
+            match self.entries.iter_mut().find(|e| e.text == row.text) {
+                Some(mine) => {
+                    mine.uses = mine.uses.max(row.uses);
+                    mine.last_seen = mine.last_seen.max(row.last_seen);
+                    if mine.title.is_none() {
+                        mine.title = row.title;
+                    }
+                    if mine.favicon.is_none() {
+                        mine.favicon = row.favicon;
+                    }
+                    report.merged += 1;
+                }
+                None => {
+                    self.entries.push(row);
+                    report.added += 1;
+                }
+            }
+        }
+        if self.entries.len() > MAX_ENTRIES {
+            // Strongest first, then cut: same rule as `record`'s
+            // eviction — fewest uses, then oldest, goes.
+            self.entries
+                .sort_by(|a, b| (b.uses, b.last_seen).cmp(&(a.uses, a.last_seen)));
+            // What falls off can be an entry that was already here, so
+            // this counts rows dropped, not rows refused.
+            report.overflowed = self.entries.len() - MAX_ENTRIES;
+            self.entries.truncate(MAX_ENTRIES);
+        }
+        report
     }
 
     /// Case-insensitive substring match over text and title, best first:
@@ -176,7 +290,7 @@ impl Recorder {
         let entries = match store.load() {
             Ok(entries) => entries,
             Err(e) => {
-                eprintln!("cryo: {e:?}");
+                crate::report!("{e:?}");
                 Vec::new()
             }
         };
@@ -213,8 +327,33 @@ impl Recorder {
         self.store.save(self.history.entries())
     }
 
+    /// Attach a site's icon (`data:` URL) to a remembered URL and flush —
+    /// but only when the icon actually changed, since favicon events
+    /// repeat what the file already holds.
+    pub fn note_favicon(&mut self, text: &str, data_url: &str) -> Result<(), PersistError> {
+        if self.history.note_favicon(text, data_url) {
+            self.store.save(self.history.entries())?;
+        }
+        Ok(())
+    }
+
     pub fn matches(&self, needle: &str, limit: usize) -> Vec<&Entry> {
         self.history.matches(needle, limit)
+    }
+
+    /// Fold an imported history in and flush once. The caller has
+    /// already built valid entries through `Entry::new`.
+    pub fn import(&mut self, entries: Vec<Entry>) -> Result<MergeReport, PersistError> {
+        let report = self.history.merge(entries);
+        if report.added > 0 || report.merged > 0 {
+            self.store.save(self.history.entries())?;
+        }
+        Ok(report)
+    }
+
+    /// Everything remembered — what an export writes out.
+    pub fn entries(&self) -> &[Entry] {
+        self.history.entries()
     }
 }
 
@@ -277,6 +416,28 @@ mod tests {
     }
 
     #[test]
+    fn note_favicon_only_writes_real_changes() {
+        let mut h = History::default();
+        assert!(
+            !h.note_favicon("https://ghost", "data:x"),
+            "no entry, no write"
+        );
+        h.record("https://a", None, 1);
+        assert!(h.note_favicon("https://a", "data:one"));
+        assert_eq!(h.entries()[0].favicon.as_deref(), Some("data:one"));
+        assert!(
+            !h.note_favicon("https://a", "data:one"),
+            "same icon is a no-op"
+        );
+        assert!(h.note_favicon("https://a", "data:two"), "a new icon wins");
+        assert_eq!(h.entries()[0].favicon.as_deref(), Some("data:two"));
+        assert!(
+            !h.note_favicon("https://a", ""),
+            "an empty icon clears nothing"
+        );
+    }
+
+    #[test]
     fn full_history_evicts_the_weakest() {
         let mut h = History::default();
         for i in 0..MAX_ENTRIES {
@@ -309,5 +470,100 @@ mod tests {
         let mut rec = Recorder::session_only();
         rec.record("https://a", None, 1).unwrap();
         assert_eq!(rec.matches("a", 5).len(), 1);
+    }
+
+    #[test]
+    fn entry_new_validates_what_imports_hand_it() {
+        assert!(matches!(
+            Entry::new("   ", None, 1, 1),
+            Err(PersistError::NoText)
+        ));
+        let e = Entry::new("  https://a  ", Some("  "), 0, 7).unwrap();
+        assert_eq!(e.text, "https://a");
+        assert_eq!(e.title, None);
+        assert_eq!(e.uses, 1, "an imported visit happened at least once");
+        assert_eq!(e.last_seen, 7);
+    }
+
+    #[test]
+    fn merge_adds_new_rows_and_strengthens_known_ones() {
+        let mut h = History::default();
+        h.record("https://a", Some("Mine"), 10);
+        let report = h.merge(vec![
+            Entry::new("https://a", Some("Theirs"), 9, 5).unwrap(),
+            Entry::new("https://b", None, 3, 20).unwrap(),
+        ]);
+        assert_eq!(report.added, 1);
+        assert_eq!(report.merged, 1);
+        let a = h.entries().iter().find(|e| e.text == "https://a").unwrap();
+        assert_eq!(a.uses, 9, "the stronger count wins");
+        assert_eq!(a.last_seen, 10, "the later visit wins");
+        assert_eq!(a.title.as_deref(), Some("Mine"), "our own title stays");
+    }
+
+    #[test]
+    fn merge_fills_in_a_title_we_never_had() {
+        let mut h = History::default();
+        h.record("https://a", None, 1);
+        h.merge(vec![Entry::new("https://a", Some("Theirs"), 1, 1).unwrap()]);
+        assert_eq!(h.entries()[0].title.as_deref(), Some("Theirs"));
+    }
+
+    #[test]
+    fn merging_the_same_file_twice_changes_nothing_the_second_time() {
+        let rows = || {
+            vec![
+                Entry::new("https://a", Some("A"), 4, 10).unwrap(),
+                Entry::new("https://b", Some("B"), 2, 20).unwrap(),
+            ]
+        };
+        let mut h = History::default();
+        h.merge(rows());
+        let once: Vec<Entry> = h.entries().to_vec();
+        let report = h.merge(rows());
+        assert_eq!(report.added, 0);
+        assert_eq!(report.merged, 2);
+        assert_eq!(h.entries(), once.as_slice(), "an import is idempotent");
+    }
+
+    #[test]
+    fn merge_keeps_the_bound_and_the_strongest_rows() {
+        let mut h = History::default();
+        for _ in 0..9 {
+            h.record("https://mine-and-busy", None, 1);
+        }
+        let flood: Vec<Entry> = (0..MAX_ENTRIES + 100)
+            .map(|i| Entry::new(&format!("https://e{i}"), None, 1, i as u64).unwrap())
+            .collect();
+        let report = h.merge(flood);
+        assert_eq!(h.entries().len(), MAX_ENTRIES);
+        assert_eq!(report.overflowed, 101);
+        assert!(
+            h.entries()
+                .iter()
+                .any(|e| e.text == "https://mine-and-busy"),
+            "the busiest row is never the one cut"
+        );
+    }
+
+    #[test]
+    fn recorder_import_flushes_once_and_survives_a_reopen() {
+        let dir = std::env::temp_dir().join(format!("cryo-test-imp-{}", std::process::id()));
+        let path = dir.join("history.json");
+        let mut rec = Recorder::open(JsonFile::new(path.clone()));
+        let report = rec
+            .import(vec![Entry::new("https://a", Some("A"), 5, 42).unwrap()])
+            .unwrap();
+        assert_eq!(report.added, 1);
+        assert_eq!(rec.entries().len(), 1);
+        let reopened = Recorder::open(JsonFile::new(path.clone()));
+        assert_eq!(reopened.matches("https://a", 5)[0].uses, 5);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn importing_nothing_is_not_an_error() {
+        let mut rec = Recorder::session_only();
+        assert_eq!(rec.import(Vec::new()).unwrap(), MergeReport::default());
     }
 }

@@ -47,15 +47,17 @@ pub const NEW_TAB_HTML: &str = r##"<!doctype html>
 <head><meta charset="utf-8"><title>New tab</title><style>
   :root { color-scheme: dark; }
   body {
-    min-height: 100vh; margin: 0; display: flex; align-items: center;
+    min-height: 100vh; margin: 0; display: flex; align-items: flex-start;
     justify-content: center; background: #16181c; color: #d7dae0;
     font: 15px/1.6 system-ui, "Segoe UI", sans-serif;
     -webkit-user-select: none; user-select: none;
   }
   main {
     width: min(520px, calc(100vw - 48px));
-    /* sit a little above centre — dead-centre reads as low */
-    margin-bottom: 10vh; text-align: center;
+    /* Fixed drop from the top, not centreing: the dial tiles arrive over
+       an async fetch, and a centred block would jump up the moment they
+       land. ~15vh is where centreing put it anyway. */
+    margin-top: 15vh; text-align: center;
   }
   svg { width: 72px; height: 72px; margin: 0 auto; display: block; }
   .brand {

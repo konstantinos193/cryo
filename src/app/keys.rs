@@ -7,7 +7,7 @@ use tao::keyboard::{Key, ModifiersState};
 
 use crate::engine::{Accelerator, AcceleratorHandler, AcceleratorKey};
 
-use super::{post, report, App, AppEvent, DEFAULT_URL};
+use super::{post, App, AppEvent, DEFAULT_URL};
 
 /// What a keypress should do. One mapping serves both input paths —
 /// `AcceleratorKeyPressed` while a view has focus, and tao's
@@ -57,6 +57,12 @@ enum KeyCommand {
     /// Freeze the active tab: snapshot it, drop its view, hand focus to
     /// a neighbour. Clicking it later restores it.
     FreezeActive,
+    /// Ctrl+D: keep the active page on the bookmarks bar, or drop it
+    /// again if it is already kept.
+    BookmarkPage,
+    /// Ctrl+Shift+O: the library panel — kept pages, saved passwords,
+    /// import and export.
+    Library,
 }
 
 /// Map a key to the browser command it triggers, plus whether the key is
@@ -124,6 +130,8 @@ fn key_command(acc: Accelerator) -> Option<(KeyCommand, bool)> {
         (true, false, false, Character('0')) => (KeyCommand::Zoom(0), true),
         (true, false, true, Character('s')) => (KeyCommand::Screenshot, true),
         (true, false, true, Character('f')) => (KeyCommand::FreezeActive, true),
+        (true, false, false, Character('d')) => (KeyCommand::BookmarkPage, true),
+        (true, false, true, Character('o')) => (KeyCommand::Library, true),
         (true, false, true, Delete) => (KeyCommand::ClearBrowsingData, true),
         _ => return None,
     };
@@ -179,7 +187,7 @@ impl App {
             return;
         };
         if let Err(e) = self.on_accelerator(acc, control_flow) {
-            report(e);
+            crate::report!("{e:?}");
         }
     }
 
@@ -247,6 +255,8 @@ impl App {
                 .chrome
                 .clear_browsing_data()
                 .map_err(|e| anyhow::anyhow!(e)),
+            KeyCommand::BookmarkPage => self.bookmark_active(),
+            KeyCommand::Library => self.toggle_library(),
             KeyCommand::FreezeActive => match self.registry.active_id() {
                 Some(id) => self.freeze_tab(id),
                 None => Ok(()),

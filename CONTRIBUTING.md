@@ -30,9 +30,12 @@ The installer is Inno Setup (`installer/cryo.iss`) — a per-user install to
 1. Bump `version` in `Cargo.toml`, land it on `main`.
 2. `git tag vX.Y.Z && git push origin vX.Y.Z` — the tag must equal the
    Cargo.toml version; the release pipeline refuses mismatches.
-3. `release.yml` builds `cryo.exe`, compiles `cryo-setup.exe`, writes
-   `latest.json` (version + pinned installer URL + sha256) and publishes
-   the GitHub Release.
+3. `release.yml` builds every desktop target and publishes the GitHub
+   Release: `cryo-setup.exe` + `latest.json` (Windows),
+   `cryo_<ver>_amd64.deb` + `cryo-x86_64-unknown-linux-gnu.tar.gz`
+   (Linux), `Cryo.app` packed as `cryo-<target>.tar.gz` for both
+   `aarch64-apple-darwin` and `x86_64-apple-darwin` (macOS). Only the
+   Windows job writes `latest.json` — the updater is Windows-only.
 
 Self-update: release builds fetch
 `releases/latest/download/latest.json` at launch on a worker thread. A

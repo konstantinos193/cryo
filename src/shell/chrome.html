@@ -1,0 +1,1161 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    color: #d7dae0;
+    font: 12px/1.4 system-ui, "Segoe UI", sans-serif;
+    -webkit-user-select: none; user-select: none;
+  }
+  /* The visible strip. The view is transparent and grows over the whole
+     window while the menu is open — everything outside #bar and the popup
+     must stay unpainted so the page shows through. */
+  #bar {
+    position: fixed; top: 0; left: 0; right: 0; height: 44px;
+    display: flex; align-items: center; gap: 6px;
+    background: #1b1d21; padding: 0 8px;
+  }
+  /* The speed-dial row — offsets must match BAR_HEIGHT / DIAL_HEIGHT in
+     shell::mod. Painted like #bar: the view is transparent, so an
+     unpainted row would let the page show through. */
+  #dial {
+    position: fixed; top: 44px; left: 0; right: 0; height: 32px;
+    display: flex; align-items: center; gap: 2px;
+    background: #1b1d21; padding: 0 8px; overflow: hidden;
+    border-top: 1px solid #23262c;
+  }
+  .dial {
+    display: flex; align-items: center; gap: 6px; flex: 0 0 auto;
+    height: 24px; padding: 0 8px 0 4px; border: 0; border-radius: 6px;
+    background: transparent; color: #c9cdd4; font: inherit; cursor: pointer;
+    white-space: nowrap;
+  }
+  .dial:hover { background: #2e323a; }
+  .dial .dot {
+    display: flex; align-items: center; justify-content: center;
+    width: 18px; height: 18px; border-radius: 5px;
+    background: #17455a; color: #a2deee; font-size: 11px; font-weight: 600;
+  }
+  #tabs { display: flex; gap: 4px; overflow: hidden; flex: 0 1 auto; }
+  .tab {
+    display: flex; align-items: center; gap: 6px;
+    max-width: 180px; padding: 5px 8px;
+    background: #26292f; border-radius: 7px 7px 0 0;
+    cursor: default; white-space: nowrap;
+  }
+  .tab.active { background: #3a3f47; }
+  .tab .title { overflow: hidden; text-overflow: ellipsis; }
+  .tab .x { color: #8a8f98; padding: 0 3px; border-radius: 3px; }
+  .tab .x:hover { background: #4a505a; color: #fff; }
+  /* The site icon at the tab's leading edge. */
+  .tab .fav {
+    width: 14px; height: 14px; flex: 0 0 auto; border-radius: 3px;
+  }
+  /* The per-tab freeze button. */
+  .tab .fz {
+    color: #7fb6c9; padding: 0 3px; border-radius: 3px; cursor: default;
+  }
+  .tab .fz:hover { background: #4a505a; color: #cfeeff; }
+  /* A frozen tab shows the same flake as a static state marker. */
+  .tab .fzmark { color: #7fb6c9; padding: 0 3px; }
+  .tab.frozen .title { color: #9db4c0; font-style: italic; }
+  .tab.discarded .title { color: #6b717b; }
+  .nav, #new-tab {
+    flex: 0 0 auto; width: 26px; height: 26px; border: 0; border-radius: 6px;
+    background: transparent; color: #d7dae0; font-size: 16px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .nav:hover, #new-tab:hover { background: #2e323a; }
+  .nav { font-size: 14px; }
+  .nav svg { width: 15px; height: 15px; }
+  /* No history to step into — the arrow greys out instead of no-op'ing. */
+  .nav:disabled { color: #525761; cursor: default; }
+  .nav:disabled:hover { background: transparent; }
+  /* Reload ↔ stop: one button, two glyphs — loading swaps them. */
+  #reload .ic-stop { display: none; }
+  #reload.loading .ic-reload { display: none; }
+  #reload.loading .ic-stop { display: block; }
+  /* The load bar: an indeterminate strip sliding along the bar's bottom
+     edge while the active tab loads. */
+  #loadbar {
+    position: fixed; top: 42px; left: 0; right: 0; height: 2px;
+    overflow: hidden; pointer-events: none;
+  }
+  #loadbar i {
+    position: absolute; top: 0; left: -35%; height: 2px; width: 35%;
+    background: #5a8adf; border-radius: 1px; opacity: 0;
+  }
+  #loadbar.on i { opacity: 1; animation: loadslide 1s ease-in-out infinite; }
+  @keyframes loadslide {
+    0%   { left: -35%; width: 35%; }
+    60%  { left: 60%;  width: 45%; }
+    100% { left: 100%; width: 30%; }
+  }
+  /* The loading spinner that replaces a tab's favicon. */
+  .tab .spin {
+    width: 12px; height: 12px; flex: 0 0 auto; border-radius: 50%;
+    border: 2px solid #4a505a; border-top-color: #a2deee;
+    animation: tabspin .7s linear infinite;
+  }
+  @keyframes tabspin { to { transform: rotate(360deg); } }
+  #url {
+    flex: 1 1 auto; min-width: 120px; height: 28px;
+    background: #26292f; border: 1px solid #363a42; border-radius: 7px;
+    color: #e8eaee; padding: 0 10px; font: inherit; outline: none;
+    -webkit-user-select: text; user-select: text;
+  }
+  #url:focus { border-color: #5a8adf; }
+  #signin {
+    flex: 0 0 auto; height: 26px; padding: 0 10px;
+    border: 1px solid #3d434d; border-radius: 13px;
+    background: transparent; color: #9ec2f5; font: inherit; cursor: pointer;
+  }
+  #signin:hover { background: #2a2f38; }
+  /* Downloads button: hidden until a file starts; the thin bar under
+     the glyph is aggregate in-flight progress. */
+  #dl { position: relative; }
+  #dl svg, .dl-row .act svg { display: block; margin: 0 auto; }
+  /* First appearance and each new transfer pop the icon. */
+  @keyframes dlpop {
+    0% { transform: scale(.4); } 60% { transform: scale(1.25); }
+    100% { transform: scale(1); }
+  }
+  #dl.pop { animation: dlpop .35s ease-out; }
+  #dl .bar {
+    position: absolute; left: 5px; bottom: 3px; height: 2px; width: 0;
+    background: #5a8adf; border-radius: 1px; transition: width .15s linear;
+  }
+  /* No declared size: the fill can't be computed, so a segment sweeps
+     the track instead — something visibly alive while bytes move. */
+  #dl .bar.ind { animation: dlsweep 1.1s ease-in-out infinite; }
+  @keyframes dlsweep {
+    0% { left: 5px; } 50% { left: 60%; } 100% { left: 5px; }
+  }
+  /* A row that just finished flashes once. */
+  @keyframes dlflash {
+    0% { background: rgba(78,201,111,.28); } 100% { background: transparent; }
+  }
+  .dl-row.flash { animation: dlflash .9s ease-out; }
+  #dl-pop {
+    display: none; position: fixed; top: 40px; right: 36px; z-index: 10;
+    min-width: 260px; max-width: 340px; max-height: 300px; overflow-y: auto;
+    padding: 4px 0;
+    background: #26292f; border: 1px solid #3a3f47; border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.45);
+  }
+  #dl-pop.open { display: block; }
+  .dl-row { padding: 6px 14px; }
+  .dl-row .top { display: flex; align-items: center; gap: 8px; }
+  .dl-row .nm {
+    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .dl-row .act {
+    flex: 0 0 auto; border: 0; border-radius: 4px; padding: 1px 5px;
+    background: transparent; color: #9fb4c8; font-size: 12px; cursor: pointer;
+  }
+  .dl-row .act:hover { background: #4a505a; color: #fff; }
+  .dl-row .meta { color: #8a8f98; font-size: 11px; }
+  /* A finished row is both a link and a drag source. */
+  .dl-row.done { cursor: grab; }
+  .dl-row.done .nm { cursor: pointer; }
+  .dl-row.done .nm:hover { color: #fff; }
+  .dl-row .act.retry { padding: 1px 7px; }
+  #menu-pop {
+    display: none; position: fixed; top: 40px; right: 8px; z-index: 10;
+    min-width: 220px; padding: 6px 0;
+    background: #26292f; border: 1px solid #3a3f47; border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.45);
+  }
+  #menu-pop.open, #omni-pop.open { display: block; }
+  /* The omnibox dropdown anchors under the toolbar (top = BAR_HEIGHT)
+     and positions itself over the dial bar like every browser's does. */
+  #omni-pop {
+    display: none; position: fixed; top: 44px; z-index: 10;
+    padding: 6px 0;
+    background: #26292f; border: 1px solid #3a3f47; border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.45);
+  }
+  .mi { padding: 7px 14px; cursor: default; white-space: nowrap; }
+  .mi:hover, .mi.sel { background: #3a3f47; }
+  .mi.off { color: #6b717b; }
+  .mi.off:hover { background: transparent; }
+  .mi.upd { color: #4ec96f; }
+  #menu { position: relative; }
+  #menu.has-update::after {
+    content: ''; position: absolute; top: 4px; right: 4px;
+    width: 7px; height: 7px; border-radius: 50%;
+    background: #4ec96f;
+  }
+  .omni-row { display: flex; align-items: center; gap: 8px; }
+  /* The row's leading slot: the site's favicon when history holds one,
+     a glyph for the search/go verdict, else a letter dot — same look
+     the dial bar gives its entries. */
+  .omni-row .ic { width: 14px; height: 14px; flex: 0 0 auto; border-radius: 3px; }
+  .omni-row .glyph { color: #8a8f98; }
+  .omni-row .glyph svg { display: block; width: 14px; height: 14px; }
+  .omni-row .dot {
+    display: flex; align-items: center; justify-content: center;
+    background: #17455a; color: #a2deee; font-size: 10px; font-weight: 600;
+  }
+  .omni-row .lbl {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .sep { height: 1px; background: #3a3f47; margin: 5px 0; }
+  /* ★: fills in while the active page is kept. */
+  #star { color: #8a8f98; font-size: 15px; }
+  #star.on { color: #e8c45e; }
+  /* The bar's trailing "»" into the library panel. */
+  .dial.all { color: #8a8f98; padding: 0 8px; }
+  .dial.all:hover { color: #e6e9ee; }
+  /* The library panel. Fills the window while it is open — the app has
+     stretched this view over everything by then — and dims what is
+     behind it so the page does not read as interactive. */
+  #lib {
+    display: none; position: fixed; inset: 0; z-index: 20;
+    background: rgba(9, 10, 12, .55);
+    align-items: center; justify-content: center;
+  }
+  #lib.open { display: flex; }
+  #lib .panel {
+    display: flex; flex-direction: column;
+    width: min(880px, calc(100vw - 48px)); max-height: 78vh;
+    background: #1f2228; border: 1px solid #3a3f47; border-radius: 12px;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, .55); overflow: hidden;
+  }
+  #lib header {
+    display: flex; align-items: center; gap: 4px;
+    padding: 10px 12px; border-bottom: 1px solid #2a2e35;
+  }
+  #lib .tab-btn {
+    border: 0; border-radius: 7px; padding: 6px 12px;
+    background: transparent; color: #c9cdd4; font: inherit; cursor: pointer;
+  }
+  #lib .tab-btn:hover { background: #282c33; }
+  #lib .tab-btn.on { background: #2e323a; color: #fff; }
+  #lib .close { margin-left: auto; font-size: 15px; }
+  #lib .body { padding: 10px 14px 16px; overflow-y: auto; }
+  #lib .search {
+    width: 100%; height: 28px; margin: 2px 0 8px;
+    background: #26292f; border: 1px solid #363a42; border-radius: 7px;
+    color: #e8eaee; padding: 0 10px; font: inherit; outline: none;
+    -webkit-user-select: text; user-select: text;
+  }
+  #lib .search:focus { border-color: #5a8adf; }
+  .lrow {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 4px; border-bottom: 1px solid #23262c;
+  }
+  .lrow:hover { background: #24272d; }
+  .lrow .main { flex: 1 1 auto; min-width: 0; }
+  .lrow .t, .lrow .u {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .lrow .u { color: #8a8f98; font-size: 11px; }
+  .lrow .fold {
+    flex: 0 0 auto; color: #7fb6c9; font-size: 11px; max-width: 160px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .lrow .dots {
+    flex: 0 0 auto; color: #9fb4c8; font-family: ui-monospace, Consolas, monospace;
+    -webkit-user-select: text; user-select: text;
+  }
+  .lbtn {
+    flex: 0 0 auto; border: 1px solid #3d434d; border-radius: 6px;
+    padding: 4px 9px; background: transparent; color: #c9cdd4;
+    font: inherit; cursor: pointer;
+  }
+  .lbtn:hover { background: #2e323a; color: #fff; }
+  .lbtn.warn { color: #e3a9a9; border-color: #5c3b3b; }
+  .lbtn.warn:hover { background: #3a2a2a; }
+  .lhead {
+    margin: 16px 2px 6px; color: #8a8f98; font-size: 11px;
+    text-transform: uppercase; letter-spacing: .08em;
+  }
+  .lhead:first-child { margin-top: 4px; }
+  .lnote { margin: 8px 2px; color: #8a8f98; line-height: 1.55; }
+  .lnote.warn { color: #e3a9a9; }
+  .lempty { padding: 18px 2px; color: #8a8f98; }
+  /* What an import or export did. Sits bottom-right, out of the way of
+     the panel's own content, and times itself out. */
+  #toast {
+    display: none; position: fixed; right: 14px; bottom: 14px; z-index: 30;
+    max-width: 380px; padding: 10px 13px;
+    background: #26292f; border: 1px solid #3a3f47;
+    border-left: 3px solid #4ec96f; border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .5);
+  }
+  #toast.open { display: block; }
+  #toast.bad { border-left-color: #e06c6c; }
+  #toast .tt { font-weight: 600; }
+  #toast .tl { color: #a9aeb7; font-size: 11px; margin-top: 2px; }
+</style>
+</head>
+<body>
+  <div id="bar">
+    <button class="nav" id="back" title="Back (Alt+Left)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg></button>
+    <button class="nav" id="fwd" title="Forward (Alt+Right)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 5.5 16 12l-6.5 6.5"/></svg></button>
+    <button class="nav" id="reload" title="Reload (F5)"><svg class="ic-reload" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 3.5v4h-4"/></svg><svg class="ic-stop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg></button>
+    <div id="tabs"></div>
+    <button id="new-tab" title="New tab (Ctrl+T)">+</button>
+    <input id="url" type="text" spellcheck="false"
+           placeholder="Search or enter address">
+    <button class="nav" id="star" title="Bookmark this page (Ctrl+D)">★</button>
+    <button id="signin" title="Sign in with your Google account">Sign in</button>
+    <button class="nav" id="dl" title="Downloads" hidden><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 1.5v6.8"/><path d="M3.8 5.2 7 8.4l3.2-3.2"/><path d="M2 11.5h10"/></svg><i class="bar"></i></button>
+    <button class="nav" id="menu" title="Menu">⋮</button>
+  </div>
+  <div id="loadbar"><i></i></div>
+  <div id="dial"></div>
+  <div id="menu-pop"></div>
+  <div id="omni-pop"></div>
+  <div id="dl-pop"></div>
+  <div id="lib">
+    <div class="panel">
+      <header>
+        <button class="tab-btn" data-pane="bookmarks">Bookmarks</button>
+        <button class="tab-btn" data-pane="passwords">Passwords</button>
+        <button class="tab-btn" data-pane="import">Import</button>
+        <button class="tab-btn" data-pane="export">Export</button>
+        <button class="tab-btn close" title="Close (Esc)">✕</button>
+      </header>
+      <div class="body"></div>
+    </div>
+  </div>
+  <div id="toast"></div>
+<script>
+  // wry's window.ipc channel is dead on this backend: attaching
+  // with_ipc_handler leaves the document's own scripts unexecuted.
+  // Commands go over the internal protocol instead — POSTs to /cmd land
+  // in the engine's page resolver and reach the app unchanged.
+  const ipc = (obj) => fetch('/cmd', {method: 'POST', body: JSON.stringify(obj)});
+  const tabsEl = document.getElementById('tabs');
+  const urlEl = document.getElementById('url');
+  ipc({cmd: 'ready'});
+
+  const backBtn = document.getElementById('back');
+  const fwdBtn = document.getElementById('fwd');
+  const reloadBtn = document.getElementById('reload');
+  const loadbar = document.getElementById('loadbar');
+  document.getElementById('new-tab').onclick = () => ipc({cmd: 'new_tab'});
+  backBtn.onclick = () => ipc({cmd: 'back'});
+  fwdBtn.onclick = () => ipc({cmd: 'forward'});
+  // One button, two jobs: while a page loads it's the stop control.
+  reloadBtn.onclick = () =>
+    ipc({cmd: reloadBtn.classList.contains('loading') ? 'stop' : 'reload'});
+  document.getElementById('signin').onclick = () => ipc({cmd: 'sign_in'});
+
+  const menuPop = document.getElementById('menu-pop');
+  const omniPop = document.getElementById('omni-pop');
+  const dlPop = document.getElementById('dl-pop');
+  const dlBtn = document.getElementById('dl');
+  // Popups live in this document, but the view's bounds are only the
+  // strip — a view can't paint outside them. While any overlay (menu,
+  // omnibox, downloads) is open the app raises this view above the
+  // content and stretches it over the whole window; the aggregate state
+  // is reported so the bounds stay in sync. Clicks anywhere outside a
+  // popup land on this document and dismiss.
+  let menuOpen = false, omniOpen = false, dlOpen = false, libOpen = false;
+  const reportOverlay = () =>
+    ipc({cmd: 'overlay', open: menuOpen || omniOpen || dlOpen || libOpen});
+  const setMenu = (open) => {
+    if (open === menuOpen) return;
+    menuOpen = open;
+    menuPop.classList.toggle('open', open);
+    reportOverlay();
+  };
+  const setOmni = (open) => {
+    if (open === omniOpen) return;
+    omniOpen = open;
+    omniPop.classList.toggle('open', open);
+    reportOverlay();
+  };
+  const setDl = (open) => {
+    if (open === dlOpen) return;
+    dlOpen = open;
+    dlPop.classList.toggle('open', open);
+    reportOverlay();
+  };
+  // The library panel: bookmarks, saved passwords, import and export.
+  // It is a chrome overlay like the others — the app stretches this view
+  // over the window while it is up — but it fills the window rather
+  // than hanging off a button, and it asks the app for the pane's data
+  // every time it opens so it never shows a stale list.
+  const setLib = (open) => {
+    if (open === libOpen) return;
+    libOpen = open;
+    libEl.classList.toggle('open', open);
+    // A revealed password lives as long as the panel does.
+    if (!open) revealed.clear();
+    reportOverlay();
+  };
+  const openLib = (pane) => {
+    setMenu(false); setOmni(false); setDl(false);
+    libPane = pane;
+    // Start the pane empty rather than showing the last one's rows for
+    // the frame before the app's push lands.
+    libData = {pane, bookmarks: [], passwords: [], sources: [],
+               more_bookmarks: 0, more_passwords: 0, locked: null,
+               sources_ready: false, incognito: libData.incognito};
+    libFilter = '';
+    setLib(true);
+    paintLib();
+    ipc({cmd: 'library', pane});
+  };
+  // Ctrl+Shift+O lands here.
+  window.__cryo_library_toggle = (pane) => {
+    if (libOpen && (!pane || pane === libPane)) { setLib(false); return; }
+    openLib(pane || 'bookmarks');
+  };
+  // The app calls this when it replaces what's on screen (tab switch,
+  // navigation, fullscreen) — the document can't see those actions.
+  window.__cryo_overlay = (open) => {
+    if (!open) { setMenu(false); setOmni(false); setDl(false); setLib(false); }
+  };
+  // Ctrl+J lands here — the engine's own downloads page is kept shut by
+  // stealing the chord in key_command; this shelf is the replacement.
+  window.__cryo_downloads = () => {
+    setMenu(false); setOmni(false);
+    setDl(!dlOpen);
+  };
+  // Last pushed state — menu guards (freeze/discard need a second tab to
+  // hand focus to) read it at click time.
+  let lastState = {tabs: []};
+  const hasNeighbour = () => lastState.tabs.length > 1;
+  const MENU = [
+    {label: 'Freeze tab (Ctrl+Shift+F)', cmd: {cmd: 'freeze'}, ok: hasNeighbour},
+    {label: 'Discard tab', cmd: {cmd: 'discard'}, ok: hasNeighbour},
+    'sep',
+    {label: 'Bookmark this page (Ctrl+D)', cmd: {cmd: 'bookmark_page'}},
+    {label: 'Bookmarks (Ctrl+Shift+O)', lib: 'bookmarks'},
+    {label: 'Saved passwords', lib: 'passwords'},
+    {label: 'Import browser data…', lib: 'import'},
+    {label: 'Export browser data…', lib: 'export'},
+    'sep',
+    {label: 'New incognito window (Ctrl+Shift+N)', cmd: {cmd: 'new_incognito'}},
+    {label: 'DevTools (F12)', cmd: {cmd: 'devtools'}},
+    {label: 'Clear browsing data (Ctrl+Shift+Del)', cmd: {cmd: 'clear_data'}},
+    'sep',
+    {label: 'Settings', cmd: {cmd: 'settings'}},
+    {label: 'Extensions — not supported (needs Chromium)', off: true},
+    'sep',
+    {label: 'Check for updates', cmd: {cmd: 'check_updates'}},
+  ];
+  // The update item lives outside MENU: it only exists while a verified
+  // installer is staged, and its label carries the version. __cryo_update
+  // creates/refreshes it.
+  let updateItem = document.createElement('div');
+  updateItem.className = 'mi upd';
+  updateItem.onclick = () => { setMenu(false); ipc({cmd: 'update_apply'}); };
+  for (const item of MENU) {
+    if (item === 'sep') {
+      const s = document.createElement('div');
+      s.className = 'sep';
+      menuPop.appendChild(s);
+      continue;
+    }
+    const el = document.createElement('div');
+    el.className = 'mi' + (item.off ? ' off' : '');
+    el.textContent = item.label;
+    if (!item.off) el.onclick = () => {
+      setMenu(false);
+      // Items can refuse at click time when the state forbids them —
+      // the app would no-op anyway, but a dead click shouldn't look live.
+      if (item.ok && !item.ok()) return;
+      ipc(item.cmd);
+    };
+    menuPop.appendChild(el);
+  }
+  document.getElementById('menu').onclick = (e) => {
+    e.stopPropagation();
+    setDl(false); setOmni(false);
+    setMenu(!menuOpen);
+  };
+  dlBtn.onclick = (e) => {
+    e.stopPropagation();
+    setMenu(false); setOmni(false);
+    setDl(!dlOpen);
+  };
+  // Row buttons live inside the pop — clicks there must not bubble to
+  // the document's dismiss-all.
+  dlPop.onclick = (e) => e.stopPropagation();
+  document.addEventListener('click', () => {
+    setMenu(false); setOmni(false); setDl(false); setLib(false);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      setMenu(false); setOmni(false); setDl(false); setLib(false);
+    }
+  });
+
+  // The dial list feeds the bar below; omnibox suggestions are computed
+  // app-side instead — history never reaches this document.
+  let dialEntries = [];
+
+  // Omnibox dropdown: each keystroke asks the app, __cryo_suggest paints
+  // the reply. Rows keep `input` — what gets sent back through navigate.
+  let omniSel = -1;
+  let omniRows = [];
+  // What the user typed before arrows started browsing rows — cycling
+  // back off the list (or Escape) restores it.
+  let omniTyped = null;
+
+  // Fallback glyphs for the verdict row — a magnifier for searches, a
+  // globe for navigations. Sites without a remembered favicon get a
+  // letter dot instead.
+  const GLYPHS = {
+    search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M16.3 16.3 21 21"/></svg>',
+    go: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3.5 12h17M12 3c2.6 2.8 4 5.6 4 9s-1.4 6.2-4 9c-2.6-2.8-4-5.6-4-9s1.4-6.2 4-9z"/></svg>',
+    bookmark: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3.6l2.5 5.2 5.7.8-4.1 4 1 5.7-5.1-2.8-5.1 2.8 1-5.7-4.1-4 5.7-.8z"/></svg>',
+  };
+
+  const go = (input, e) => {
+    ipc({cmd: 'navigate', input,
+         ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey});
+    urlEl.blur();
+  };
+
+  const paintSel = () => {
+    [...omniPop.children].forEach((el, i) =>
+      el.classList.toggle('sel', i === omniSel));
+  };
+
+  const renderOmni = () => {
+    const q = urlEl.value.trim();
+    omniSel = -1;
+    omniTyped = null;
+    if (!q) {
+      omniRows = [];
+      omniPop.innerHTML = '';
+      setOmni(false);
+      return;
+    }
+    // The old rows stay until the reply lands — clearing them here
+    // would flash an empty popup on every keystroke.
+    ipc({cmd: 'suggest', q});
+  };
+
+  const omniIcon = (r) => {
+    if (r.icon) {
+      const img = document.createElement('img');
+      img.className = 'ic'; img.src = r.icon; img.alt = '';
+      return img;
+    }
+    const ic = document.createElement('span');
+    if (GLYPHS[r.kind]) {
+      ic.className = 'ic glyph';
+      ic.innerHTML = GLYPHS[r.kind];
+    } else {
+      ic.className = 'ic dot';
+      ic.textContent = (r.label[0] || '?').toUpperCase();
+    }
+    return ic;
+  };
+
+  window.__cryo_suggest = (reply) => {
+    // Drop a stale reply — the user typed on or blurred meanwhile.
+    if (document.activeElement !== urlEl || urlEl.value.trim() !== reply.q) {
+      return;
+    }
+    omniSel = -1;
+    omniRows = reply.rows.slice(0, 8);
+    omniPop.innerHTML = '';
+    for (const r of omniRows) {
+      const el = document.createElement('div');
+      el.className = 'mi omni-row';
+      const lbl = document.createElement('span');
+      lbl.className = 'lbl';
+      lbl.textContent = r.label;
+      el.append(omniIcon(r), lbl);
+      // mousedown beats blur — preventDefault keeps the input focused so
+      // the click lands instead of the popup closing under it.
+      el.onmousedown = (e) => e.preventDefault();
+      el.onclick = (e) => { e.stopPropagation(); go(r.input, e); };
+      omniPop.appendChild(el);
+    }
+    if (!omniRows.length) { setOmni(false); return; }
+    const rect = urlEl.getBoundingClientRect();
+    omniPop.style.left = rect.left + 'px';
+    omniPop.style.width = rect.width + 'px';
+    setOmni(true);
+  };
+
+  urlEl.addEventListener('input', renderOmni);
+  urlEl.addEventListener('focus', renderOmni);
+  urlEl.addEventListener('blur', () => setOmni(false));
+
+  urlEl.addEventListener('keydown', (e) => {
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && omniOpen) {
+      const n = omniRows.length;
+      if (!n) return;
+      e.preventDefault();
+      if (omniSel === -1) omniTyped = urlEl.value;
+      // Down cycles through the rows and off the end back to the typed
+      // text; Up does the same in reverse — the box mirrors the row.
+      if (e.key === 'ArrowDown') {
+        omniSel = omniSel + 1 >= n ? -1 : omniSel + 1;
+      } else {
+        omniSel = omniSel === -1 ? n - 1 : omniSel - 1;
+      }
+      urlEl.value = omniSel === -1 ? omniTyped : omniRows[omniSel].input;
+      urlEl.select();
+      paintSel();
+      return;
+    }
+    // Chrome's inline autocompletion: at the end of the input, → or End
+    // accepts the top completable row — the typed text stays, the tail
+    // arrives selected so typing overwrites it.
+    if ((e.key === 'ArrowRight' || e.key === 'End') &&
+        urlEl.selectionStart === urlEl.value.length &&
+        urlEl.selectionEnd === urlEl.value.length) {
+      const v = urlEl.value.toLowerCase();
+      const row = omniRows.find((r) =>
+        r.complete && r.complete.length > v.length &&
+        r.complete.toLowerCase().startsWith(v));
+      if (row) {
+        e.preventDefault();
+        urlEl.value = row.complete;
+        urlEl.setSelectionRange(v.length, row.complete.length);
+      }
+      return;
+    }
+    if (e.key === 'Enter') {
+      go(omniSel >= 0 ? omniRows[omniSel].input : urlEl.value, e);
+    } else if (e.key === 'Escape' && omniTyped !== null) {
+      // Arrow-browsing filled the box — give the typed text back before
+      // the document handler tucks the popup.
+      urlEl.value = omniTyped;
+      omniTyped = null;
+    } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'l') {
+      // Edge's paste-and-go.
+      navigator.clipboard.readText().then((t) => {
+        if (t) { ipc({cmd: 'navigate', input: t}); urlEl.blur(); }
+      }).catch(() => {});
+      e.preventDefault();
+    }
+  });
+
+  // Dial bar: the same pinned list the new-tab tiles render. A click
+  // navigates the active tab — favorites-bar behaviour; Ctrl or middle
+  // click opens a new tab and Ctrl+Shift a background one, expressed
+  // through the navigate command's modifier fields (policy stays in app).
+  fetch('/dials').then(r => r.json()).then(dials => {
+    dialEntries = dials;
+    renderBar(lastState.bookmarks || []);
+  }).catch(() => {});
+
+  // One row, two sources: kept bookmarks once there are any, the pinned
+  // dial list until then — a fresh profile still has somewhere to click.
+  // Both speak the same two clicks: open here, or Ctrl/middle for a tab.
+  const renderBar = (bookmarks) => {
+    const bar = document.getElementById('dial');
+    bar.innerHTML = '';
+    const rows = bookmarks.length
+      ? bookmarks.map((b) => ({name: b.title, url: b.url, id: b.id}))
+      : dialEntries.map((d) => ({name: d.name, url: d.url, id: null}));
+    for (const r of rows) {
+      const el = document.createElement('button');
+      el.className = 'dial';
+      el.title = r.url + '\nClick: open here · Ctrl/middle-click: new tab' +
+                 (r.id === null ? '' : ' · right-click: remove');
+      const dot = document.createElement('span');
+      dot.className = 'dot';
+      dot.textContent = (r.name || r.url).charAt(0).toUpperCase();
+      const label = document.createElement('span');
+      label.textContent = r.name || r.url;
+      el.append(dot, label);
+      // A bookmark goes through its own command so the app resolves the
+      // id; a dial is just an address.
+      el.onclick = (e) => r.id === null
+        ? ipc({cmd: 'navigate', input: r.url, alt: e.ctrlKey, shift: e.shiftKey})
+        : ipc({cmd: 'bookmark_open', id: r.id, ctrl: e.ctrlKey, shift: e.shiftKey});
+      el.onauxclick = (e) => {
+        if (e.button !== 1) return;
+        if (r.id === null) ipc({cmd: 'navigate', input: r.url, alt: true});
+        else ipc({cmd: 'bookmark_open', id: r.id, ctrl: true});
+      };
+      if (r.id !== null) {
+        el.oncontextmenu = (e) => {
+          e.preventDefault();
+          ipc({cmd: 'bookmark_remove', id: r.id});
+        };
+      }
+      bar.appendChild(el);
+    }
+    // The bar's own way into the panel, like every browser's "»".
+    const all = document.createElement('button');
+    all.className = 'dial all';
+    all.title = 'Bookmarks, passwords, import and export (Ctrl+Shift+O)';
+    all.textContent = bookmarks.length ? '»' : '★ »';
+    all.onclick = () => openLib('bookmarks');
+    bar.appendChild(all);
+  };
+
+  // Browser shortcuts are not handled here — the engine forwards every
+  // accelerator to the app before the page sees it, for chrome and content
+  // views alike.
+
+  // Download shelf: the ⬇ button appears once the first file lands;
+  // the bar under the glyph is aggregate in-flight progress.
+  const fmtBytes = (n) => {
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return Math.round(n / 1024) + ' KB';
+    if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+    return (n / 1073741824).toFixed(2) + ' GB';
+  };
+
+  let dlCloseTimer = null;
+
+  const renderDl = (dls, prev) => {
+    const prevDls = prev.downloads || [];
+    const wasProg = new Set(
+      prevDls.filter((d) => d.state === 'progress').map((d) => d.key));
+    const prevState = new Map(prevDls.map((d) => [d.key, d.state]));
+    const nowProg = dls.filter((d) => d.state === 'progress');
+
+    dlBtn.hidden = !dls.length;
+
+    // A download that wasn't in flight last update just started: pop
+    // the icon and open the shelf, the way Chrome opens its bubble.
+    const started = nowProg.some((d) => !wasProg.has(d.key));
+    if (started) {
+      dlBtn.classList.remove('pop');
+      void dlBtn.offsetWidth;   // restart the animation
+      dlBtn.classList.add('pop');
+      setDl(true);
+      if (dlCloseTimer) { clearTimeout(dlCloseTimer); dlCloseTimer = null; }
+    }
+    // The last transfer settled — the shelf lingers a beat, then tucks.
+    if (!nowProg.length && wasProg.size && dlOpen && !dlCloseTimer) {
+      dlCloseTimer = setTimeout(() => {
+        dlCloseTimer = null;
+        if (dlOpen) setDl(false);
+      }, 3000);
+    }
+
+    // Aggregate bar under the glyph: mean of known shares, or the
+    // sweeping segment when nothing declares a size.
+    let share = 0, parts = 0;
+    for (const d of nowProg) {
+      if (d.total) { share += d.received / d.total; parts++; }
+    }
+    const any = nowProg.length > 0;
+    const bar = dlBtn.querySelector('.bar');
+    bar.style.width = any ? Math.round((parts ? share / parts : 0.4) * 100) + '%' : '0';
+    bar.classList.toggle('ind', any && !parts);
+
+    dlPop.innerHTML = '';
+    if (!dls.length) {
+      const empty = document.createElement('div');
+      empty.className = 'mi off';
+      empty.textContent = 'No downloads';
+      dlPop.appendChild(empty);
+    }
+    // One row verb per state: progress pauses or dies, paused resumes,
+    // done opens/drags/reveals, dead ones retry.
+    const act = (title, glyph, cmd) => {
+      const b = document.createElement('button');
+      b.className = 'act';
+      b.title = title;
+      b.innerHTML = glyph;
+      b.onclick = cmd;
+      return b;
+    };
+    const IC = {
+      pause: '<svg width="12" height="12" viewBox="0 0 14 14" fill="currentColor"><rect x="3.5" y="2.5" width="2.6" height="9" rx="1"/><rect x="7.9" y="2.5" width="2.6" height="9" rx="1"/></svg>',
+      play: '<svg width="12" height="12" viewBox="0 0 14 14" fill="currentColor"><path d="M4 2.5v9a1 1 0 0 0 1.52.85l6.8-4.5a1 1 0 0 0 0-1.7l-6.8-4.5A1 1 0 0 0 4 2.5z"/></svg>',
+      folder: '<svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M1.5 3.5h4l1.5 1.8h5.5v5.9h-11z"/></svg>',
+    };
+    // A finished file drags out for real: press and move a few px and
+    // the app takes over with a native OLE drag — drop on a folder to
+    // copy, drop back on this strip to open the file in a tab.
+    const armDrag = (el, key) => {
+      el.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0 || e.target.closest('.act')) return;
+        const x0 = e.clientX, y0 = e.clientY;
+        const cleanup = () => {
+          el.removeEventListener('pointermove', move);
+          el.removeEventListener('pointerup', cleanup);
+          el.removeEventListener('pointercancel', cleanup);
+        };
+        const move = (ev) => {
+          if (Math.abs(ev.clientX - x0) + Math.abs(ev.clientY - y0) < 5) return;
+          cleanup();
+          ipc({cmd: 'download_drag', key});
+        };
+        el.addEventListener('pointermove', move);
+        el.addEventListener('pointerup', cleanup);
+        el.addEventListener('pointercancel', cleanup);
+      });
+    };
+    for (const d of dls) {
+      const row = document.createElement('div');
+      row.className = 'dl-row' + (d.state === 'done' ? ' done' : '');
+      // progress → done between updates gets one green flash.
+      if (prevState.get(d.key) === 'progress' && d.state === 'done') {
+        row.classList.add('flash');
+      }
+      const top = document.createElement('div');
+      top.className = 'top';
+      const nm = document.createElement('span');
+      nm.className = 'nm';
+      nm.textContent = d.name;
+      nm.title = d.path;
+      top.appendChild(nm);
+      if (d.state === 'progress') {
+        top.appendChild(act('Pause', IC.pause, () => ipc({cmd: 'download_pause', key: d.key})));
+        top.appendChild(act('Cancel', '×', () => ipc({cmd: 'download_cancel', key: d.key})));
+      } else if (d.state === 'paused') {
+        top.appendChild(act('Resume', IC.play, () => ipc({cmd: 'download_resume', key: d.key})));
+        top.appendChild(act('Cancel', '×', () => ipc({cmd: 'download_cancel', key: d.key})));
+      } else if (d.state === 'done') {
+        top.appendChild(act('Show in folder', IC.folder, () => ipc({cmd: 'download_show', key: d.key})));
+        // Click opens the file with its default app — the drag handler
+        // below is what a press-and-move becomes instead.
+        row.onclick = (e) => {
+          if (e.target.closest('.act')) return;
+          ipc({cmd: 'download_open', key: d.key});
+        };
+        armDrag(row, d.key);
+      } else {
+        const b = document.createElement('button');
+        b.className = 'act retry';
+        b.textContent = 'Retry';
+        b.onclick = () => ipc({cmd: 'download_retry', key: d.key});
+        top.appendChild(b);
+      }
+      row.appendChild(top);
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      const bytes = fmtBytes(d.received) + (d.total ? ' / ' + fmtBytes(d.total) : '');
+      if (d.state === 'progress') {
+        meta.textContent = (d.total ? Math.round(100 * d.received / d.total) + '% — ' : '') + bytes;
+      } else if (d.state === 'paused') {
+        meta.textContent = 'Paused — ' + bytes;
+      } else if (d.state === 'done') {
+        meta.textContent = fmtBytes(d.received);
+      } else {
+        meta.textContent = d.state === 'cancelled' ? 'Cancelled' : 'Interrupted';
+      }
+      row.appendChild(meta);
+      dlPop.appendChild(row);
+    }
+    if (dls.some((d) => d.state !== 'progress' && d.state !== 'paused')) {
+      const c = document.createElement('div');
+      c.className = 'mi';
+      c.textContent = 'Clear finished';
+      c.onclick = () => ipc({cmd: 'downloads_clear'});
+      dlPop.appendChild(c);
+    }
+  };
+
+  // ===== The library panel: kept pages, saved passwords, import, export
+  // Every list it shows is pushed by the app (`__cryo_library`); nothing
+  // here reads storage, and a password only ever arrives one at a time
+  // through `__cryo_secret`, after the app has asked the user.
+  const libEl = document.getElementById('lib');
+  const libBody = libEl.querySelector('.body');
+  const libPanel = libEl.querySelector('.panel');
+  const toast = document.getElementById('toast');
+  let libPane = 'bookmarks';
+  let libData = {pane: 'bookmarks', bookmarks: [], passwords: [], sources: []};
+  let libFilter = '';
+  // Secrets the user revealed in this sitting, keyed origin + username.
+  // Cleared when the panel closes, so reopening hides them again.
+  const revealed = new Map();
+  const rowKey = (origin, username) => origin + '\n' + username;
+
+  // Clicks inside the panel are the panel's; a click on the dimmed
+  // backdrop lands on the document and dismisses, like the menu.
+  libPanel.onclick = (e) => e.stopPropagation();
+  for (const btn of libEl.querySelectorAll('.tab-btn[data-pane]')) {
+    btn.onclick = () => openLib(btn.dataset.pane);
+  }
+  libEl.querySelector('.close').onclick = () => setLib(false);
+
+  const node = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    // Always textContent: every string here came from a web page's
+    // title, a file someone else wrote, or a password.
+    if (text !== undefined) n.textContent = text;
+    return n;
+  };
+
+  const button = (label, cls, onclick) => {
+    const b = node('button', 'lbtn' + (cls ? ' ' + cls : ''), label);
+    b.onclick = onclick;
+    return b;
+  };
+
+  const paintBookmarks = () => {
+    const search = node('input', 'search');
+    search.type = 'text';
+    search.spellcheck = false;
+    search.placeholder = 'Search bookmarks';
+    search.value = libFilter;
+    search.oninput = () => { libFilter = search.value; paintRows(); };
+    libBody.appendChild(search);
+    const list = node('div');
+    libBody.appendChild(list);
+
+    const paintRows = () => {
+      list.innerHTML = '';
+      const needle = libFilter.trim().toLowerCase();
+      const rows = libData.bookmarks.filter((b) => !needle ||
+        (b.title + ' ' + b.url + ' ' + b.folder).toLowerCase().includes(needle));
+      if (!rows.length) {
+        list.appendChild(node('div', 'lempty', libData.bookmarks.length
+          ? 'Nothing matches that.'
+          : 'No bookmarks yet. Press Ctrl+D on a page, or bring them over in the Import pane.'));
+        return;
+      }
+      for (const b of rows) {
+        const r = node('div', 'lrow');
+        const main = node('div', 'main');
+        main.append(node('div', 't', b.title), node('div', 'u', b.url));
+        r.appendChild(main);
+        if (b.folder) r.appendChild(node('div', 'fold', b.folder));
+        r.appendChild(button('Open', '', (e) =>
+          ipc({cmd: 'bookmark_open', id: b.id, ctrl: e.ctrlKey, shift: e.shiftKey})));
+        r.appendChild(button('✕', '', () => ipc({cmd: 'bookmark_remove', id: b.id})));
+        list.appendChild(r);
+      }
+      if (libData.more_bookmarks) {
+        list.appendChild(node('div', 'lnote',
+          'Showing the first ' + libData.bookmarks.length + ' of ' +
+          (libData.bookmarks.length + libData.more_bookmarks) + ' kept.'));
+      }
+    };
+    paintRows();
+  };
+
+  const paintPasswords = () => {
+    if (libData.locked) {
+      libBody.appendChild(node('div', 'lnote warn',
+        'The vault could not be opened: ' + libData.locked +
+        ' — it is sealed to the Windows account that wrote it. ' +
+        'Nothing will be overwritten.'));
+    }
+    if (!libData.passwords.length) {
+      libBody.appendChild(node('div', 'lempty',
+        'No saved passwords. Export them from your old browser and bring the CSV over in the Import pane.'));
+    }
+    for (const p of libData.passwords) {
+      const key = rowKey(p.origin, p.username);
+      const shown = revealed.get(key);
+      const r = node('div', 'lrow');
+      const main = node('div', 'main');
+      main.append(node('div', 't', p.origin),
+                  node('div', 'u', p.username || '(no username)'));
+      r.appendChild(main);
+      r.appendChild(node('div', 'dots', shown === undefined
+        ? '•'.repeat(Math.min(p.length, 16)) : shown));
+      if (shown === undefined) {
+        r.appendChild(button('Reveal', '', () =>
+          ipc({cmd: 'password_reveal', origin: p.origin, username: p.username})));
+      } else {
+        r.appendChild(button('Hide', '', () => { revealed.delete(key); paintLib(); }));
+        r.appendChild(button('Copy', '', () => {
+          navigator.clipboard.writeText(shown).catch(() => {});
+        }));
+      }
+      r.appendChild(button('Forget', 'warn', () =>
+        ipc({cmd: 'password_remove', origin: p.origin, username: p.username})));
+      libBody.appendChild(r);
+    }
+    if (libData.more_passwords) {
+      libBody.appendChild(node('div', 'lnote',
+        'Showing the first ' + libData.passwords.length + ' of ' +
+        (libData.passwords.length + libData.more_passwords) + ' saved.'));
+    }
+    libBody.appendChild(node('div', 'lnote',
+      'Saved passwords are sealed with your Windows account, so the file is unreadable on any other. ' +
+      'cryo does not offer to save passwords from forms yet — this list is what you import, and what Export writes.'));
+  };
+
+  const paintImport = () => {
+    if (libData.incognito) {
+      libBody.appendChild(node('div', 'lnote warn',
+        'This is an incognito window: it keeps nothing after it closes. Import from a normal window.'));
+    }
+    libBody.appendChild(node('div', 'lhead', 'From a file'));
+    const pick = node('div', 'lrow');
+    pick.appendChild(node('div', 'main',
+      'Bookmarks (.html), passwords (.csv) or a cryo history export (.csv). cryo reads the file to see which it is.'));
+    const pickBtn = button('Choose a file…', '', () => ipc({cmd: 'import_file'}));
+    pickBtn.disabled = !!libData.incognito;
+    pick.appendChild(pickBtn);
+    libBody.appendChild(pick);
+
+    libBody.appendChild(node('div', 'lhead', 'Installed browsers'));
+    if (!libData.sources_ready) {
+      libBody.appendChild(node('div', 'lempty', 'Looking for installed browsers…'));
+    } else if (!libData.sources.length) {
+      libBody.appendChild(node('div', 'lempty',
+        'No Edge, Chrome, Brave, Vivaldi or Opera profile found on this machine.'));
+    }
+    for (const s of libData.sources) {
+      const r = node('div', 'lrow');
+      const main = node('div', 'main');
+      main.append(node('div', 't', s.browser + ' · ' + s.profile),
+                  node('div', 'u', s.count + (s.count === 1 ? ' bookmark' : ' bookmarks')));
+      r.appendChild(main);
+      const go = button('Import bookmarks', '', () =>
+        ipc({cmd: 'import_profile', index: s.index}));
+      go.disabled = !!libData.incognito;
+      r.appendChild(go);
+      libBody.appendChild(r);
+    }
+    libBody.appendChild(node('div', 'lnote',
+      'Bookmarks are read straight out of the other browser’s profile. ' +
+      'Passwords are not: they sit in that browser’s own encrypted store, locked to its account. ' +
+      'Export them from its settings — Edge: edge://settings/passwords, Chrome: chrome://password-manager/passwords — and choose that CSV above.'));
+  };
+
+  const paintExport = () => {
+    if (libData.incognito) {
+      libBody.appendChild(node('div', 'lnote warn',
+        'An incognito window has nothing stored to export.'));
+    }
+    const kinds = [
+      ['bookmarks', 'Bookmarks', 'A Netscape bookmark file (.html) — every browser imports it.', ''],
+      ['passwords', 'Passwords', 'Chrome’s CSV layout. Written in plain text: anyone who opens the file can read every password.', 'warn'],
+      ['history', 'History', 'cryo’s own CSV (url, title, visits, last visit), so a profile can move machines.', ''],
+    ];
+    for (const [what, title, blurb, cls] of kinds) {
+      const r = node('div', 'lrow');
+      const main = node('div', 'main');
+      main.append(node('div', 't', title), node('div', 'u', blurb));
+      r.appendChild(main);
+      const go = button('Export…', cls, () => ipc({cmd: 'export', what}));
+      go.disabled = !!libData.incognito;
+      r.appendChild(go);
+      libBody.appendChild(r);
+    }
+  };
+
+  const paintLib = () => {
+    for (const btn of libEl.querySelectorAll('.tab-btn[data-pane]')) {
+      btn.classList.toggle('on', btn.dataset.pane === libPane);
+    }
+    libBody.innerHTML = '';
+    if (libPane === 'bookmarks') paintBookmarks();
+    else if (libPane === 'passwords') paintPasswords();
+    else if (libPane === 'import') paintImport();
+    else paintExport();
+  };
+
+  window.__cryo_library = (data) => {
+    libData = data;
+    libPane = data.pane;
+    paintLib();
+  };
+
+  // One password, for one click. The app has already asked the user.
+  window.__cryo_secret = (reply) => {
+    revealed.set(rowKey(reply.origin, reply.username), reply.secret);
+    if (libOpen) paintLib();
+  };
+
+  let toastTimer = null;
+  window.__cryo_notice = (n) => {
+    toast.innerHTML = '';
+    toast.appendChild(node('div', 'tt', n.title));
+    for (const line of n.lines || []) toast.appendChild(node('div', 'tl', line));
+    toast.classList.toggle('bad', !n.ok);
+    toast.classList.add('open');
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.remove('open'), 7000);
+  };
+  toast.onclick = () => toast.classList.remove('open');
+
+  document.getElementById('star').onclick = () => ipc({cmd: 'bookmark_page'});
+
+  window.__cryo_update = (state) => {
+    const prev = lastState;
+    lastState = state;
+    tabsEl.innerHTML = '';
+    for (const t of state.tabs) {
+      const el = document.createElement('div');
+      el.className = 'tab' + (t.active ? ' active' : '') +
+                     (t.state !== 'active' ? ' ' + t.state : '');
+      el.title = t.state === 'frozen' ? 'Frozen — click to restore'
+               : t.state === 'discarded' ? 'Discarded — click to reload' : '';
+      // Middle-click anywhere on the tab closes it.
+      el.addEventListener('auxclick', (e) => {
+        if (e.button === 1) ipc({cmd: 'close', id: t.id});
+      });
+      // A loading tab spins in the icon slot; once settled the site
+      // icon leads the tab in every state — the strip badges the page,
+      // not the surface's liveness.
+      if (t.loading) {
+        const spin = document.createElement('span');
+        spin.className = 'spin';
+        el.appendChild(spin);
+      } else if (t.favicon) {
+        const img = document.createElement('img');
+        img.className = 'fav';
+        img.src = t.favicon;
+        img.alt = '';
+        el.appendChild(img);
+      }
+      // Live tabs get a freeze button; a frozen tab shows the same flake
+      // as a state marker (clicking the tab restores).
+      if (t.state === 'active') {
+        const fz = document.createElement('span');
+        fz.className = 'fz';
+        fz.textContent = '❄';
+        fz.title = 'Freeze tab (Ctrl+Shift+F)';
+        fz.onclick = () => ipc({cmd: 'freeze', id: t.id});
+        el.appendChild(fz);
+      } else if (t.state === 'frozen') {
+        const mark = document.createElement('span');
+        mark.className = 'fzmark';
+        mark.textContent = '❄';
+        el.appendChild(mark);
+      }
+      const title = document.createElement('span');
+      title.className = 'title';
+      title.textContent = t.title;
+      title.onclick = () => ipc({cmd: 'activate', id: t.id});
+      const x = document.createElement('span');
+      x.className = 'x';
+      x.textContent = '×';
+      x.onclick = () => ipc({cmd: 'close', id: t.id});
+      el.append(title, x);
+      tabsEl.appendChild(el);
+    }
+    if (document.activeElement !== urlEl) urlEl.value = state.active_url;
+    // Loading state: the active tab's flag swaps reload for ✕ and runs
+    // the indeterminate bar; background tabs only spin their own icon.
+    const active = state.tabs.find((t) => t.active);
+    const loading = !!(active && active.loading);
+    reloadBtn.classList.toggle('loading', loading);
+    reloadBtn.title = loading ? 'Stop loading (Esc)' : 'Reload (F5)';
+    loadbar.classList.toggle('on', loading);
+    // The arrows grey out where history has nowhere to step.
+    backBtn.disabled = !state.can_back;
+    fwdBtn.disabled = !state.can_fwd;
+    const menuBtn = document.getElementById('menu');
+    menuBtn.classList.toggle('has-update', !!state.update_version);
+    if (state.update_version) {
+      updateItem.textContent = 'Restart to update — v' + state.update_version;
+      menuPop.prepend(updateItem);
+    } else {
+      updateItem.remove();
+    }
+    renderDl(state.downloads || [], prev);
+    // The bar shows kept pages once there are any, the dial list until
+    // then; the ★ fills in while this page is one of them.
+    renderBar(state.bookmarks || []);
+    const star = document.getElementById('star');
+    star.classList.toggle('on', !!state.starred);
+    star.title = state.starred
+      ? 'Remove bookmark (Ctrl+D)' : 'Bookmark this page (Ctrl+D)';
+  };
+</script>
+</body>
+</html>

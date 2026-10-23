@@ -17,7 +17,8 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2DownloadStartingEventArgs, ICoreWebView2DownloadStartingEventHandler,
     ICoreWebView2StateChangedEventHandler, ICoreWebView2_4,
     COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON_NONE,
-    COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON_USER_CANCELED, COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED,
+    COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON_USER_CANCELED,
+    COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON_USER_PAUSED, COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED,
     COREWEBVIEW2_DOWNLOAD_STATE_INTERRUPTED, COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS,
 };
 use windows::core::{Interface, PWSTR};
@@ -125,7 +126,12 @@ unsafe fn starting(
         webview2_com::StateChangedEventHandler::create(Box::new(move |op, _| {
             let Some(op) = op else { return Ok(()) };
             let update = unsafe { read_update(&op, id, &name, &path_str) }?;
-            let terminal = update.state != DownloadState::InProgress;
+            // Paused reports as interrupted-with-a-reason — the operation
+            // is still alive and resumable, so it stays in `active`.
+            let terminal = !matches!(
+                update.state,
+                DownloadState::InProgress | DownloadState::Paused
+            );
             report(update);
             if terminal {
                 active.borrow_mut().remove(&id);
@@ -179,6 +185,9 @@ unsafe fn read_update(
     op.BytesReceived(&mut received)?;
     let mut total = 0i64;
     op.TotalBytesToReceive(&mut total)?;
+    let mut uri_raw = PWSTR::null();
+    op.Uri(&mut uri_raw)?;
+    let uri = webview2_com::take_pwstr(uri_raw);
     let mut raw = COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS;
     op.State(&mut raw)?;
     let state = match raw {
@@ -188,6 +197,8 @@ unsafe fn read_update(
             op.InterruptReason(&mut reason)?;
             if reason == COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON_USER_CANCELED {
                 DownloadState::Cancelled
+            } else if reason == COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON_USER_PAUSED {
+                DownloadState::Paused
             } else {
                 DownloadState::Interrupted
             }
@@ -198,6 +209,7 @@ unsafe fn read_update(
         id: DownloadId(id),
         name: name.to_string(),
         path: path.to_string(),
+        uri,
         received: received.max(0) as u64,
         total: (total > 0).then_some(total as u64),
         state,
@@ -237,6 +249,25 @@ pub(super) fn cancel(active: &ActiveDownloads, id: DownloadId) -> Result<(), Eng
     let op = active.borrow().get(&id.0).map(|d| d.op.clone());
     if let Some(op) = op {
         unsafe { op.Cancel() }.map_err(|e| EngineError::View(e.to_string()))?;
+    }
+    Ok(())
+}
+
+/// `Pause` interrupts with reason USER_PAUSED — the row reads as held,
+/// not dead, and `Resume` picks it back up. Both land in the same
+/// `StateChanged` reporting path as `Cancel`.
+pub(super) fn pause(active: &ActiveDownloads, id: DownloadId) -> Result<(), EngineError> {
+    let op = active.borrow().get(&id.0).map(|d| d.op.clone());
+    if let Some(op) = op {
+        unsafe { op.Pause() }.map_err(|e| EngineError::View(e.to_string()))?;
+    }
+    Ok(())
+}
+
+pub(super) fn resume(active: &ActiveDownloads, id: DownloadId) -> Result<(), EngineError> {
+    let op = active.borrow().get(&id.0).map(|d| d.op.clone());
+    if let Some(op) = op {
+        unsafe { op.Resume() }.map_err(|e| EngineError::View(e.to_string()))?;
     }
     Ok(())
 }

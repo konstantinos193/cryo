@@ -6,16 +6,20 @@
 //! input to commands, `surfaces` owns every view's birth and death (the
 //! `views`/`registry` invariant lives there), `actions` holds the user
 //! verbs and the chrome-command dispatch, `update` runs the self-update
-//! flow. This file keeps the state itself, the event entry points and
-//! the window-layout plumbing.
+//! flow, `library` owns bookmarks and saved passwords, `transfer` runs
+//! the import/export flows. This file keeps the state itself, the event
+//! entry points and the window-layout plumbing.
 
 mod actions;
 mod downloads;
+mod dragout;
 mod keys;
+mod library;
 mod surfaces;
+mod transfer;
 mod update;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use tao::event::{Event, WindowEvent};
@@ -23,6 +27,7 @@ use tao::event_loop::{ControlFlow, EventLoopProxy};
 use tao::keyboard::ModifiersState;
 use tao::window::Window;
 
+use crate::bookmarks::Keeper;
 use crate::engine::{Accelerator, ContentView, DownloadUpdate, Engine, LoadFailure, Rect};
 use crate::persist::Recorder;
 use crate::shell;
@@ -32,6 +37,7 @@ use crate::shell::chrome::{
 use crate::shell::pages::{self, NEW_TAB_URL};
 use crate::tabs::{TabId, TabRegistry, TabState};
 use crate::update::{Outcome, Update};
+use crate::vault::Vault;
 
 /// Domain URL recorded for a fresh tab. The view actually loads
 /// `NEW_TAB_URL`; `about:blank` stays the tab's logical address so the
@@ -54,14 +60,8 @@ pub(crate) fn content_url_for(domain_url: &str) -> &str {
 /// not silently `let _ =`'d and not `?`'d into a teardown path.
 pub(crate) fn post(proxy: &EventLoopProxy<AppEvent>, event: AppEvent) {
     if proxy.send_event(event).is_err() {
-        eprintln!("cryo: event loop closed — event dropped");
+        crate::report!("event loop closed — event dropped");
     }
-}
-
-/// Where errors with no user-facing surface go: the one reporting seam
-/// until a real logging facade lands (AGENTS.md §10).
-pub(crate) fn report(err: impl std::fmt::Debug) {
-    eprintln!("cryo: {err:?}");
 }
 
 /// Wall-clock stamp for history entries — the caller stamps so `persist`
@@ -89,12 +89,25 @@ pub enum AppEvent {
     /// Page asked for a new window (target=_blank, ctrl/shift/middle-click,
     /// window.open) — we open a tab instead.
     OpenInNewTab(String),
+    /// A second process handed its launch address over the instance pipe
+    /// (external link while already running) — a new tab here, and the
+    /// window it landed in gets raised.
+    ExternalOpen(String),
     /// A page element entered/left DOM fullscreen (video fullscreen).
     PageFullscreen(TabId, bool),
     /// A navigation ended with no document, or the renderer died under one.
     LoadFailed(TabId, LoadFailure),
     /// A view's download started, progressed, or settled — the shelf.
     Download(TabId, DownloadUpdate),
+    /// OS files landed on a view that reports drops (the chrome strip —
+    /// a drag there opens each file in a tab).
+    FilesDropped(Vec<std::path::PathBuf>),
+    /// A worker finished reading an import file or profile — drafts
+    /// in, or the reason there are none. Boxed: the error is the big
+    /// side of this `Result` and every event pays for the larger one.
+    Imported(Result<crate::transfer::Bundle, Box<crate::transfer::TransferError>>),
+    /// A worker finished looking for importable browser profiles.
+    ImportSources(Vec<crate::transfer::Profile>),
     /// A background update check finished — started at launch and by the
     /// menu's "Check for updates".
     UpdateChecked(Outcome),
@@ -109,8 +122,8 @@ pub struct App {
     /// necessity, not choice: a `Tab` can't hold a view without engine
     /// types leaking into `tabs` (§3). The two stay in sync through one
     /// rule, enforced only in `surfaces`: an entry exists exactly while
-    /// its tab is `Active` — spawn/restore insert, freeze/discard/close
-    /// remove.
+    /// its tab is `Active` — `spawn_view_at` inserts, `drop_view`
+    /// removes for freeze, discard and close alike.
     views: HashMap<TabId, Box<dyn ContentView>>,
     chrome: Box<dyn ContentView>,
     logical_size: (f64, f64),
@@ -128,10 +141,35 @@ pub struct App {
     /// Typed inputs and visited URLs — the omnibox's memory. `None` in
     /// incognito windows: forgetting is their whole point.
     recorder: Option<Recorder>,
+    /// Kept pages: the ★, the bookmarks bar, the library panel. An
+    /// incognito window gets a session-only one — the same verbs work,
+    /// nothing outlives the window.
+    bookmarks: Keeper,
+    /// Saved sign-ins, sealed at rest. Session-only in incognito, for
+    /// the same reason.
+    vault: Vault,
+    /// This window forgets everything when it closes. Imports refuse,
+    /// and the library panel says why.
+    incognito: bool,
+    /// Which library pane is on screen, if any — what `push_library`
+    /// repaints after a change. `None` means the panel is shut and
+    /// there is nothing to push.
+    library_pane: Option<String>,
+    /// Browser profiles the last discovery found. The `import_profile`
+    /// command indexes this list, so a path never travels through the
+    /// chrome document.
+    /// `None` until the first look finishes — "not searched yet" and
+    /// "none installed" read the same in a list and must not.
+    import_sources: Option<Vec<crate::transfer::Profile>>,
     /// The download shelf — see `downloads.rs`. Newest at the back.
     downloads: Vec<downloads::Entry>,
     /// Shelf key counter — chrome commands carry it back to us.
     download_seq: u64,
+    /// Tabs spawned only to host a retried download — the view must live
+    /// for the transfer's duration, so the tab closes itself when the
+    /// download settles. A set, not a map: it carries no tab data, only
+    /// which ids owe their existence to a retry.
+    retry_tabs: HashSet<TabId>,
     /// Downloaded, checksum-verified installer waiting for a restart.
     /// Surfaced as the ⋮ badge and the "Restart to update" menu item.
     pending_update: Option<Update>,
@@ -140,13 +178,38 @@ pub struct App {
     update_prompt: bool,
 }
 
+/// What a window remembers, as `lib.rs` wires it: visits, kept pages
+/// and saved sign-ins. A normal window gets the stores under
+/// `%LOCALAPPDATA%\cryo`; an incognito one gets their session-only
+/// counterparts, so every verb still works and nothing outlives the
+/// window. Passed down from the composition root — the app never picks
+/// a path or a protector itself (AGENTS §5).
+pub struct Profile {
+    pub recorder: Option<Recorder>,
+    pub bookmarks: Keeper,
+    pub vault: Vault,
+    pub incognito: bool,
+}
+
+impl Profile {
+    /// Everything forgotten at close — incognito, and the test seam.
+    pub fn session_only() -> Self {
+        Self {
+            recorder: None,
+            bookmarks: Keeper::session_only(),
+            vault: Vault::session_only(),
+            incognito: true,
+        }
+    }
+}
+
 impl App {
     pub fn new(
         window: Rc<Window>,
         engine: Rc<dyn Engine>,
         proxy: EventLoopProxy<AppEvent>,
         open_url: Option<String>,
-        recorder: Option<Recorder>,
+        profile: Profile,
     ) -> anyhow::Result<Self> {
         let logical = window.inner_size().to_logical::<f64>(window.scale_factor());
         let logical_size = (logical.width, logical.height);
@@ -185,9 +248,15 @@ impl App {
             chrome_focused: false,
             page_fullscreen: false,
             overlay_open: false,
-            recorder,
+            recorder: profile.recorder,
+            bookmarks: profile.bookmarks,
+            vault: profile.vault,
+            incognito: profile.incognito,
+            library_pane: None,
+            import_sources: None,
             downloads: Vec::new(),
             download_seq: 0,
+            retry_tabs: HashSet::new(),
             pending_update: None,
             update_prompt: false,
         })
@@ -232,7 +301,20 @@ impl App {
                 }
                 // The visit counts whether the load works out or not —
                 // real omniboxes remember typed destinations too.
-                self.remember(&url);
+                // about:blank is no destination at all — downloads that
+                // re-report their host's blank start would litter it in.
+                if url != DEFAULT_URL {
+                    self.remember(&url);
+                }
+                // A retry tab reporting somewhere other than its own
+                // download URI (or the blank it never left) means the
+                // user took the tab over — it stops being disposable.
+                if self.retry_tabs.contains(&id)
+                    && url != DEFAULT_URL
+                    && self.registry.get(id).is_some_and(|t| t.url() != url)
+                {
+                    self.retry_tabs.remove(&id);
+                }
                 if let Some(tab) = self.registry.get_mut(id) {
                     // A view that already froze can still have events in
                     // flight from before the drop — they must not move the
@@ -248,12 +330,22 @@ impl App {
                 }
             }
             AppEvent::FaviconChanged(id, png) => {
+                let url = self.registry.get(id).map(|t| t.url().to_string());
+                let icon = png.as_deref().map(favicon_data_url);
                 if let Some(tab) = self.registry.get_mut(id) {
                     // Same in-flight rule as Navigated: a view already
                     // frozen can still emit its last icon — don't write
                     // it over the frozen tab's.
                     if tab.state() == TabState::Active {
                         tab.set_favicon(png);
+                    }
+                }
+                // The icon outlives the tab — the omnibox paints it
+                // beside the remembered visit. Internal pages don't
+                // reach history, so nothing records them.
+                if let (Some(url), Some(icon)) = (url, icon) {
+                    if !pages::is_internal_url(&url) {
+                        self.note_favicon(&url, &icon);
                     }
                 }
                 self.sync_chrome()
@@ -267,13 +359,25 @@ impl App {
                 self.sync_chrome()
             }
             AppEvent::OpenInNewTab(url) => self.spawn_tab(&url, true),
+            AppEvent::ExternalOpen(url) => {
+                // The user clicked a link expecting to watch it land —
+                // the window may be minimized or behind other windows.
+                self.window.set_minimized(false);
+                self.window.set_focus();
+                self.spawn_tab(&normalize_nav_input(&url), true)
+            }
             AppEvent::PageFullscreen(id, on) => self.page_fullscreen(id, on),
             AppEvent::LoadFailed(id, failure) => self.show_error(id, failure),
-            AppEvent::Download(id, update) => self.download_update(id, update),
+            AppEvent::Download(id, update) => self.download_update(id, update, control_flow),
+            AppEvent::FilesDropped(paths) => self.files_dropped(&paths),
+            AppEvent::Imported(outcome) => self.on_imported(outcome),
+            AppEvent::ImportSources(sources) => self.on_import_sources(sources),
             AppEvent::UpdateChecked(outcome) => self.on_update(outcome, control_flow),
         };
+        #[cfg(debug_assertions)]
+        self.assert_views_consistent();
         if let Err(e) = result {
-            report(e);
+            crate::report!("{e:?}");
         }
     }
 
@@ -321,6 +425,9 @@ impl App {
         }
         self.chrome
             .eval("window.__cryo_overlay && window.__cryo_overlay(false)")?;
+        // The library panel is one of those overlays — once it is shut
+        // there is nothing to push to it.
+        self.forget_library();
         self.set_overlay_open(false)
     }
 
@@ -329,7 +436,7 @@ impl App {
     pub(super) fn remember(&mut self, text: &str) {
         if let Some(rec) = &mut self.recorder {
             if let Err(e) = rec.record(text, None, unix_now()) {
-                report(e);
+                crate::report!("{e:?}");
             }
         }
     }
@@ -339,7 +446,17 @@ impl App {
     fn note_title(&mut self, url: &str, title: &str) {
         if let Some(rec) = &mut self.recorder {
             if let Err(e) = rec.note_title(url, title) {
-                report(e);
+                crate::report!("{e:?}");
+            }
+        }
+    }
+
+    /// Attach a site's icon to a remembered URL — `FaviconChanged` events
+    /// arrive after the visit was recorded, like titles.
+    fn note_favicon(&mut self, url: &str, data_url: &str) {
+        if let Some(rec) = &mut self.recorder {
+            if let Err(e) = rec.note_favicon(url, data_url) {
+                crate::report!("{e:?}");
             }
         }
     }
@@ -358,7 +475,7 @@ impl App {
         self.logical_size = (w, h);
         let (_, content_rect) = shell::layout(w, h);
         if let Err(e) = self.chrome.set_bounds(self.chrome_rect()) {
-            report(e);
+            crate::report!("{e:?}");
         }
         // A DOM-fullscreen view keeps covering the whole window on resize.
         let active = self.registry.active_id();
@@ -374,7 +491,7 @@ impl App {
                 content_rect
             };
             if let Err(e) = view.set_bounds(rect) {
-                report(e);
+                crate::report!("{e:?}");
             }
         }
     }
@@ -409,6 +526,8 @@ impl App {
             can_fwd,
             update_version: self.pending_update.as_ref().map(|u| u.version.to_string()),
             downloads: self.download_rows(),
+            bookmarks: self.bar_rows(),
+            starred: self.active_starred(),
         };
         let json = serde_json::to_string(&state)?;
         self.chrome.eval(&format!("window.__cryo_update({json})"))?;

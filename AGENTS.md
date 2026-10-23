@@ -4,6 +4,12 @@ Enforceable rules, not vibes. If a rule can't be checked in review or by
 clippy, it doesn't belong here. CI gates (`fmt`, `clippy -D warnings`,
 `build`, `test`) are in CONTRIBUTING.md — these rules sit on top.
 
+"Spaghetti" has a testable meaning here: code is spaghetti when answering
+"where does X happen?" or "what breaks if I touch this?" requires reading
+the whole program — everything is everywhere and the reader makes a
+mental jump per line. Hygiene is the inverse: every question has exactly
+one place that answers it.
+
 ## 1. `main.rs` is a shell, not a program
 
 `main` may only: parse args, load config, construct the app, run the event
@@ -30,6 +36,15 @@ helpers, or one small coherent set of functions.
   - nesting depth > 4
 - Public items first, private after — files read top-down.
 - Every module gets a `//!` doc comment saying what it owns.
+- One abstraction level per function. Plumbing next to policy in one body
+  makes the reader switch contexts per line — that texture *is*
+  spaghetti, even in a short function.
+- **Duplication.** The second copy of a trivial block is fine; the third
+  means extract. Two copies of *non-trivial* logic (parsing, validation,
+  state transitions) is already a bug farm — copies drift.
+- **Shotgun surgery names a misplaced responsibility.** One logical
+  change needing matching edits across three modules means the concept
+  lives in the wrong place — move it, don't scatter it.
 
 ## 3. Dependency direction is one-way
 
@@ -75,10 +90,14 @@ Use the parts of DDD that prevent spaghetti; skip the parts that generate
 boilerplate. No `IRepositoryFactoryBuilder` nonsense — contexts, entities,
 value objects, aggregates, domain services. That's it.
 
-- **Bounded contexts = top-level modules.** `tabs`, `memory`, `engine`,
-  `shell` (window/UI), `persist`. Each owns its vocabulary and its types.
-  A `Budget` lives in `memory` — `tabs` *asks* memory, it doesn't compute
-  budgets itself. New top-level modules need a PR justification.
+- **Bounded contexts = top-level modules.** `tabs`, `engine`, `shell`
+  (window/UI), `persist` (history recorder), `bookmarks`, `vault`
+  (passwords), `transfer` (foreign-file import/export), `instance`
+  (single-instance handoff), `update` (self-update). `memory` is the
+  planned budgets context — it does not exist yet, but when it does a
+  `Budget` lives there and `tabs` *asks* memory rather than computing
+  budgets itself. Each context owns its vocabulary and its types. New
+  top-level modules need a PR justification — and a line in this list.
 - **Entities vs value objects — know which you're writing.**
   - *Entity*: has identity, changes over time → `Tab` (keyed by `TabId`),
     `Window`.
@@ -199,14 +218,21 @@ or every persistence change becomes spaghetti.
   WebView or disk.
 - Dead code gets deleted, not `#[allow(dead_code)]`'d. `#[allow]` of any
   lint needs a comment saying why.
+- **No broken windows.** The tree always compiles warning-free: a
+  half-applied refactor is finished or reverted, never parked — a
+  visible mess licenses the next one. A file no `mod` path reaches is
+  dead code regardless of intent; it lives on a branch, not in `src/`.
+- A comment the diff made stale is corrected or deleted in that diff —
+  a wrong comment costs more than none.
 - No `dbg!`/`println!` debugging left in merges — logging goes through one
   facade (`log`/`tracing`) once it's added.
 
 ## Quick checklist for review
 
 1. Does `main.rs` still fit on one screen?
-2. Did a `wry`/`tao` import appear outside `engine/`? Did a serde derive
-   appear on a domain type?
+2. Did a `wry` import appear outside `engine/`, or a `tao` import
+   outside `app`/`shell`/`lib.rs`? Did a serde derive appear on a
+   domain type?
 3. Did any file cross a tripwire without justification?
 4. Any new `Rc<RefCell>` in a signature, global `static`, or `unwrap`
    outside tests/`main`?
@@ -217,3 +243,9 @@ or every persistence change becomes spaghetti.
    Does a snapshot's version reach domain code?
 8. Did an outside module mutate an entity's fields instead of calling a
    method on the aggregate?
+9. Does the tree still compile clean (`cargo check`, zero warnings — the
+   CI gate is `-D warnings`)? Any file in `src/` no `mod` path reaches?
+10. Third copy of a non-trivial block left unextracted, or one logical
+    change scattered as matching edits across three modules?
+11. A comment this diff made stale, or a function mixing plumbing and
+    policy in one body?

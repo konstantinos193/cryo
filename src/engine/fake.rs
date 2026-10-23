@@ -25,6 +25,8 @@ pub enum FakeCall {
     SaveAs,
     ClearBrowsingData,
     CancelDownload(DownloadId),
+    PauseDownload(DownloadId),
+    ResumeDownload(DownloadId),
 }
 
 #[derive(Default)]
@@ -179,6 +181,16 @@ impl ContentView for FakeView {
 
     fn cancel_download(&self, id: DownloadId) -> Result<(), EngineError> {
         self.calls.borrow_mut().push(FakeCall::CancelDownload(id));
+        Ok(())
+    }
+
+    fn pause_download(&self, id: DownloadId) -> Result<(), EngineError> {
+        self.calls.borrow_mut().push(FakeCall::PauseDownload(id));
+        Ok(())
+    }
+
+    fn resume_download(&self, id: DownloadId) -> Result<(), EngineError> {
+        self.calls.borrow_mut().push(FakeCall::ResumeDownload(id));
         Ok(())
     }
 }

@@ -7,13 +7,14 @@ use tao::window::Fullscreen;
 
 use crate::shell;
 use crate::shell::chrome::{
-    canonize_nav_input, normalize_nav_input, ChromeCommand, SuggestReply, Suggestion,
+    canonize_nav_input, completion_for, normalize_nav_input, ChromeCommand, SuggestReply,
+    Suggestion,
 };
 use crate::shell::dial;
 use crate::shell::pages::{self, NEW_TAB_URL};
 use crate::tabs::TabId;
 
-use super::{content_url_for, App, DEFAULT_URL};
+use super::{content_url_for, downloads, App, DEFAULT_URL};
 
 impl App {
     pub(super) fn on_chrome(
@@ -90,11 +91,35 @@ impl App {
             ChromeCommand::Overlay { open } => self.set_overlay_open(open),
             ChromeCommand::Suggest { q } => self.suggest(&q),
             ChromeCommand::DownloadCancel { key } => self.cancel_download(key),
+            ChromeCommand::DownloadOpen { key } => {
+                self.open_download(key);
+                Ok(())
+            }
+            ChromeCommand::DownloadPause { key } => self.pause_download(key),
+            ChromeCommand::DownloadResume { key } => self.resume_download(key),
+            ChromeCommand::DownloadRetry { key } => self.retry_download(key),
+            ChromeCommand::DownloadDrag { key } => {
+                self.drag_download(key);
+                Ok(())
+            }
             ChromeCommand::DownloadShow { key } => {
                 self.reveal_download(key);
                 Ok(())
             }
             ChromeCommand::DownloadsClear => self.clear_finished_downloads(),
+            ChromeCommand::BookmarkPage => self.bookmark_active(),
+            ChromeCommand::BookmarkOpen { id, ctrl, shift } => self.open_bookmark(id, ctrl, shift),
+            ChromeCommand::BookmarkRemove { id } => self.remove_bookmark(id),
+            ChromeCommand::Library { pane } => self.show_library(&pane),
+            ChromeCommand::PasswordReveal { origin, username } => {
+                self.reveal_password(&origin, &username)
+            }
+            ChromeCommand::PasswordRemove { origin, username } => {
+                self.remove_password(&origin, &username)
+            }
+            ChromeCommand::ImportFile {} => self.import_file(),
+            ChromeCommand::ImportProfile { index } => self.import_profile(index),
+            ChromeCommand::Export { what } => self.export(&what),
         }
     }
 
@@ -119,7 +144,25 @@ impl App {
                     format!("Go to {url}")
                 },
                 input: q.to_string(),
+                // The typed-verdict row restates what was typed — there
+                // is nothing to complete to.
+                icon: None,
+                complete: None,
+                kind: if is_search { "search" } else { "go" },
             });
+            let ql = q.to_lowercase();
+            // Kept pages come before remembered ones: a bookmark is the
+            // user saying this destination matters, which outranks the
+            // fact that they once visited something similar.
+            for mark in self.bookmarks.marks().matches(q, 4) {
+                rows.push(Suggestion {
+                    label: format!("{} — {}", mark.title(), mark.url()),
+                    complete: completion_for(mark.url(), q),
+                    input: mark.url().to_string(),
+                    icon: None,
+                    kind: "bookmark",
+                });
+            }
             if let Some(rec) = &self.recorder {
                 for e in rec.matches(q, 8) {
                     let label = match e.title.as_deref().filter(|t| !t.is_empty()) {
@@ -129,15 +172,20 @@ impl App {
                     rows.push(Suggestion {
                         label,
                         input: e.text.clone(),
+                        icon: e.favicon.clone(),
+                        complete: completion_for(&e.text, q),
+                        kind: "page",
                     });
                 }
             }
-            let ql = q.to_lowercase();
             for d in dial::entries() {
                 if d.name.to_lowercase().contains(&ql) || d.url.to_lowercase().contains(&ql) {
                     rows.push(Suggestion {
                         label: format!("{} — {}", d.name, d.url),
+                        complete: completion_for(&d.url, q),
                         input: d.url,
+                        icon: None,
+                        kind: "page",
                     });
                 }
             }
@@ -163,6 +211,9 @@ impl App {
     pub(super) fn spawn_window(incognito: bool, url: Option<&str>) -> anyhow::Result<()> {
         let exe = std::env::current_exe()?;
         let mut cmd = std::process::Command::new(exe);
+        // A spawned window keeps its address: the flag stops the child
+        // from handing it to us over the single-instance pipe.
+        cmd.arg("--new-window");
         if incognito {
             cmd.arg("--incognito");
         }
@@ -253,8 +304,7 @@ impl App {
             // leaves a one-frame hole where the window shows through.
             Some(next) => {
                 self.activate(next)?;
-                self.drop_downloads_of(id);
-                drop(self.views.remove(&id));
+                self.drop_view(id);
                 self.sync_chrome()
             }
             None => {
@@ -411,8 +461,19 @@ impl App {
         let Some(path) = rfd::FileDialog::new().pick_file() else {
             return Ok(());
         };
-        let url = format!("file:///{}", path.display().to_string().replace('\\', "/"));
-        self.navigate_active(&url)
+        self.navigate_active(&downloads::file_url(&path))
+    }
+
+    /// OS files dropped on the strip — each opens in its own tab, the
+    /// first in front. Where they land is decided by the view's drop
+    /// region (chrome covers the strip, or the whole window while an
+    /// overlay is up), so no hit-testing happens here.
+    pub(super) fn files_dropped(&mut self, paths: &[std::path::PathBuf]) -> anyhow::Result<()> {
+        self.dismiss_overlays()?;
+        for (i, path) in paths.iter().enumerate() {
+            self.spawn_tab(&downloads::file_url(path), i == 0)?;
+        }
+        Ok(())
     }
 
     /// Ctrl+U: view-source opens in a new tab, same as Chrome.
@@ -462,7 +523,7 @@ impl App {
             .unwrap_or(0);
         let path = dir.join(format!("shot-{ts}.png"));
         std::fs::write(&path, png)?;
-        eprintln!("cryo: screenshot saved to {}", path.display());
+        crate::report!("screenshot saved to {}", path.display());
         Ok(())
     }
 

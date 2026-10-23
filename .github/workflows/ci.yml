@@ -7,13 +7,36 @@ on:
     branches: [main]
 
 jobs:
-  check:
+  fmt:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
       - name: fmt
         run: cargo fmt --all -- --check
+
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      # tao + rfd link GTK, wry links WebKitGTK, tao's tray links
+      # ayatana-appindicator. The same set release.yml installs.
+      - name: System dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev
+
       - name: clippy
         run: cargo clippy --all-targets -- -D warnings
       - name: build

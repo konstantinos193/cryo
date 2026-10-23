@@ -54,10 +54,7 @@ pub fn download_installer(manifest: &ReleaseManifest) -> Result<PathBuf, UpdateE
         // A corrupt download must not survive to a re-check — the delete
         // is best-effort, but a failure gets a note, not silence.
         if let Err(e) = std::fs::remove_file(&path) {
-            eprintln!(
-                "cryo: could not remove bad installer {}: {e}",
-                path.display()
-            );
+            crate::report!("could not remove bad installer {}: {e}", path.display());
         }
         return Err(UpdateError::Checksum);
     }

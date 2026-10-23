@@ -24,6 +24,10 @@ struct EntryFile {
     title: Option<String>,
     uses: u32,
     last_seen: u64,
+    /// Added after v1 shipped — `default` keeps older files loadable
+    /// without a version bump; absent means no icon was ever seen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    favicon: Option<String>,
 }
 
 impl From<&Entry> for EntryFile {
@@ -33,6 +37,7 @@ impl From<&Entry> for EntryFile {
             title: e.title.clone(),
             uses: e.uses,
             last_seen: e.last_seen,
+            favicon: e.favicon.clone(),
         }
     }
 }
@@ -44,6 +49,7 @@ impl From<EntryFile> for Entry {
             title: e.title,
             uses: e.uses,
             last_seen: e.last_seen,
+            favicon: e.favicon,
         }
     }
 }
@@ -58,15 +64,10 @@ impl JsonFile {
         Self { path }
     }
 
-    /// `%LOCALAPPDATA%\cryo\history.json` — per-user data, the same in a
-    /// dev `target/debug` build and an installed one. Falls back to the
-    /// temp dir where the variable doesn't exist.
+    /// `history.json` under the per-user data dir (`crate::data_dir`) —
+    /// the same in a dev `target/debug` build and an installed one.
     pub fn default_path() -> PathBuf {
-        std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir)
-            .join("cryo")
-            .join("history.json")
+        crate::data_dir().join("history.json")
     }
 
     fn read_err(&self, source: std::io::Error) -> PersistError {

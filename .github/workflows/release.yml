@@ -2,7 +2,7 @@ name: Release
 
 # Cut a release by pushing a version tag:
 #   git tag v0.2.0 && git push origin v0.2.0
-# The tag must match `version` in Cargo.toml — the pipeline checks.
+# The tag must match `version` in Cargo.toml — every job checks.
 on:
   push:
     tags: ["v*"]
@@ -17,7 +17,7 @@ env:
   HAS_CERT: ${{ secrets.CRYO_CERT_BASE64 != '' && secrets.CRYO_CERT_PASSWORD != '' }}
 
 jobs:
-  release:
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -67,7 +67,8 @@ jobs:
 
       # The updater fetches releases/latest/download/latest.json — the
       # version and pinned tag URL in here are what the app compares
-      # against and downloads.
+      # against and downloads. Windows-only: the updater is cfg'd out on
+      # the other platforms.
       - name: Write latest.json
         shell: pwsh
         run: |
@@ -87,3 +88,150 @@ jobs:
           files: |
             installer/output/cryo-setup.exe
             installer/output/latest.json
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      # tao + rfd link GTK, wry links WebKitGTK, tao's tray links
+      # ayatana-appindicator.
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev
+
+      - name: Version from tag
+        id: v
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Tag matches Cargo.toml
+        run: |
+          pkg=$(sed -n 's/^version = "\([^"]*\)".*/\1/p' Cargo.toml | head -1)
+          if [ "$pkg" != "${{ steps.v.outputs.version }}" ]; then
+            echo "tag ${{ github.ref_name }} does not match Cargo.toml version $pkg"
+            exit 1
+          fi
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package tarball
+        run: |
+          strip target/release/cryo
+          tar -C target/release -czf cryo-x86_64-unknown-linux-gnu.tar.gz cryo
+
+      - name: Package .deb
+        run: |
+          root="deb/cryo_${{ steps.v.outputs.version }}_amd64"
+          mkdir -p "$root/DEBIAN" "$root/usr/bin" \
+            "$root/usr/share/applications" \
+            "$root/usr/share/icons/hicolor/256x256/apps"
+          cp target/release/cryo "$root/usr/bin/"
+          cp assets/icon.png "$root/usr/share/icons/hicolor/256x256/apps/cryo.png"
+          cat > "$root/DEBIAN/control" <<'EOF'
+          Package: cryo
+          Section: web
+          Priority: optional
+          Architecture: amd64
+          Maintainer: konstantinos193
+          Depends: libwebkit2gtk-4.1-0, libgtk-3-0, libayatana-appindicator3-1
+          Description: A memory-obsessed browser shell written in Rust.
+           Tabs freeze. Budgets hold.
+          EOF
+          echo "Version: ${{ steps.v.outputs.version }}" >> "$root/DEBIAN/control"
+          cat > "$root/usr/share/applications/cryo.desktop" <<'EOF'
+          [Desktop Entry]
+          Name=cryo
+          Comment=A memory-obsessed browser shell
+          Exec=cryo %U
+          Icon=cryo
+          Type=Application
+          Categories=Network;WebBrowser;
+          MimeType=text/html;x-scheme-handler/http;x-scheme-handler/https;
+          EOF
+          dpkg-deb --build --root-owner-group "$root"
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            cryo-x86_64-unknown-linux-gnu.tar.gz
+            deb/*.deb
+
+  macos:
+    strategy:
+      matrix:
+        include:
+          # macos-14 is Apple Silicon, macos-13 is Intel.
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-13
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Version from tag
+        id: v
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Tag matches Cargo.toml
+        run: |
+          pkg=$(sed -n 's/^version = "\([^"]*\)".*/\1/p' Cargo.toml | head -1)
+          if [ "$pkg" != "${{ steps.v.outputs.version }}" ]; then
+            echo "tag ${{ github.ref_name }} does not match Cargo.toml version $pkg"
+            exit 1
+          fi
+
+      - name: Build
+        run: cargo build --release --locked
+
+      # Unsigned bundle — Gatekeeper will flag it; proper notarization
+      # needs an Apple Developer cert, which is a separate decision.
+      - name: Bundle Cryo.app
+        run: |
+          app=Cryo.app/Contents
+          mkdir -p "$app/MacOS" "$app/Resources"
+          cp target/release/cryo "$app/MacOS/cryo"
+
+          set -e
+          mkdir cryo.iconset
+          sips -z 16 16     assets/icon.png --out cryo.iconset/icon_16x16.png
+          sips -z 32 32     assets/icon.png --out cryo.iconset/icon_16x16@2x.png
+          sips -z 32 32     assets/icon.png --out cryo.iconset/icon_32x32.png
+          sips -z 64 64     assets/icon.png --out cryo.iconset/icon_32x32@2x.png
+          sips -z 128 128   assets/icon.png --out cryo.iconset/icon_128x128.png
+          sips -z 256 256   assets/icon.png --out cryo.iconset/icon_128x128@2x.png
+          sips -z 256 256   assets/icon.png --out cryo.iconset/icon_256x256.png
+          sips -z 512 512   assets/icon.png --out cryo.iconset/icon_256x256@2x.png
+          sips -z 512 512   assets/icon.png --out cryo.iconset/icon_512x512.png
+          sips -z 1024 1024 assets/icon.png --out cryo.iconset/icon_512x512@2x.png
+          iconutil -c icns cryo.iconset -o "$app/Resources/cryo.icns"
+
+          cat > "$app/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>cryo</string>
+            <key>CFBundleExecutable</key><string>cryo</string>
+            <key>CFBundleIdentifier</key><string>io.github.konstantinos193.cryo</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>${{ steps.v.outputs.version }}</string>
+            <key>CFBundleVersion</key><string>${{ steps.v.outputs.version }}</string>
+            <key>CFBundleIconFile</key><string>cryo</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          EOF
+
+          tar -czf "cryo-${{ matrix.target }}.tar.gz" Cryo.app
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: cryo-${{ matrix.target }}.tar.gz
