@@ -15,18 +15,21 @@ const MANIFEST_URL: &str =
     "https://github.com/konstantinos193/cryo/releases/latest/download/latest.json";
 
 fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(15))
+    ureq::Agent::config_builder()
+        .timeout_connect(Some(Duration::from_secs(15)))
         .user_agent(concat!("cryo/", env!("CARGO_PKG_VERSION")))
         .build()
+        .new_agent()
 }
 
 pub fn latest_manifest() -> Result<ReleaseManifest, UpdateError> {
-    let body = agent()
+    let mut response = agent()
         .get(MANIFEST_URL)
         .call()
-        .map_err(|e| UpdateError::FetchManifest(e.to_string()))?
-        .into_string()
+        .map_err(|e| UpdateError::FetchManifest(e.to_string()))?;
+    let body = response
+        .body_mut()
+        .read_to_string()
         .map_err(|e| UpdateError::FetchManifest(e.to_string()))?;
     serde_json::from_str(&body).map_err(|e| UpdateError::ParseManifest(e.to_string()))
 }
@@ -44,7 +47,7 @@ pub fn download_installer(manifest: &ReleaseManifest) -> Result<PathBuf, UpdateE
         .get(&manifest.installer_url)
         .call()
         .map_err(|e| UpdateError::Download(e.to_string()))?;
-    let mut reader = response.into_reader();
+    let mut reader = response.into_body().into_reader();
     let mut file = std::fs::File::create(&path).map_err(UpdateError::WriteInstaller)?;
     std::io::copy(&mut reader, &mut file).map_err(UpdateError::WriteInstaller)?;
     file.flush().map_err(UpdateError::WriteInstaller)?;
