@@ -253,6 +253,23 @@ impl History {
         }
     }
 
+    /// Forget one destination — the history pane's per-row delete.
+    /// Returns whether anything was there.
+    pub fn remove(&mut self, text: &str) -> bool {
+        match self.entries.iter().position(|e| e.text == text) {
+            Some(i) => {
+                self.entries.remove(i);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Forget everything — the history pane's "clear all".
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
     /// Fold an imported history into this one.
     ///
     /// Counts take the stronger of the two rather than adding: importing
@@ -423,6 +440,21 @@ impl Recorder {
         self.history.matches(needle, limit)
     }
 
+    /// Forget one destination and flush — an explicit user action earns
+    /// an immediate write, unlike routine recording.
+    pub fn remove(&mut self, text: &str) -> Result<(), PersistError> {
+        if self.history.remove(text) {
+            self.flush()?;
+        }
+        Ok(())
+    }
+
+    /// Forget everything and flush — same reasoning as `remove`.
+    pub fn clear(&mut self) -> Result<(), PersistError> {
+        self.history.clear();
+        self.flush()
+    }
+
     /// Fold an imported history in and flush once — an explicit user
     /// action earns an immediate write, unlike routine recording.
     /// The caller has already built valid entries through `Entry::new`.
@@ -475,6 +507,18 @@ mod tests {
         let mut h = History::default();
         h.record("   ", None, 1);
         h.record("", None, 1);
+        assert!(h.entries().is_empty());
+    }
+
+    #[test]
+    fn remove_and_clear_forget() {
+        let mut h = History::default();
+        h.record("https://a", None, 1);
+        h.record("https://b", None, 2);
+        assert!(!h.remove("https://ghost"), "nothing there, nothing done");
+        assert!(h.remove("https://a"));
+        assert_eq!(h.entries()[0].text, "https://b");
+        h.clear();
         assert!(h.entries().is_empty());
     }
 

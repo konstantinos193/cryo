@@ -292,6 +292,32 @@ pub(super) fn cookies(view: &WebView, uri: &str) -> Result<Vec<Cookie>, EngineEr
     }
 }
 
+pub(super) fn download_folder(view: &WebView) -> Result<std::path::PathBuf, EngineError> {
+    unsafe {
+        let read = || -> windows::core::Result<std::path::PathBuf> {
+            let wv: ICoreWebView2_13 = view.webview().cast()?;
+            let mut raw = windows::core::PWSTR::null();
+            wv.Profile()?.DefaultDownloadFolderPath(&mut raw)?;
+            Ok(std::path::PathBuf::from(webview2_com::take_pwstr(raw)))
+        };
+        read().map_err(|e| EngineError::View(e.to_string()))
+    }
+}
+
+pub(super) fn set_download_folder(
+    view: &WebView,
+    path: &std::path::Path,
+) -> Result<(), EngineError> {
+    unsafe {
+        let write = || -> windows::core::Result<()> {
+            let wv: ICoreWebView2_13 = view.webview().cast()?;
+            wv.Profile()?
+                .SetDefaultDownloadFolderPath(&windows::core::HSTRING::from(path.as_os_str()))
+        };
+        write().map_err(|e| EngineError::View(e.to_string()))
+    }
+}
+
 pub(super) fn clear_browsing_data(view: &WebView) -> Result<(), EngineError> {
     unsafe {
         let wv: ICoreWebView2_13 = view

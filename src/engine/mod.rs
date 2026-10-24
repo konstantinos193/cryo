@@ -210,6 +210,16 @@ pub trait ContentView {
     fn capture_png(&self) -> Result<Vec<u8>, EngineError>;
     /// Show the engine's native save-as UI for the current page.
     fn save_as(&self) -> Result<(), EngineError>;
+    fn download_folder(&self) -> Result<std::path::PathBuf, EngineError> {
+        Err(EngineError::View(
+            "Download folder settings are unavailable on this platform".into(),
+        ))
+    }
+    fn set_download_folder(&self, _path: &std::path::Path) -> Result<(), EngineError> {
+        Err(EngineError::View(
+            "Download folder settings are unavailable on this platform".into(),
+        ))
+    }
     /// Every cookie this view's profile would send for `uri` — HttpOnly
     /// included. Profile-scoped like `clear_browsing_data`: any view
     /// answers for the whole jar.

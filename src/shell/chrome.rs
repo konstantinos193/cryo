@@ -144,11 +144,29 @@ pub enum ChromeCommand {
         id: u64,
     },
     /// The library panel wants a pane's data pushed: "bookmarks",
-    /// "passwords", "import" or "export". The panel is a chrome overlay,
-    /// so its bounds still travel through `Overlay`.
+    /// "passwords", "history", "import" or "export". The panel is a
+    /// chrome overlay, so its bounds still travel through `Overlay`.
     Library {
         pane: String,
     },
+    /// A history row clicked — where it lands follows the modifiers,
+    /// same rule as `BookmarkOpen`. The URL travels instead of an id:
+    /// history's key is the remembered text itself.
+    HistoryOpen {
+        url: String,
+        #[serde(default)]
+        ctrl: bool,
+        #[serde(default)]
+        shift: bool,
+    },
+    /// The row's ✕ — forget one destination.
+    HistoryRemove {
+        text: String,
+    },
+    /// "Clear history" — forgets every recorded visit and typed input.
+    /// A struct variant so a stray `{"cmd":"history_clear","x":…}`
+    /// fails `deny_unknown_fields` rather than parsing anyway.
+    HistoryClear {},
     /// Show one saved password in the clear. The app asks the user to
     /// confirm before it answers — a click in this document is not on
     /// its own enough to put a secret on screen.
@@ -301,12 +319,18 @@ pub struct ChromeBookmark {
 /// are long.
 #[derive(Debug, Serialize)]
 pub struct ChromeLibrary {
-    /// "bookmarks" | "passwords" | "import" | "export"
+    /// "bookmarks" | "passwords" | "history" | "import" | "export"
     pub pane: String,
     pub bookmarks: Vec<ChromeBookmark>,
     /// Kept bookmarks the push left out — the pane says how many rather
     /// than pretending the list is all of them.
     pub more_bookmarks: usize,
+    /// Remembered visits and typed input — the history pane's rows,
+    /// newest first. Empty (with `incognito` set) means "this window
+    /// keeps nothing", which the pane says instead of looking broken.
+    pub history: Vec<ChromeHistoryEntry>,
+    /// Remembered entries the push left out.
+    pub more_history: usize,
     /// Saved sign-ins, never their secrets: a password reaches this
     /// document only through `__cryo_secret`, after the user confirms.
     pub passwords: Vec<ChromePassword>,
@@ -324,6 +348,19 @@ pub struct ChromeLibrary {
     /// Incognito windows keep nothing: the panes say so and the import
     /// buttons stay off.
     pub incognito: bool,
+}
+
+/// One remembered entry on the wire — a visited URL or a committed
+/// omnibox input. `text` is the identity `history_remove` sends back.
+#[derive(Debug, Serialize)]
+pub struct ChromeHistoryEntry {
+    pub text: String,
+    /// Document title; `None` on typed input and iconless visits.
+    pub title: Option<String>,
+    pub uses: u32,
+    /// Unix seconds of the last visit — the pane groups and sorts on it.
+    pub last_seen: u64,
+    pub favicon: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

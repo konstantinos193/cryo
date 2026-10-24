@@ -373,6 +373,16 @@ impl ContentView for WryView {
         }
     }
 
+    #[cfg(target_os = "windows")]
+    fn download_folder(&self) -> Result<std::path::PathBuf, EngineError> {
+        ops::download_folder(&self.view)
+    }
+
+    #[cfg(target_os = "windows")]
+    fn set_download_folder(&self, path: &std::path::Path) -> Result<(), EngineError> {
+        ops::set_download_folder(&self.view, path)
+    }
+
     fn clear_browsing_data(&self) -> Result<(), EngineError> {
         #[cfg(target_os = "windows")]
         {

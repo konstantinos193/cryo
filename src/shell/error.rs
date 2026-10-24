@@ -74,30 +74,43 @@ fn hex(nibble: u8) -> char {
 pub const ERROR_HTML: &str = r##"<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><title>Problem loading page</title><style>
-  :root { color-scheme: dark; }
+  :root {
+    color-scheme: dark;
+    --bg1: #11141a; --bg2: #181d25; --line: #262d38;
+    --tx: #e9edf2; --tx2: #98a1ae; --tx3: #67707d;
+    --ice: #8fdcf0; --ice-deep: #2b7186;
+  }
   body {
     min-height: 100vh; margin: 0; display: flex; align-items: center;
-    justify-content: center; background: #16181c; color: #d7dae0;
+    justify-content: center; color: var(--tx);
+    background:
+      radial-gradient(800px 300px at 50% -60px, rgba(59, 142, 168, .12), transparent 70%),
+      var(--bg1);
     font: 15px/1.6 system-ui, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
     -webkit-user-select: none; user-select: none;
   }
   main { width: min(460px, calc(100vw - 64px)); padding: 32px 0; }
-  svg { width: 56px; height: 56px; display: block; opacity: .85; }
-  h1 { font-size: 21px; font-weight: 600; margin: 22px 0 8px; letter-spacing: -.01em; }
-  p { margin: 0; color: #9aa0aa; }
+  svg { width: 56px; height: 56px; display: block; opacity: .9;
+        filter: drop-shadow(0 4px 14px rgba(143, 220, 240, .16)); }
+  h1 { font-size: 22px; font-weight: 650; margin: 24px 0 8px; letter-spacing: -.01em; }
+  p { margin: 0; color: var(--tx2); }
   .target {
-    margin-top: 18px; padding: 10px 12px; border-radius: 6px;
-    background: #1d2026; color: #7e858f; font-size: 13px;
+    margin-top: 18px; padding: 11px 13px; border-radius: 9px;
+    border: 1px solid var(--line);
+    background: var(--bg2); color: var(--tx3); font-size: 13px;
     font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
     word-break: break-all; -webkit-user-select: text; user-select: text;
   }
   button {
-    margin-top: 22px; padding: 9px 18px; border: 0; border-radius: 6px;
-    background: #2a7089; color: #eaf9fd; font: inherit; font-size: 14px;
-    font-weight: 500; cursor: pointer;
+    margin-top: 24px; padding: 10px 20px; border: 0; border-radius: 10px;
+    background: var(--ice-deep); color: #eaf9fd; font: inherit; font-size: 14px;
+    font-weight: 550; cursor: pointer;
+    transition: background .15s ease, transform .1s ease;
   }
   button:hover { background: #3b8ea8; }
-  button:focus-visible { outline: 2px solid #78c7dc; outline-offset: 2px; }
+  button:active { transform: translateY(1px); }
+  button:focus-visible { outline: 2px solid var(--ice); outline-offset: 2px; }
 </style></head>
 <body>
   <main>

@@ -63,6 +63,9 @@ enum KeyCommand {
     /// Ctrl+Shift+O: the library panel — kept pages, saved passwords,
     /// import and export.
     Library,
+    /// Ctrl+H: the library panel's history pane. History is private —
+    /// never a fetchable page — so it lives in the chrome overlay.
+    History,
 }
 
 /// Map a key to the browser command it triggers, plus whether the key is
@@ -132,6 +135,7 @@ fn key_command(acc: Accelerator) -> Option<(KeyCommand, bool)> {
         (true, false, true, Character('f')) => (KeyCommand::FreezeActive, true),
         (true, false, false, Character('d')) => (KeyCommand::BookmarkPage, true),
         (true, false, true, Character('o')) => (KeyCommand::Library, true),
+        (true, false, false, Character('h')) => (KeyCommand::History, true),
         (true, false, true, Delete) => (KeyCommand::ClearBrowsingData, true),
         _ => return None,
     };
@@ -254,6 +258,7 @@ impl App {
             KeyCommand::ClearBrowsingData => self.clear_data(),
             KeyCommand::BookmarkPage => self.bookmark_active(),
             KeyCommand::Library => self.toggle_library(),
+            KeyCommand::History => self.toggle_history(),
             KeyCommand::FreezeActive => match self.registry.active_id() {
                 Some(id) => self.freeze_tab(id),
                 None => Ok(()),

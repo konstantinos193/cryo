@@ -14,6 +14,14 @@ pub const CHROME_URL: &str = "http://cryo.localhost/chrome";
 pub const NEW_TAB_URL: &str = "http://cryo.localhost/newtab";
 pub const SETTINGS_URL: &str = "http://cryo.localhost/settings";
 
+pub(crate) fn download_folder_request(url: &str) -> Option<bool> {
+    match url.strip_prefix(SETTINGS_URL)? {
+        "/download-folder" => Some(false),
+        "/download-folder/choose" => Some(true),
+        _ => None,
+    }
+}
+
 /// A URL that belongs to the shell, not to any web destination.
 pub fn is_internal_url(url: &str) -> bool {
     url.starts_with(INTERNAL_ORIGIN)
@@ -48,11 +56,21 @@ pub fn internal_page(path: &str) -> Option<&'static str> {
 pub const NEW_TAB_HTML: &str = r##"<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><title>New tab</title><style>
-  :root { color-scheme: dark; }
+  :root {
+    color-scheme: dark;
+    --bg1: #11141a; --bg2: #181d25; --line: #262d38;
+    --tx: #e9edf2; --tx2: #98a1ae; --tx3: #67707d;
+    --ice: #8fdcf0; --ice-deep: #2b7186; --ice-dim: #17455a;
+  }
   body {
     min-height: 100vh; margin: 0; display: flex; align-items: flex-start;
-    justify-content: center; background: #16181c; color: #d7dae0;
+    justify-content: center; color: var(--tx);
+    /* A faint ice glow at the top gives the flat dark a horizon. */
+    background:
+      radial-gradient(900px 320px at 50% -80px, rgba(59, 142, 168, .14), transparent 70%),
+      var(--bg1);
     font: 15px/1.6 system-ui, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
     -webkit-user-select: none; user-select: none;
   }
   main {
@@ -62,38 +80,45 @@ pub const NEW_TAB_HTML: &str = r##"<!doctype html>
        land. ~15vh is where centreing put it anyway. */
     margin-top: 15vh; text-align: center;
   }
-  svg { width: 72px; height: 72px; margin: 0 auto; display: block; }
+  svg { width: 72px; height: 72px; margin: 0 auto; display: block;
+        filter: drop-shadow(0 6px 18px rgba(143, 220, 240, .18)); }
   .brand {
-    margin-top: 20px; font-size: 34px; font-weight: 600; letter-spacing: .06em;
+    margin-top: 20px; font-size: 34px; font-weight: 650; letter-spacing: .08em;
   }
-  .tag { margin-top: 6px; color: #8a8f98; font-size: 14px; }
+  .tag { margin-top: 6px; color: var(--tx3); font-size: 14px; }
   form { margin-top: 32px; }
   input {
-    width: 100%; box-sizing: border-box; padding: 13px 16px;
-    border: 1px solid #272b33; border-radius: 10px;
-    background: #1d2026; color: #e6e9ee; font: inherit;
+    width: 100%; box-sizing: border-box; padding: 14px 20px;
+    border: 1px solid var(--line); border-radius: 999px;
+    background: var(--bg2); color: var(--tx); font: inherit;
+    transition: border-color .15s ease, box-shadow .15s ease;
     -webkit-user-select: text; user-select: text;
   }
-  input::placeholder { color: #70767f; }
+  input::placeholder { color: var(--tx3); }
   input:focus {
-    outline: none; border-color: #2a7089;
-    box-shadow: 0 0 0 3px rgba(42, 112, 137, .25);
+    outline: none; border-color: var(--ice-deep);
+    box-shadow: 0 0 0 4px rgba(143, 220, 240, .13), 0 8px 30px rgba(0,0,0,.35);
   }
   #dial {
     margin-top: 40px; display: flex; flex-wrap: wrap; gap: 12px;
     justify-content: center;
   }
   .tile {
-    width: 96px; padding: 12px 6px 10px; border-radius: 10px;
-    background: #1d2026; border: 1px solid #272b33;
-    color: #c9cdd4; text-decoration: none; text-align: center;
+    width: 96px; padding: 14px 6px 11px; border-radius: 12px;
+    background: var(--bg2); border: 1px solid var(--line);
+    color: var(--tx2); text-decoration: none; text-align: center;
     font-size: 12px; overflow: hidden;
+    transition: border-color .15s ease, background .15s ease, transform .15s ease;
   }
-  .tile:hover { border-color: #2a7089; background: #22262d; }
+  .tile:hover {
+    border-color: var(--ice-deep); background: #1d232d; color: var(--tx);
+    transform: translateY(-1px);
+  }
   .tile .dot {
-    width: 34px; height: 34px; margin: 0 auto 6px; border-radius: 8px;
+    width: 34px; height: 34px; margin: 0 auto 7px; border-radius: 9px;
     display: flex; align-items: center; justify-content: center;
-    background: #17455a; color: #a2deee; font-size: 16px; font-weight: 600;
+    background: var(--ice-dim); color: var(--ice); font-size: 16px; font-weight: 600;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
   }
 </style></head>
 <body>
@@ -181,42 +206,88 @@ pub const NEW_TAB_HTML: &str = r##"<!doctype html>
 </html>
 "##;
 
-/// Settings: mostly a reference page — shortcuts, profile location,
-/// and what the engine cannot do. The one writable control is the
-/// default search engine, which works without IPC precisely because
-/// this page has none: the pick lives in the shell origin's
-/// localStorage — `cryo.searchEngine`, writeable only by shell
-/// documents — and `chrome.html` reports it back to the app on its
-/// `/cmd` wire (see `search.rs`). Everything else that mutates state
-/// stays in the chrome menu — see `NEW_TAB_HTML` for why a content
-/// view carries no command channel.
+/// Settings: search preferences, download folder, and browser reference.
+/// Search uses the shell origin's localStorage (see `search.rs`). Folder
+/// requests use intercepted navigations, accepted only from a settings tab;
+/// content views still have no general-purpose command channel.
 pub const SETTINGS_HTML: &str = r##"<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><title>Settings</title><style>
-  :root { color-scheme: dark; }
-  body {
-    max-width: 640px; margin: 0 auto; padding: 40px 24px;
-    background: #16181c; color: #d7dae0;
-    font: 14px/1.6 system-ui, "Segoe UI", sans-serif;
+  :root {
+    color-scheme: dark;
+    --bg0: #0b0e12; --bg1: #11141a; --bg2: #181d25; --bg3: #202631;
+    --line: #262d38; --tx: #e9edf2; --tx2: #98a1ae; --tx3: #67707d;
+    --ice: #8fdcf0; --ice-deep: #2b7186;
   }
-  h1 { font-size: 22px; font-weight: 600; margin-bottom: 4px; }
-  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
-       color: #8a8f98; margin: 28px 0 8px; }
-  table { width: 100%; border-collapse: collapse; }
-  td { padding: 6px 0; border-bottom: 1px solid #23262c; vertical-align: top; }
-  td.k { width: 220px; color: #9ec2f5; white-space: nowrap;
-         font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
-  select, input[type="text"] {
-    background: #1d2026; color: #e6e9ee; border: 1px solid #272b33;
-    border-radius: 7px; padding: 6px 10px; font: inherit;
+  body {
+    max-width: 660px; margin: 0 auto; padding: 48px 24px;
+    background: var(--bg1); color: var(--tx);
+    font: 14px/1.6 system-ui, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1 { font-size: 24px; font-weight: 650; margin-bottom: 4px; letter-spacing: -.01em; }
+  h2 { font-size: 12px; font-weight: 700; text-transform: uppercase;
+       letter-spacing: .1em; color: var(--tx3); margin: 32px 0 10px; }
+  table {
+    width: 100%; border-collapse: collapse;
+    background: var(--bg2); border: 1px solid var(--line);
+    border-radius: 14px; overflow: hidden;
+  }
+  td { padding: 12px 14px; border-bottom: 1px solid rgba(255,255,255,.05); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  td.k { width: 220px; color: var(--ice); white-space: nowrap;
+         font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; }
+  input[type="text"] {
+    background: var(--bg0); color: var(--tx); border: 1px solid var(--line);
+    border-radius: 9px; padding: 8px 11px; font: inherit;
+    transition: border-color .12s ease, box-shadow .12s ease;
   }
   input[type="text"] {
-    margin-top: 8px; width: 100%; box-sizing: border-box;
-    font-family: ui-monospace, Consolas, monospace; font-size: 13px;
+    margin-top: 10px; width: 100%; box-sizing: border-box;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 13px;
     -webkit-user-select: text; user-select: text;
   }
-  select:focus, input[type="text"]:focus { outline: none; border-color: #2a7089; }
-  .note { color: #8a8f98; }
+  input[type="text"]:focus {
+    outline: none; border-color: var(--ice-deep);
+    box-shadow: 0 0 0 3px rgba(143, 220, 240, .14);
+  }
+  input[type="text"]::placeholder { color: var(--tx3); }
+  .note { color: var(--tx2); margin-top: 8px; }
+  code { color: var(--ice); }
+  /* Same custom-dropdown pattern the chrome library uses — a native
+     <select> popup can't carry this theme. */
+  .xdrop { position: relative; display: inline-block; }
+  .xdrop-btn {
+    display: flex; align-items: center; gap: 10px; min-width: 190px;
+    padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px;
+    background: var(--bg0); color: var(--tx); font: inherit; cursor: pointer;
+    transition: border-color .12s ease, box-shadow .12s ease;
+  }
+  .xdrop-btn:hover { border-color: #3a4250; }
+  #download-change:focus-visible { outline: 2px solid var(--ice); outline-offset: 3px; }
+  #download-change:disabled { opacity: .5; cursor: default; }
+  .xdrop.open .xdrop-btn {
+    border-color: var(--ice-deep);
+    box-shadow: 0 0 0 3px rgba(143, 220, 240, .14);
+  }
+  .xdrop-btn .chev { margin-left: auto; color: var(--tx3); font-size: 10px;
+                     transition: transform .15s ease; }
+  .xdrop.open .chev { transform: rotate(180deg); }
+  .xdrop-pop {
+    display: none; position: absolute; top: calc(100% + 6px); left: 0; z-index: 5;
+    min-width: 100%; padding: 4px; list-style: none;
+    background: rgba(24, 29, 37, .97); border: 1px solid rgba(255,255,255,.09);
+    border-radius: 10px; box-shadow: 0 16px 44px rgba(0,0,0,.55);
+  }
+  .xdrop.open .xdrop-pop { display: block; }
+  .xdrop-item {
+    display: block; width: 100%; padding: 8px 10px; border: 0; border-radius: 7px;
+    background: transparent; color: var(--tx2); font: inherit; text-align: left;
+    cursor: pointer; white-space: nowrap;
+  }
+  .xdrop-item:hover { background: rgba(255,255,255,.06); color: var(--tx); }
+  .xdrop-item.on { color: var(--ice); }
+  .xdrop-item.on::after { content: ' ✓'; }
 </style></head>
 <body>
   <h1>Settings</h1>
@@ -225,11 +296,27 @@ pub const SETTINGS_HTML: &str = r##"<!doctype html>
   <h2>Search</h2>
   <table>
     <tr><td class="k">Search engine</td><td>
-      <select id="engine" aria-label="Default search engine"></select>
+      <div class="xdrop" id="engine-drop">
+        <button class="xdrop-btn" id="engine" type="button"
+                aria-haspopup="listbox" aria-label="Default search engine">
+          <span id="engine-label">DuckDuckGo</span><span class="chev">▾</span>
+        </button>
+        <div class="xdrop-pop" id="engine-pop" role="listbox"></div>
+      </div>
       <input id="engine-tpl" type="text" spellcheck="false" hidden
              placeholder="https://example.com/search?q=%s"
              aria-label="Custom search URL">
       <div class="note">Used by the address bar and the new-tab search box. Applies as soon as it is picked; for Custom, <code>%s</code> marks where the query goes.</div>
+    </td></tr>
+  </table>
+
+  <h2>Downloads</h2>
+  <table>
+    <tr><td class="k">Download folder</td><td>
+      <div id="download-path" style="overflow-wrap:anywhere">Loading…</div>
+      <button class="xdrop-btn" id="download-change" type="button" aria-label="Change download folder" aria-describedby="download-path download-status" style="margin-top:10px" disabled>Change…</button>
+      <div id="download-status" class="note" role="status" aria-live="polite"></div>
+      <div class="note">New downloads are saved here. Your choice is remembered across restarts; downloads already in progress keep their original location.</div>
     </td></tr>
   </table>
 
@@ -257,6 +344,7 @@ pub const SETTINGS_HTML: &str = r##"<!doctype html>
     <tr><td class="k">Ctrl+M</td><td>Mute tab</td></tr>
     <tr><td class="k">Ctrl+Shift+F</td><td>Freeze tab — drops the surface, keeps a snapshot; click the tab to restore. ⋮ menu also has Discard.</td></tr>
     <tr><td class="k">F11 / F12</td><td>Fullscreen / DevTools</td></tr>
+    <tr><td class="k">Ctrl+H / Ctrl+Shift+O</td><td>History / library panel</td></tr>
     <tr><td class="k">Ctrl+Shift+N</td><td>Incognito window</td></tr>
     <tr><td class="k">Ctrl+Shift+Del</td><td>Clear browsing data</td></tr>
     <tr><td class="k">Ctrl+Shift+Q</td><td>Quit</td></tr>
@@ -267,48 +355,80 @@ pub const SETTINGS_HTML: &str = r##"<!doctype html>
   // or a custom template: an http(s) URL holding %s where the encoded
   // query goes. `cryo.searchEngine.custom` remembers the last template
   // so toggling away and back doesn't lose it.
+  var downloadChange = document.getElementById("download-change");
+  window.__cryo_download_folder = function (path, error) {
+    if (path) document.getElementById("download-path").textContent = path;
+    document.getElementById("download-status").textContent = error || "";
+    downloadChange.disabled = !path;
+    if (!path) document.getElementById("download-path").textContent = "Folder unavailable";
+  };
+  downloadChange.onclick = function () {
+    downloadChange.disabled = true;
+    location.href = "/settings/download-folder/choose";
+  };
+  location.href = "/settings/download-folder";
   var KEY = "cryo.searchEngine";
   var CUSTOM_KEY = "cryo.searchEngine.custom";
-  var sel = document.getElementById("engine");
+  var drop = document.getElementById("engine-drop");
+  var btn = document.getElementById("engine");
+  var lbl = document.getElementById("engine-label");
+  var pop = document.getElementById("engine-pop");
   var tpl = document.getElementById("engine-tpl");
+  var value = "duckduckgo";
   function isTemplate(v) {
     v = v.trim();
     var m = /^https?:\/\/[^\s/]+/.exec(v);
     return !!m && v.indexOf("%s") !== -1 && !/\s/.test(v);
   }
-  function showTpl() { tpl.hidden = sel.value !== "custom"; }
-  fetch("/engines").then(function (r) { return r.json(); }).then(function (list) {
-    list.forEach(function (e) {
-      var o = document.createElement("option");
-      o.value = e.slug;
-      o.textContent = e.name;
-      sel.appendChild(o);
+  function showTpl() { tpl.hidden = value !== "custom"; }
+  function paint() {
+    [...pop.children].forEach(function (el) {
+      el.classList.toggle("on", el.dataset.v === value);
     });
-    var o = document.createElement("option");
-    o.value = "custom";
-    o.textContent = "Custom…";
-    sel.appendChild(o);
-    var pick = localStorage.getItem(KEY) || "duckduckgo";
-    if (list.some(function (e) { return e.slug === pick; })) {
-      sel.value = pick;
-    } else {
-      sel.value = "custom";
-      tpl.value = isTemplate(pick) ? pick : (localStorage.getItem(CUSTOM_KEY) || "");
-    }
+  }
+  function pick(v, label, customTpl) {
+    value = v;
+    lbl.textContent = label;
+    paint();
     showTpl();
-  }).catch(function () {});
-  sel.addEventListener("change", function () {
-    showTpl();
-    if (sel.value !== "custom") {
-      localStorage.setItem(KEY, sel.value);
+    if (v !== "custom") {
+      localStorage.setItem(KEY, v);
       return;
     }
     // Nothing is stored until the input holds a valid template — the
     // previous pick keeps working meanwhile.
-    if (!tpl.value) tpl.value = localStorage.getItem(CUSTOM_KEY) || "";
+    if (!tpl.value) tpl.value = customTpl || localStorage.getItem(CUSTOM_KEY) || "";
     if (isTemplate(tpl.value)) localStorage.setItem(KEY, tpl.value.trim());
     tpl.focus();
+  }
+  function addItem(v, label) {
+    var item = document.createElement("button");
+    item.type = "button";
+    item.className = "xdrop-item";
+    item.dataset.v = v;
+    item.setAttribute("role", "option");
+    item.textContent = label;
+    item.onclick = function (e) { e.stopPropagation(); drop.classList.remove("open"); pick(v, label); };
+    pop.appendChild(item);
+  }
+  btn.onclick = function (e) { e.stopPropagation(); drop.classList.toggle("open"); };
+  drop.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") drop.classList.remove("open");
   });
+  document.addEventListener("click", function () { drop.classList.remove("open"); });
+  fetch("/engines").then(function (r) { return r.json(); }).then(function (list) {
+    list.forEach(function (e) { addItem(e.slug, e.name); });
+    addItem("custom", "Custom…");
+    var stored = localStorage.getItem(KEY) || "duckduckgo";
+    var hit = list.filter(function (e) { return e.slug === stored; })[0];
+    if (hit) {
+      pick(hit.slug, hit.name);
+    } else {
+      var t = isTemplate(stored) ? stored : (localStorage.getItem(CUSTOM_KEY) || "");
+      if (t) tpl.value = t;
+      pick("custom", "Custom…", t);
+    }
+  }).catch(function () {});
   tpl.addEventListener("input", function () {
     if (isTemplate(tpl.value)) {
       localStorage.setItem(KEY, tpl.value.trim());
@@ -323,6 +443,26 @@ pub const SETTINGS_HTML: &str = r##"<!doctype html>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn download_folder_requests_require_exact_settings_routes() {
+        assert_eq!(
+            download_folder_request(&format!("{SETTINGS_URL}/download-folder")),
+            Some(false)
+        );
+        assert_eq!(
+            download_folder_request(&format!("{SETTINGS_URL}/download-folder/choose")),
+            Some(true)
+        );
+        for url in [
+            "https://example.com/settings/download-folder/choose",
+            "http://cryo.localhost.evil/settings/download-folder/choose",
+            "http://cryo.localhost/settings/download-folder/choose?extra=1",
+            SETTINGS_URL,
+        ] {
+            assert_eq!(download_folder_request(url), None);
+        }
+    }
 
     #[test]
     fn resolves_known_pages_only() {

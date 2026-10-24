@@ -80,6 +80,9 @@ impl App {
             ChromeCommand::BookmarkOpen { id, ctrl, shift } => self.open_bookmark(id, ctrl, shift),
             ChromeCommand::BookmarkRemove { id } => self.remove_bookmark(id),
             ChromeCommand::Library { pane } => self.show_library(&pane),
+            ChromeCommand::HistoryOpen { url, ctrl, shift } => self.open_history(&url, ctrl, shift),
+            ChromeCommand::HistoryRemove { text } => self.remove_history(&text),
+            ChromeCommand::HistoryClear {} => self.clear_history(),
             ChromeCommand::PasswordReveal { origin, username } => {
                 self.reveal_password(&origin, &username)
             }

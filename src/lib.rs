@@ -115,6 +115,41 @@ pub(crate) fn base64(bytes: &[u8]) -> String {
     out
 }
 
+/// The inverse of `base64`, forgiving the way foreign wires are:
+/// whitespace and stray bytes outside the alphabet are skipped rather
+/// than failing the decode — a truncated or padded reply still yields
+/// what it carried.
+pub(crate) fn base64_decode(s: &str) -> Option<Vec<u8>> {
+    let val = |b: u8| -> Option<u8> {
+        match b {
+            b'A'..=b'Z' => Some(b - b'A'),
+            b'a'..=b'z' => Some(b - b'a' + 26),
+            b'0'..=b'9' => Some(b - b'0' + 52),
+            b'+' | b'-' => Some(62),
+            b'/' | b'_' => Some(63),
+            _ => None,
+        }
+    };
+    let mut out = Vec::with_capacity(s.len() / 4 * 3);
+    let mut acc = 0u32;
+    let mut bits = 0;
+    for &b in s.as_bytes() {
+        if b == b'=' {
+            break;
+        }
+        let Some(v) = val(b) else { continue };
+        acc = (acc << 6) | v as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    // Bits short of a full byte at the end are padding's remainder —
+    // a reply cut mid-quad still decodes its whole bytes.
+    Some(out)
+}
+
 /// A temp dir no other test on this machine shares — the store
 /// adapters' file tests all scratch in one.
 #[cfg(test)]

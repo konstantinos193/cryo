@@ -20,11 +20,15 @@ use crate::engine::Cookie;
 /// `fetch` talks to, so the same set is exactly what gets sent.
 pub const JAR_URL: &str = "https://accounts.google.com";
 
-/// `ListAccounts`, the endpoint Chromium's own account button reads.
-/// `source=ChromiumBrowser` is what real browsers send and the answer
-/// doesn't depend on it; `json=standard` picks the parseable reply.
+/// `ListAccounts`, the endpoint Chromium's own account button reads —
+/// with the same parameters it sends (`gaia_urls.cc`). `gpsia=1` isn't
+/// optional, and neither is the shape: a bare GET gets a 400 — the
+/// request is a form POST with a `www.google.com` Origin
+/// (`GaiaAuthFetcher::StartListAccounts`). `laf=b64bin` is the only
+/// format still served; the reply is a base64 `ListAccountsResponse`
+/// protobuf, not the `)]}'` JSON it used to be.
 const LIST_ACCOUNTS_URL: &str =
-    "https://accounts.google.com/ListAccounts?source=ChromiumBrowser&json=standard";
+    "https://accounts.google.com/ListAccounts?gpsia=1&source=ChromiumBrowser&json=standard&laf=b64bin";
 
 /// Who the profile is signed in as — `None` means signed out.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,6 +49,7 @@ pub fn fetch(cookies: &[Cookie]) -> Option<Session> {
     // `SID` is the canary Google plants on sign-in; without it the round
     // trip can't name an account, so don't make it.
     if !cookies.iter().any(|c| c.name == "SID") {
+        crate::report!("account check: jar holds no SID cookie");
         return None;
     }
     let header = cookies
@@ -52,13 +57,33 @@ pub fn fetch(cookies: &[Cookie]) -> Option<Session> {
         .map(|c| format!("{}={}", c.name, c.value))
         .collect::<Vec<_>>()
         .join("; ");
-    let mut response = agent()
-        .get(LIST_ACCOUNTS_URL)
+    let mut response = match agent()
+        .post(LIST_ACCOUNTS_URL)
         .header("Cookie", &header)
-        .call()
-        .ok()?;
-    let body = response.body_mut().read_to_string().ok()?;
-    let (name, email, photo) = parse_list_accounts(&body)?;
+        .header("Origin", "https://www.google.com")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .send(" ")
+    {
+        Ok(r) => r,
+        Err(e) => {
+            crate::report!("account check: ListAccounts request failed: {e:?}");
+            return None;
+        }
+    };
+    let body = match response.body_mut().read_to_string() {
+        Ok(b) => b,
+        Err(e) => {
+            crate::report!("account check: ListAccounts body unreadable: {e:?}");
+            return None;
+        }
+    };
+    let (name, email, photo) = match parse_list_accounts(&body) {
+        Some(t) => t,
+        None => {
+            crate::report!("account check: ListAccounts reply named no account: {body:.200}");
+            return None;
+        }
+    };
     let avatar = photo.as_deref().and_then(fetch_avatar);
     Some(Session {
         name,
@@ -79,31 +104,102 @@ pub fn is_google_url(url: &str) -> bool {
     host == "google.com" || host.ends_with(".google.com")
 }
 
-/// The ListAccounts reply: `)]}'` followed by
-/// `["gaia.l.a.r", [], [[<id>, <email>, <name>, <given>, ...], ...]]`.
-/// Field positions are Google's wire and have drifted before, so the
-/// parse picks by shape — email is the first `@` string, name the
-/// first plain word string, photo any googleusercontent URL — rather
-/// than by index.
+/// One protobuf field's payload — only the wire types the
+/// `ListAccountsResponse` schema uses: varint (0) and
+/// length-delimited (2).
+enum Field<'a> {
+    Var(u64),
+    Bytes(&'a [u8]),
+}
+
+/// The ListAccounts reply: base64 of a `ListAccountsResponse` proto.
+/// Each `account` (field 1, length-delimited) carries the display name
+/// (2), email (3) and photo URL (4) as strings, plus `valid_session`
+/// (9) and `signed_out` (14) flags — an entry that fails either check
+/// is a leftover cookie, not a live session. Chromium's own projection
+/// (`list_accounts_response.proto`) reads only a subset; field numbers
+/// here come from the wire as actually served.
 fn parse_list_accounts(body: &str) -> Option<(String, String, Option<String>)> {
-    let json = &body[body.find('[')?..];
-    let root: serde_json::Value = serde_json::from_str(json).ok()?;
-    let account = root.get(2)?.as_array()?.first()?.as_array()?;
-    let strings = || account.iter().filter_map(|v| v.as_str());
-    let email = strings().find(|s| s.contains('@'))?.to_string();
-    let name = strings()
-        .find(|s| {
-            !s.contains('@')
-                && !s.starts_with("http")
-                && !s.chars().all(|c| c.is_ascii_digit() || c == '.')
-                && !s.is_empty()
-        })
-        .unwrap_or(email.as_str())
-        .to_string();
-    let photo = strings()
-        .find(|s| s.starts_with("https://") && s.contains("googleusercontent.com"))
-        .map(str::to_string);
-    Some((name, email, photo))
+    let raw = crate::base64_decode(body.trim())?;
+    for field in proto_fields(&raw)? {
+        let (1, Field::Bytes(msg)) = field else {
+            continue;
+        };
+        let Some(f) = proto_fields(msg) else { continue };
+        let signed_out = var_field(&f, 14) == Some(1);
+        let valid = var_field(&f, 9) != Some(0);
+        if signed_out || !valid {
+            continue;
+        }
+        let Some(email) = str_field(&f, 3) else {
+            continue;
+        };
+        let name = str_field(&f, 2).filter(|s| !s.is_empty()).unwrap_or(email);
+        let photo = str_field(&f, 4)
+            .filter(|s| s.starts_with("https://") && s.contains("googleusercontent.com"));
+        return Some((
+            name.to_string(),
+            email.to_string(),
+            photo.map(str::to_string),
+        ));
+    }
+    None
+}
+
+/// Field `tag`'s string value in a parsed message, if present.
+fn str_field<'a>(fields: &[(u64, Field<'a>)], tag: u64) -> Option<&'a str> {
+    fields.iter().find_map(|(t, f)| match (t, f) {
+        (t, Field::Bytes(b)) if *t == tag => std::str::from_utf8(b).ok(),
+        _ => None,
+    })
+}
+
+/// Field `tag`'s varint value in a parsed message, if present.
+fn var_field(fields: &[(u64, Field<'_>)], tag: u64) -> Option<u64> {
+    fields.iter().find_map(|(t, f)| match (t, f) {
+        (t, Field::Var(v)) if *t == tag => Some(*v),
+        _ => None,
+    })
+}
+
+/// Walk a protobuf buffer into (tag, payload) pairs. `None` on
+/// malformed wire data — a truncated varint, a length running past
+/// the buffer, or a wire type the schema never carries.
+fn proto_fields(buf: &[u8]) -> Option<Vec<(u64, Field<'_>)>> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < buf.len() {
+        let key = varint(buf, &mut i)?;
+        let field = match key & 7 {
+            0 => Field::Var(varint(buf, &mut i)?),
+            2 => {
+                let len = usize::try_from(varint(buf, &mut i)?).ok()?;
+                let bytes = buf.get(i..i.checked_add(len)?)?;
+                i += len;
+                Field::Bytes(bytes)
+            }
+            _ => return None,
+        };
+        out.push((key >> 3, field));
+    }
+    Some(out)
+}
+
+fn varint(buf: &[u8], i: &mut usize) -> Option<u64> {
+    let mut v = 0u64;
+    let mut shift = 0;
+    loop {
+        let b = *buf.get(*i)?;
+        *i += 1;
+        v |= ((b & 0x7f) as u64) << shift;
+        if b & 0x80 == 0 {
+            return Some(v);
+        }
+        shift += 7;
+        if shift >= 64 {
+            return None;
+        }
+    }
 }
 
 /// Download the account picture, capped so a hostile URL can't stream
@@ -138,12 +234,47 @@ fn agent() -> ureq::Agent {
 mod tests {
     use super::*;
 
+    /// Encode `tag`'s varint field — test-side mirror of the wire the
+    /// parser reads.
+    fn tvar(tag: u64, v: u64) -> Vec<u8> {
+        let mut out = vec![(tag << 3) as u8];
+        let mut v = v;
+        loop {
+            let b = (v & 0x7f) as u8;
+            v >>= 7;
+            out.push(if v == 0 { b } else { b | 0x80 });
+            if v == 0 {
+                return out;
+            }
+        }
+    }
+
+    /// Encode `tag`'s length-delimited field.
+    fn tstr(tag: u64, s: &str) -> Vec<u8> {
+        let mut out = vec![(tag << 3 | 2) as u8, s.len() as u8];
+        out.extend_from_slice(s.as_bytes());
+        out
+    }
+
+    /// A `ListAccountsResponse` body: each account proto wrapped in
+    /// field 1 and the whole thing base64'd, as the wire serves it.
+    fn reply(accounts: &[&[u8]]) -> String {
+        let mut raw = Vec::new();
+        for a in accounts {
+            raw.push(0x0a); // field 1, length-delimited
+            raw.push(a.len() as u8);
+            raw.extend_from_slice(a);
+        }
+        crate::base64(&raw)
+    }
+
     #[test]
     fn a_reply_names_the_first_account() {
-        let body = ")]}'\n[\"gaia.l.a.r\", [], \
-                    [[\"117\", \"konst@example.com\", \"Konst\", \"K\", 1, 0, 0, \
-                    \"https://lh3.googleusercontent.com/a/abc=s64\"]]]";
-        let (name, email, photo) = parse_list_accounts(body).unwrap();
+        let mut account = tvar(1, 1);
+        account.extend(tstr(2, "Konst"));
+        account.extend(tstr(3, "konst@example.com"));
+        account.extend(tstr(4, "https://lh3.googleusercontent.com/a/abc=s64"));
+        let (name, email, photo) = parse_list_accounts(&reply(&[&account])).unwrap();
         assert_eq!(name, "Konst");
         assert_eq!(email, "konst@example.com");
         assert_eq!(
@@ -154,23 +285,39 @@ mod tests {
 
     #[test]
     fn a_reply_without_photo_still_names_the_account() {
-        let body = "[\"gaia.l.a.r\", [], [[\"117\", \"a@b.com\", \"A B\", \"A\", 1, 0, 0]]]";
-        let (name, email, photo) = parse_list_accounts(body).unwrap();
+        let account = [tstr(2, "A B"), tstr(3, "a@b.com")].concat();
+        let (name, email, photo) = parse_list_accounts(&reply(&[&account])).unwrap();
         assert_eq!((name, email, photo), ("A B".into(), "a@b.com".into(), None));
     }
 
     #[test]
     fn a_missing_name_falls_back_to_the_email() {
-        let body = "[\"gaia.l.a.r\", [], [[\"117\", \"a@b.com\"]]]";
-        let (name, email, _) = parse_list_accounts(body).unwrap();
+        let account = tstr(3, "a@b.com");
+        let (name, email, _) = parse_list_accounts(&reply(&[&account])).unwrap();
         assert_eq!(name, "a@b.com");
         assert_eq!(email, "a@b.com");
     }
 
     #[test]
+    fn a_dead_or_leftover_cookie_is_no_session() {
+        // `signed_out` (14) and `valid_session` (9) mark jar leftovers,
+        // not live accounts — and the parser falls through to the next
+        // entry before giving up.
+        let mut dead = tstr(3, "gone@example.com");
+        dead.extend(tvar(14, 1));
+        let mut expired = tstr(3, "stale@example.com");
+        expired.extend(tvar(9, 0));
+        let mut live = tstr(3, "live@example.com");
+        live.extend(tvar(9, 1));
+        let (name, _, _) = parse_list_accounts(&reply(&[&dead, &expired, &live])).unwrap();
+        assert_eq!(name, "live@example.com");
+    }
+
+    #[test]
     fn an_empty_account_list_is_no_session() {
-        assert!(parse_list_accounts("[\"gaia.l.a.r\", [], []]").is_none());
-        assert!(parse_list_accounts("not json").is_none());
+        assert!(parse_list_accounts(&reply(&[])).is_none());
+        assert!(parse_list_accounts(&reply(&[&tstr(2, "no email")])).is_none());
+        assert!(parse_list_accounts("not proto").is_none());
     }
 
     #[test]

@@ -15,8 +15,8 @@
 
 use crate::bookmarks::{BookmarkId, Draft};
 use crate::shell::chrome::{
-    favicon_data_url, ChromeBookmark, ChromeLibrary, ChromePassword, ChromeSource, Notice,
-    SecretReply,
+    favicon_data_url, ChromeBookmark, ChromeHistoryEntry, ChromeLibrary, ChromePassword,
+    ChromeSource, Notice, SecretReply,
 };
 use crate::shell::pages;
 
@@ -143,6 +143,61 @@ impl App {
         Ok(())
     }
 
+    /// Ctrl+H: same door as the library, straight onto the history pane.
+    /// History never becomes a fetchable page — `persist`'s doc comment
+    /// explains why — so the "history page" is this overlay.
+    pub(super) fn toggle_history(&mut self) -> anyhow::Result<()> {
+        self.chrome
+            .eval("window.__cryo_library_toggle && window.__cryo_library_toggle('history')")?;
+        Ok(())
+    }
+
+    /// A history row clicked: where the address lands follows the
+    /// modifiers, same rule as `open_bookmark` — Ctrl+Shift a background
+    /// tab that keeps the panel up, Ctrl a foreground tab, plain click
+    /// replaces the active page.
+    pub(super) fn open_history(
+        &mut self,
+        url: &str,
+        ctrl: bool,
+        shift: bool,
+    ) -> anyhow::Result<()> {
+        match (ctrl, shift) {
+            (true, true) => self.spawn_tab(url, false),
+            (true, false) => {
+                self.dismiss_overlays()?;
+                self.spawn_tab(url, true)
+            }
+            _ => {
+                self.dismiss_overlays()?;
+                self.navigate_active(url)
+            }
+        }
+    }
+
+    /// Forget one destination — the pane's per-row ✕.
+    pub(super) fn remove_history(&mut self, text: &str) -> anyhow::Result<()> {
+        if let Some(rec) = &mut self.recorder {
+            rec.remove(text)?;
+        }
+        self.push_library()
+    }
+
+    /// "Clear history": an irreversible wipe, so the OS dialog asks
+    /// first — the same gate a revealed password goes through.
+    pub(super) fn clear_history(&mut self) -> anyhow::Result<()> {
+        if !confirm(
+            "Clear history",
+            "Forget every recorded visit and typed address? Kept pages and saved passwords stay.",
+        ) {
+            return Ok(());
+        }
+        if let Some(rec) = &mut self.recorder {
+            rec.clear()?;
+        }
+        self.push_library()
+    }
+
     /// The panel closed — stop pushing to it.
     pub(super) fn forget_library(&mut self) {
         self.library_pane = None;
@@ -156,6 +211,22 @@ impl App {
         };
         let marks = self.bookmarks.marks();
         let creds = self.vault.credentials();
+        let mut history: Vec<ChromeHistoryEntry> = self
+            .recorder
+            .iter()
+            .flat_map(|rec| rec.entries())
+            .map(|e| ChromeHistoryEntry {
+                text: e.text.clone(),
+                title: e.title.clone(),
+                uses: e.uses,
+                last_seen: e.last_seen,
+                favicon: e.favicon.clone(),
+            })
+            .collect();
+        // The pane reads newest-first; the store keeps insertion order.
+        history.sort_by_key(|e| std::cmp::Reverse(e.last_seen));
+        let more_history = history.len().saturating_sub(MAX_PANEL_ROWS);
+        history.truncate(MAX_PANEL_ROWS);
         let state = ChromeLibrary {
             pane,
             bookmarks: marks
@@ -165,6 +236,8 @@ impl App {
                 .map(wire_bookmark)
                 .collect(),
             more_bookmarks: marks.len().saturating_sub(MAX_PANEL_ROWS),
+            history,
+            more_history,
             passwords: creds
                 .rows()
                 .iter()

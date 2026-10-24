@@ -110,6 +110,7 @@ pub enum AppEvent {
     LoadFailed(TabId, LoadFailure),
     /// A view's download started, progressed, or settled — the shelf.
     Download(TabId, DownloadUpdate),
+    DownloadFolder(TabId, bool),
     /// OS files landed on a view that reports drops (the chrome strip —
     /// a drag there opens each file in a tab).
     FilesDropped(Vec<std::path::PathBuf>),
@@ -351,6 +352,7 @@ impl App {
             AppEvent::PageFullscreen(id, on) => self.page_fullscreen(id, on),
             AppEvent::LoadFailed(id, failure) => self.show_error(id, failure),
             AppEvent::Download(id, update) => self.download_update(id, update, control_flow),
+            AppEvent::DownloadFolder(id, choose) => self.download_folder_setting(id, choose),
             AppEvent::FilesDropped(paths) => self.files_dropped(&paths),
             AppEvent::Imported(outcome) => self.on_imported(outcome),
             AppEvent::ImportSources(sources) => self.on_import_sources(sources),

@@ -97,6 +97,10 @@ impl App {
                 post(&title_proxy, AppEvent::TitleChanged(id, t));
             })),
             on_navigate: Some(Box::new(move |uri| {
+                if let Some(choose) = crate::shell::pages::download_folder_request(&uri) {
+                    post(&nav_proxy, AppEvent::DownloadFolder(id, choose));
+                    return false;
+                }
                 post(&nav_proxy, AppEvent::Navigated(id, uri.clone()));
                 true
             })),

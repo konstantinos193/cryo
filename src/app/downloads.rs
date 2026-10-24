@@ -74,6 +74,47 @@ pub(super) fn file_url(path: &Path) -> String {
 }
 
 impl App {
+    pub(super) fn download_folder_setting(&self, id: TabId, choose: bool) -> anyhow::Result<()> {
+        if self
+            .registry
+            .get(id)
+            .is_none_or(|tab| tab.url() != crate::shell::pages::SETTINGS_URL)
+        {
+            return Ok(());
+        }
+        let Some(view) = self.views.get(&id) else {
+            return Ok(());
+        };
+        let result = (|| -> Result<_, crate::engine::EngineError> {
+            let current = view.download_folder()?;
+            if choose {
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_title("Download folder")
+                    .set_directory(&current)
+                    .pick_folder()
+                {
+                    view.set_download_folder(&path)?;
+                }
+            }
+            view.download_folder()
+        })();
+        let (path, error) = match result {
+            Ok(path) => (Some(path.to_string_lossy().into_owned()), None),
+            Err(error) => (
+                view.download_folder()
+                    .ok()
+                    .map(|path| path.to_string_lossy().into_owned()),
+                Some(error.to_string()),
+            ),
+        };
+        view.eval(&format!(
+            "window.__cryo_download_folder({}, {})",
+            serde_json::to_string(&path)?,
+            serde_json::to_string(&error)?
+        ))?;
+        Ok(())
+    }
+
     /// A view reported download progress — upsert the shelf row and
     /// repaint chrome.
     pub(super) fn download_update(
