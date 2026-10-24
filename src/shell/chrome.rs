@@ -426,10 +426,8 @@ pub fn canonize_nav_input(input: &str, engine: &SearchEngine) -> String {
 /// `file://srv/dir`. Anything else is not a path.
 fn local_path_url(s: &str) -> Option<String> {
     let b = s.as_bytes();
-    let drive = b.len() >= 3
-        && b[0].is_ascii_alphabetic()
-        && b[1] == b':'
-        && matches!(b[2], b'\\' | b'/');
+    let drive =
+        b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'\\' | b'/');
     if drive {
         return Some(format!("file:///{}", encode_path(s)));
     }
