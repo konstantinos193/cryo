@@ -694,6 +694,12 @@
       em.textContent = a.email;
       copy.append(nm, em);
       row.append(face, copy);
+      if (i === (lastState.active_account || 0)) {
+        const tick = document.createElement('span');
+        tick.textContent = '✓';
+        tick.style.cssText = 'margin-left:auto;color:var(--tx3);font-size:12px';
+        row.appendChild(tick);
+      }
       row.onclick = () => { setAcct(false); ipc({cmd: 'account_open', index: i}); };
       acctPop.appendChild(row);
     });
@@ -1793,9 +1799,10 @@
     star.title = state.starred
       ? 'Remove bookmark (Ctrl+D)' : 'Bookmark this page (Ctrl+D)';
     // The account button mirrors the profile's Google session: the
-    // first account's picture (or an initial) when signed in — the
+    // picked account's picture (or an initial) when signed in — the
     // button's click lists them all — the pill when not.
-    const account = (state.accounts || [])[0];
+    const accounts = state.accounts || [];
+    const account = accounts[state.active_account || 0] || accounts[0];
     if (account) {
       const key = account.name + '|' + (account.avatar || '');
       if (signinBtn.dataset.k !== key) {

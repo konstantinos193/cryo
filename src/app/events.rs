@@ -43,6 +43,15 @@ impl App {
         // may have changed.
         if crate::account::is_google_url(&url) {
             self.refresh_google_session();
+            // A non-default account is browsing this window: point the
+            // navigation at its `authuser` instead of Google's default.
+            // The rewritten load reports back here carrying the param —
+            // `with_authuser` then leaves it alone, so this runs once.
+            if let Some(rewritten) = crate::account::with_authuser(&url, self.active_account) {
+                if let Some(view) = self.views.get(&id) {
+                    return view.load_url(&rewritten).map_err(anyhow::Error::from);
+                }
+            }
         }
         // The visit counts whether the load works out or not —
         // real omniboxes remember typed destinations too.

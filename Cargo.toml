@@ -1,6 +1,6 @@
 [package]
 name = "cryo"
-version = "0.5.1"
+version = "0.6.0"
 edition = "2021"
 description = "A memory-obsessed browser shell written in Rust. Tabs freeze. Budgets hold."
 license = "MIT"

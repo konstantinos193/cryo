@@ -288,9 +288,12 @@ pub struct ChromeState {
     /// The active tab's address is kept — the ★ fills in.
     pub starred: bool,
     /// The Google session the account button shows: every live account
-    /// in jar order — the button wears the first, the dropdown lists
-    /// them all. Empty keeps the "Sign in" pill.
+    /// in jar order — the dropdown lists them all. Empty keeps the
+    /// "Sign in" pill.
     pub accounts: Vec<ChromeAccount>,
+    /// Which account the window browses as — the button wears its face
+    /// and the dropdown marks its row. `0` is Google's own default.
+    pub active_account: u64,
 }
 
 /// The account button's face: what `crate::account` found in the

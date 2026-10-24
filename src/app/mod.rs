@@ -203,6 +203,12 @@ pub struct App {
     /// The Google session the account button last painted — `None`
     /// shows the "Sign in" pill.
     google: Option<crate::account::Session>,
+    /// Which account in `google.accounts` the window is browsing as —
+    /// the index the dropdown's pick set. `accounts` is jar order, so
+    /// `0` is Google's own default; a nonzero pick makes navigations to
+    /// Google properties carry `authuser=N` (`account::with_authuser`)
+    /// and the button wear that account's face.
+    active_account: usize,
     /// The one in-flight session check and whether a second request
     /// folded into it (see `account::SessionCheck`).
     google_check: account::SessionCheck,
@@ -303,6 +309,7 @@ impl App {
             pending_update: None,
             update_prompt: false,
             google: None,
+            active_account: 0,
             google_check: account::SessionCheck::Idle,
             exiting: false,
         })

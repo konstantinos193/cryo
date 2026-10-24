@@ -114,6 +114,29 @@ pub fn is_google_url(url: &str) -> bool {
     host == "google.com" || host.ends_with(".google.com")
 }
 
+/// The multi-login parameter the account pick applies: `Some` with the
+/// rewritten URL when `index` names a non-default account and `url` is
+/// a Google property that doesn't already name one — `authuser=` in the
+/// query or a `/u/N` path segment both count as the page having chosen.
+/// `None` leaves the navigation alone.
+pub fn with_authuser(url: &str, index: usize) -> Option<String> {
+    if index == 0
+        || !is_google_url(url)
+        || url.contains("authuser=")
+        || url.contains("/u/")
+    {
+        return None;
+    }
+    let (head, frag) = url.split_once('#').unwrap_or((url, ""));
+    let sep = if head.contains('?') { '&' } else { '?' };
+    let mut out = format!("{head}{sep}authuser={index}");
+    if !frag.is_empty() {
+        out.push('#');
+        out.push_str(frag);
+    }
+    Some(out)
+}
+
 /// One protobuf field's payload — only the wire types the
 /// `ListAccountsResponse` schema uses: varint (0) and
 /// length-delimited (2).

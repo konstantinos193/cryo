@@ -45,12 +45,9 @@ impl App {
             // Google sign-in tab authenticates every tab — and persists.
             ChromeCommand::SignIn => self.spawn_tab("https://accounts.google.com", true),
             // The account's position in the session list is its
-            // `authuser` index on Google properties — the dropdown row
-            // opens that account's own home.
-            ChromeCommand::AccountOpen { index } => self.spawn_tab(
-                &format!("https://myaccount.google.com/?authuser={index}"),
-                true,
-            ),
+            // `authuser` index on Google properties — picking the row
+            // makes it the window's account, not just an open tab.
+            ChromeCommand::AccountOpen { index } => self.account_open(index),
             ChromeCommand::NewIncognito => Self::spawn_window(true, None),
             ChromeCommand::DevTools => self.devtools_active(),
             ChromeCommand::ClearData => self.clear_data(),
