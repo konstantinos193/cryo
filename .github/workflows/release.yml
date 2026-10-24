@@ -164,10 +164,10 @@ jobs:
     strategy:
       matrix:
         include:
-          # macos-14 is Apple Silicon, macos-13 is Intel.
+          # macos-14 is Apple Silicon, macos-15-intel is Intel.
           - os: macos-14
             target: aarch64-apple-darwin
-          - os: macos-13
+          - os: macos-15-intel
             target: x86_64-apple-darwin
     runs-on: ${{ matrix.os }}
     steps:
