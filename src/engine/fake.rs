@@ -4,7 +4,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::engine::{ContentView, DownloadId, Engine, EngineError, Rect, ViewSpec};
+use crate::engine::{ContentView, Cookie, DownloadId, Engine, EngineError, Rect, ViewSpec};
 
 #[derive(Clone, Debug)]
 pub enum FakeCall {
@@ -24,6 +24,7 @@ pub enum FakeCall {
     CapturePng,
     SaveAs,
     ClearBrowsingData,
+    Cookies(String),
     CancelDownload(DownloadId),
     PauseDownload(DownloadId),
     ResumeDownload(DownloadId),
@@ -179,6 +180,13 @@ impl ContentView for FakeView {
         Ok(())
     }
 
+    fn cookies(&self, uri: &str) -> Result<Vec<Cookie>, EngineError> {
+        self.calls
+            .borrow_mut()
+            .push(FakeCall::Cookies(uri.to_string()));
+        Ok(Vec::new())
+    }
+
     fn cancel_download(&self, id: DownloadId) -> Result<(), EngineError> {
         self.calls.borrow_mut().push(FakeCall::CancelDownload(id));
         Ok(())
@@ -192,6 +200,22 @@ impl ContentView for FakeView {
     fn resume_download(&self, id: DownloadId) -> Result<(), EngineError> {
         self.calls.borrow_mut().push(FakeCall::ResumeDownload(id));
         Ok(())
+    }
+
+    fn suspend(&self) -> Result<(), EngineError> {
+        Ok(())
+    }
+
+    fn resume(&self) -> Result<(), EngineError> {
+        Ok(())
+    }
+
+    fn is_suspended(&self) -> Result<bool, EngineError> {
+        Ok(false)
+    }
+
+    fn playing_audio(&self) -> Option<bool> {
+        Some(false)
     }
 }
 

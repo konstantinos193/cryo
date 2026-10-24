@@ -4,6 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::shell::search::SearchEngine;
+
 /// Commands the chrome UI can send. Wire format: JSON tagged by `cmd`.
 /// Unknown fields are rejected — a typo'd key inside a known command
 /// must fail loudly, not parse with the extra data dropped.
@@ -13,7 +15,15 @@ pub enum ChromeCommand {
     /// Sent by the chrome document when it finishes parsing — the signal to
     /// push state. The page announces itself instead of the app racing the
     /// document's load.
-    Ready,
+    Ready {
+        /// The search-engine pick the document read from the shell
+        /// origin's localStorage — the app cannot see the storage area,
+        /// so it travels on the wire: a preset slug or a custom `%s`
+        /// template. `None` means "not reported" and keeps whatever the
+        /// app already has, never a reset.
+        #[serde(default)]
+        engine: Option<String>,
+    },
     NewTab,
     Activate {
         id: u64,
@@ -31,6 +41,11 @@ pub enum ChromeCommand {
         alt: bool,
         #[serde(default)]
         shift: bool,
+        /// The stored search-engine pick, read fresh at send time — it
+        /// may have changed in the settings tab since the last command.
+        /// `None` keeps the app's current engine.
+        #[serde(default)]
+        engine: Option<String>,
     },
     Reload,
     /// The reload button's ✕ state — aborts the in-flight load.
@@ -75,6 +90,10 @@ pub enum ChromeCommand {
     /// fetchable list to any origin.
     Suggest {
         q: String,
+        /// Same piggyback as `navigate` — the stored engine, so the
+        /// "Search …" verdict row names what a commit would use.
+        #[serde(default)]
+        engine: Option<String>,
     },
     /// The ✕ on a live download row.
     DownloadCancel {
@@ -244,6 +263,21 @@ pub struct ChromeState {
     pub bookmarks: Vec<ChromeBookmark>,
     /// The active tab's address is kept — the ★ fills in.
     pub starred: bool,
+    /// The Google session the account button shows — `None` keeps the
+    /// "Sign in" pill.
+    pub account: Option<ChromeAccount>,
+}
+
+/// The account button's face: what `crate::account` found in the
+/// profile's jar.
+#[derive(Debug, Serialize)]
+pub struct ChromeAccount {
+    /// Display name — the tooltip and the initial-letter fallback.
+    pub name: String,
+    /// The tooltip's second line.
+    pub email: String,
+    /// Picture as a `data:` URL; `None` draws the initial instead.
+    pub avatar: Option<String>,
 }
 
 /// One bookmark on the wire — bar rows and library rows alike.
@@ -254,6 +288,11 @@ pub struct ChromeBookmark {
     pub url: String,
     /// `""` for a bar row; the library shows the path.
     pub folder: String,
+    /// Unix seconds, used by the library's newest-first view.
+    pub added_at: u64,
+    /// The site's icon as a `data:` URL — `None` falls back to the
+    /// letter tile, same as the omnibox.
+    pub favicon: Option<String>,
 }
 
 /// The library panel's payload, pushed by `__cryo_library` when a pane
@@ -341,37 +380,12 @@ pub struct ChromeTab {
 
 /// A tab's icon (PNG bytes) → the `data:` URL `ChromeTab.favicon` carries.
 pub(crate) fn favicon_data_url(png: &[u8]) -> String {
-    format!("data:image/png;base64,{}", base64(png))
-}
-
-/// Standard base64 with padding — one small encoder beats a dependency
-/// for the single place a `data:` URL is built.
-fn base64(bytes: &[u8]) -> String {
-    const ALPHA: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let n = u32::from(chunk[0]) << 16
-            | u32::from(*chunk.get(1).unwrap_or(&0)) << 8
-            | u32::from(*chunk.get(2).unwrap_or(&0));
-        out.push(ALPHA[(n >> 18) as usize & 63] as char);
-        out.push(ALPHA[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 {
-            ALPHA[(n >> 6) as usize & 63] as char
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            ALPHA[n as usize & 63] as char
-        } else {
-            '='
-        });
-    }
-    out
+    format!("data:image/png;base64,{}", crate::base64(png))
 }
 
 /// Turn address-bar text into a URL: full URLs pass through, domain-looking
-/// input gets `https://`, anything else becomes a search.
-pub fn normalize_nav_input(input: &str) -> String {
+/// input gets `https://`, anything else becomes a search on `engine`.
+pub fn normalize_nav_input(input: &str, engine: &SearchEngine) -> String {
     let s = input.trim();
     if s.is_empty() {
         return "about:blank".to_string();
@@ -383,30 +397,59 @@ pub fn normalize_nav_input(input: &str) -> String {
     {
         return s.to_string();
     }
+    // A pasted Windows path becomes a file URL, like in any real
+    // browser — without this the drive letter's dot (in `file.html`)
+    // reads as a host and the path is asked of the web.
+    if let Some(url) = local_path_url(s) {
+        return url;
+    }
     if !s.contains(' ') && s.contains('.') {
         return format!("https://{s}");
     }
-    format!("https://duckduckgo.com/?q={}", percent_encode(s))
+    engine.search_url(s)
 }
 
 /// Chrome's Ctrl+Enter: a bare word becomes `www.<word>.com`; anything
 /// already dotted or multi-word falls back to normal normalization.
-pub fn canonize_nav_input(input: &str) -> String {
+pub fn canonize_nav_input(input: &str, engine: &SearchEngine) -> String {
     let s = input.trim();
+    if let Some(url) = local_path_url(s) {
+        return url;
+    }
     if !s.is_empty() && !s.contains(' ') && !s.contains('.') && !s.contains("://") {
         return format!("https://www.{s}.com");
     }
-    normalize_nav_input(s)
+    normalize_nav_input(s, engine)
 }
 
-fn percent_encode(s: &str) -> String {
+/// `C:\dir\f` or `C:/dir/f` → `file:///C:/dir/f`; `\\srv\dir` →
+/// `file://srv/dir`. Anything else is not a path.
+fn local_path_url(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let drive = b.len() >= 3
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && matches!(b[2], b'\\' | b'/');
+    if drive {
+        return Some(format!("file:///{}", encode_path(s)));
+    }
+    if let Some(unc) = s.strip_prefix(r"\\") {
+        return Some(format!("file://{}", encode_path(unc)));
+    }
+    None
+}
+
+/// Percent-encode what a `file:` URL cannot carry — path separators are
+/// normalized to `/` first, and non-ASCII bytes escape per octet so a
+/// Greek or Cyrillic folder name still opens.
+fn encode_path(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
+    for b in s.replace('\\', "/").bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                out.push(b as char)
+            b' ' | b'%' | b'#' | b'?' | b'<' | b'>' | b'"' | b'|' | 0x00..=0x1F | 0x7F..=0xFF => {
+                out.push_str(&format!("%{b:02X}"))
             }
-            _ => out.push_str(&format!("%{b:02X}")),
+            _ => out.push(b as char),
         }
     }
     out
@@ -421,17 +464,67 @@ mod tests {
 
     #[test]
     fn normalize_passthroughs_and_upgrades() {
-        assert_eq!(normalize_nav_input(""), "about:blank");
-        assert_eq!(normalize_nav_input("  "), "about:blank");
+        let ddg = SearchEngine::DEFAULT;
+        assert_eq!(normalize_nav_input("", &ddg), "about:blank");
+        assert_eq!(normalize_nav_input("  ", &ddg), "about:blank");
         assert_eq!(
-            normalize_nav_input("https://a.b/c?d=e"),
+            normalize_nav_input("https://a.b/c?d=e", &ddg),
             "https://a.b/c?d=e"
         );
-        assert_eq!(normalize_nav_input("about:blank"), "about:blank");
-        assert_eq!(normalize_nav_input("example.com"), "https://example.com");
+        assert_eq!(normalize_nav_input("about:blank", &ddg), "about:blank");
         assert_eq!(
-            normalize_nav_input("rust borrow checker"),
+            normalize_nav_input("example.com", &ddg),
+            "https://example.com"
+        );
+        assert_eq!(
+            normalize_nav_input("rust borrow checker", &ddg),
             "https://duckduckgo.com/?q=rust%20borrow%20checker"
+        );
+    }
+
+    #[test]
+    fn a_pasted_windows_path_becomes_a_file_url() {
+        let ddg = SearchEngine::DEFAULT;
+        assert_eq!(
+            normalize_nav_input(r"C:\Users\konst\Desktop\cryo-bookmarks.html", &ddg),
+            "file:///C:/Users/konst/Desktop/cryo-bookmarks.html"
+        );
+        assert_eq!(
+            normalize_nav_input("C:/dir/with space/f.txt", &ddg),
+            "file:///C:/dir/with%20space/f.txt"
+        );
+        assert_eq!(
+            normalize_nav_input(r"\\srv\share\f.txt", &ddg),
+            "file://srv/share/f.txt"
+        );
+        // And Ctrl+Enter cannot www.com-ify a path either.
+        assert_eq!(
+            canonize_nav_input(r"D:\dir\nodot", &ddg),
+            "file:///D:/dir/nodot"
+        );
+        // A URL with a scheme is still untouched.
+        assert_eq!(
+            normalize_nav_input("file:///C:/dir/f.txt", &ddg),
+            "file:///C:/dir/f.txt"
+        );
+    }
+
+    #[test]
+    fn normalize_searches_on_the_given_engine() {
+        let google = SearchEngine::by_slug("google").unwrap();
+        assert_eq!(
+            normalize_nav_input("two words", &google),
+            "https://www.google.com/search?q=two%20words"
+        );
+        // The engine only sees search input — URLs pass through untouched.
+        assert_eq!(
+            normalize_nav_input("example.com", &google),
+            "https://example.com"
+        );
+        let custom = SearchEngine::from_pick("https://kagi.com/search?q=%s").unwrap();
+        assert_eq!(
+            normalize_nav_input("two words", &custom),
+            "https://kagi.com/search?q=two%20words"
         );
     }
 
@@ -470,10 +563,14 @@ mod tests {
 
     #[test]
     fn canonize_wraps_bare_words_only() {
-        assert_eq!(canonize_nav_input("cnn"), "https://www.cnn.com");
-        assert_eq!(canonize_nav_input("example.com"), "https://example.com");
+        let ddg = SearchEngine::DEFAULT;
+        assert_eq!(canonize_nav_input("cnn", &ddg), "https://www.cnn.com");
         assert_eq!(
-            canonize_nav_input("two words"),
+            canonize_nav_input("example.com", &ddg),
+            "https://example.com"
+        );
+        assert_eq!(
+            canonize_nav_input("two words", &ddg),
             "https://duckduckgo.com/?q=two%20words"
         );
     }
@@ -488,11 +585,34 @@ mod tests {
                 ctrl: false,
                 alt: false,
                 shift: false,
+                ..
             } if input == "x"
         ));
         let cmd: ChromeCommand =
             serde_json::from_str(r#"{"cmd":"navigate","input":"x","alt":true}"#).unwrap();
         assert!(matches!(cmd, ChromeCommand::Navigate { alt: true, .. }));
+        // The stored engine rides along on the commands that consult it.
+        let cmd: ChromeCommand =
+            serde_json::from_str(r#"{"cmd":"navigate","input":"x","engine":"google"}"#).unwrap();
+        assert!(matches!(
+            cmd,
+            ChromeCommand::Navigate { engine, .. } if engine.as_deref() == Some("google")
+        ));
+        let cmd: ChromeCommand =
+            serde_json::from_str(r#"{"cmd":"suggest","q":"x","engine":"bing"}"#).unwrap();
+        assert!(matches!(
+            cmd,
+            ChromeCommand::Suggest { q, engine } if q == "x" && engine.as_deref() == Some("bing")
+        ));
+        let cmd: ChromeCommand =
+            serde_json::from_str(r#"{"cmd":"ready","engine":"brave"}"#).unwrap();
+        assert!(matches!(
+            cmd,
+            ChromeCommand::Ready { engine } if engine.as_deref() == Some("brave")
+        ));
+        // Absent means "not reported" — the field defaults, never errors.
+        let cmd: ChromeCommand = serde_json::from_str(r#"{"cmd":"ready"}"#).unwrap();
+        assert!(matches!(cmd, ChromeCommand::Ready { engine: None }));
         let cmd: ChromeCommand = serde_json::from_str(r#"{"cmd":"activate","id":3}"#).unwrap();
         assert!(matches!(cmd, ChromeCommand::Activate { id: 3 }));
         // Freeze/discard carry an optional id — absent means active tab.
@@ -586,15 +706,7 @@ mod tests {
     }
 
     #[test]
-    fn base64_pads_to_quads() {
-        // Vectors from RFC 4648.
-        assert_eq!(base64(b""), "");
-        assert_eq!(base64(b"f"), "Zg==");
-        assert_eq!(base64(b"fo"), "Zm8=");
-        assert_eq!(base64(b"foo"), "Zm9v");
-        assert_eq!(base64(b"foob"), "Zm9vYg==");
-        assert_eq!(base64(b"fooba"), "Zm9vYmE=");
-        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+    fn favicon_png_becomes_a_data_url() {
         assert_eq!(
             favicon_data_url(b"\x89PNG"),
             "data:image/png;base64,iVBORw=="

@@ -66,6 +66,24 @@ pub struct TabSnapshot {
     pub muted: bool,
 }
 
+/// A monotonic clock — the port freeze times are stamped through
+/// (AGENTS §6). `Instant::now()` is an ambient call, so the caller
+/// injects this and budget policy and tests control what "now" means.
+/// The composition root wires `SystemClock`; a test wires one it can
+/// advance.
+pub trait Clock {
+    fn now(&self) -> Instant;
+}
+
+/// The real clock — `Instant::now()` behind the `Clock` port.
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+}
+
 /// A tab's place in the lifecycle, carrying what each phase needs.
 /// `Frozen` owns its snapshot — a frozen tab without one cannot be built.
 enum Lifecycle {
@@ -92,6 +110,11 @@ pub enum TabError {
     Restore(TabId),
 }
 
+/// Largest page icon kept, in PNG bytes. `GetFavicon` answers whatever
+/// the site declared — a megabyte "favicon" is a payload, not an icon,
+/// and the strip can paint a few kilobytes either way.
+const MAX_FAVICON_PNG: usize = 96_000;
+
 /// A browser tab. Mutated only through its methods — fields are private so
 /// outside code can't create an invalid combination.
 pub struct Tab {
@@ -106,6 +129,10 @@ pub struct Tab {
     /// strip's spinner and the reload↔stop swap read it. Cleared by the
     /// engine's settle event and by any transition that drops the view.
     loading: bool,
+    /// When the tab last left the foreground — `None` while it is the
+    /// active tab. Set by the caller (surfaces), which owns the clock;
+    /// the budget enforcer reads it to pick the coldest background tab.
+    unfocused_since: Option<Instant>,
     lifecycle: Lifecycle,
 }
 
@@ -117,6 +144,7 @@ impl Tab {
             url,
             favicon: None,
             loading: false,
+            unfocused_since: None,
             lifecycle: Lifecycle::Active,
         }
     }
@@ -218,9 +246,29 @@ impl Tab {
     }
 
     /// The engine reports the icon it just fetched; `None` clears — a
-    /// document without an icon drops the previous page's.
+    /// document without an icon drops the previous page's. An oversized
+    /// payload is dropped, not kept: it is not an icon anymore.
     pub(crate) fn set_favicon(&mut self, png: Option<Vec<u8>>) {
-        self.favicon = png;
+        self.favicon = png.filter(|b| b.len() <= MAX_FAVICON_PNG);
+    }
+
+    /// The moment this tab last left the foreground — `None` while it is
+    /// active. Read by the view-budget enforcement (freeze the coldest)
+    /// and the idle suspender.
+    pub(crate) fn unfocused_since(&self) -> Option<Instant> {
+        self.unfocused_since
+    }
+
+    /// The tab left the foreground — a surface spawn counts: a view is
+    /// always born hidden, so a tab never yet activated is cold from
+    /// birth. `now` is stamped by the caller — no ambient clock here.
+    pub(crate) fn note_unfocused(&mut self, now: Instant) {
+        self.unfocused_since = Some(now);
+    }
+
+    /// The tab took the foreground — it is the warm tab now.
+    pub(crate) fn note_focused(&mut self) {
+        self.unfocused_since = None;
     }
 }
 

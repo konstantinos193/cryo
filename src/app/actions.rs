@@ -6,15 +6,11 @@ use tao::event_loop::ControlFlow;
 use tao::window::Fullscreen;
 
 use crate::shell;
-use crate::shell::chrome::{
-    canonize_nav_input, completion_for, normalize_nav_input, ChromeCommand, SuggestReply,
-    Suggestion,
-};
-use crate::shell::dial;
-use crate::shell::pages::{self, NEW_TAB_URL};
+use crate::shell::chrome::{canonize_nav_input, normalize_nav_input, ChromeCommand};
+use crate::shell::pages;
 use crate::tabs::TabId;
 
-use super::{content_url_for, downloads, App, DEFAULT_URL};
+use super::{content_url_for, downloads, App};
 
 impl App {
     pub(super) fn on_chrome(
@@ -23,7 +19,13 @@ impl App {
         control_flow: &mut ControlFlow,
     ) -> anyhow::Result<()> {
         match cmd {
-            ChromeCommand::Ready => self.sync_chrome(),
+            ChromeCommand::Ready { engine } => {
+                self.note_search_engine(engine);
+                // First paint of a window — the one moment the account
+                // button's truth is unknown.
+                self.refresh_google_session();
+                self.sync_chrome()
+            }
             ChromeCommand::NewTab => self.new_tab(),
             ChromeCommand::Activate { id } => self.activate(TabId::from_raw(id)),
             ChromeCommand::Close { id } => self.close_tab(TabId::from_raw(id), control_flow),
@@ -32,24 +34,8 @@ impl App {
                 ctrl,
                 alt,
                 shift,
-            } => {
-                // What the user typed is itself worth remembering — the
-                // resolved URL gets recorded when the navigation commits.
-                self.remember(&input);
-                let url = if ctrl && !alt && !shift {
-                    canonize_nav_input(&input)
-                } else {
-                    normalize_nav_input(&input)
-                };
-                match (ctrl, alt, shift) {
-                    // Ctrl+Shift+Enter: open the address in a new window.
-                    (true, false, true) => Self::spawn_window(false, Some(&url)),
-                    // Alt+Enter: new foreground tab; Alt+Shift+Enter: background.
-                    (false, true, false) => self.spawn_tab(&url, true),
-                    (false, true, true) => self.spawn_tab(&url, false),
-                    _ => self.navigate_active(&url),
-                }
-            }
+                engine,
+            } => self.navigate_command(&input, ctrl, alt, shift, engine),
             ChromeCommand::Reload => self.reload_active(),
             // The reload button becomes ✕ while a page loads.
             ChromeCommand::Stop => self.stop_active(),
@@ -60,53 +46,36 @@ impl App {
             ChromeCommand::SignIn => self.spawn_tab("https://accounts.google.com", true),
             ChromeCommand::NewIncognito => Self::spawn_window(true, None),
             ChromeCommand::DevTools => self.devtools_active(),
-            ChromeCommand::ClearData => self
-                .chrome
-                .clear_browsing_data()
-                .map_err(|e| anyhow::anyhow!(e)),
+            ChromeCommand::ClearData => self.clear_data(),
             ChromeCommand::Settings => self.spawn_tab(pages::SETTINGS_URL, true),
             ChromeCommand::CheckUpdates => {
                 self.request_update_check(true);
                 Ok(())
             }
             ChromeCommand::UpdateApply => self.apply_update(control_flow),
-            ChromeCommand::Freeze { id } => {
-                match id
-                    .map(TabId::from_raw)
-                    .or_else(|| self.registry.active_id())
-                {
-                    Some(id) => self.freeze_tab(id),
-                    None => Ok(()),
-                }
-            }
-            ChromeCommand::Discard { id } => {
-                match id
-                    .map(TabId::from_raw)
-                    .or_else(|| self.registry.active_id())
-                {
-                    Some(id) => self.discard_tab(id),
-                    None => Ok(()),
-                }
-            }
+            ChromeCommand::Freeze { id } => match self.tab_or_active(id) {
+                Some(id) => self.freeze_tab(id),
+                None => Ok(()),
+            },
+            ChromeCommand::Discard { id } => match self.tab_or_active(id) {
+                Some(id) => self.discard_tab(id),
+                None => Ok(()),
+            },
             ChromeCommand::Overlay { open } => self.set_overlay_open(open),
-            ChromeCommand::Suggest { q } => self.suggest(&q),
-            ChromeCommand::DownloadCancel { key } => self.cancel_download(key),
-            ChromeCommand::DownloadOpen { key } => {
-                self.open_download(key);
-                Ok(())
+            ChromeCommand::Suggest { q, engine } => {
+                self.note_search_engine(engine);
+                self.suggest(&q)
             }
-            ChromeCommand::DownloadPause { key } => self.pause_download(key),
-            ChromeCommand::DownloadResume { key } => self.resume_download(key),
-            ChromeCommand::DownloadRetry { key } => self.retry_download(key),
-            ChromeCommand::DownloadDrag { key } => {
-                self.drag_download(key);
-                Ok(())
-            }
-            ChromeCommand::DownloadShow { key } => {
-                self.reveal_download(key);
-                Ok(())
-            }
-            ChromeCommand::DownloadsClear => self.clear_finished_downloads(),
+            // The shelf's commands — the keys are app-issued row numbers,
+            // so they go straight to `downloads`.
+            ChromeCommand::DownloadCancel { .. }
+            | ChromeCommand::DownloadOpen { .. }
+            | ChromeCommand::DownloadPause { .. }
+            | ChromeCommand::DownloadResume { .. }
+            | ChromeCommand::DownloadRetry { .. }
+            | ChromeCommand::DownloadDrag { .. }
+            | ChromeCommand::DownloadShow { .. }
+            | ChromeCommand::DownloadsClear => self.download_command(cmd),
             ChromeCommand::BookmarkPage => self.bookmark_active(),
             ChromeCommand::BookmarkOpen { id, ctrl, shift } => self.open_bookmark(id, ctrl, shift),
             ChromeCommand::BookmarkRemove { id } => self.remove_bookmark(id),
@@ -123,144 +92,39 @@ impl App {
         }
     }
 
-    /// The omnibox asks on every keystroke; the app owns what it can
-    /// offer — a search/go row, then remembered inputs and visits, then
-    /// dial matches — and answers with a `__cryo_suggest` eval. History
-    /// is never fetchable: `/cmd` reaches us only from the chrome view
-    /// (content views carry no `on_ipc`), and the page resolver would
-    /// hand it to any origin.
-    fn suggest(&self, q: &str) -> anyhow::Result<()> {
-        let q = q.trim();
-        let mut rows: Vec<Suggestion> = Vec::new();
-        if !q.is_empty() {
-            // The first row mirrors `normalize_nav_input`'s verdict: a
-            // URL-looking input says "Go to", anything else is a search.
-            let url = normalize_nav_input(q);
-            let is_search = url.starts_with("https://duckduckgo.com/?q=");
-            rows.push(Suggestion {
-                label: if is_search {
-                    format!("Search DuckDuckGo for \"{q}\"")
-                } else {
-                    format!("Go to {url}")
-                },
-                input: q.to_string(),
-                // The typed-verdict row restates what was typed — there
-                // is nothing to complete to.
-                icon: None,
-                complete: None,
-                kind: if is_search { "search" } else { "go" },
-            });
-            let ql = q.to_lowercase();
-            // Kept pages come before remembered ones: a bookmark is the
-            // user saying this destination matters, which outranks the
-            // fact that they once visited something similar.
-            for mark in self.bookmarks.marks().matches(q, 4) {
-                rows.push(Suggestion {
-                    label: format!("{} — {}", mark.title(), mark.url()),
-                    complete: completion_for(mark.url(), q),
-                    input: mark.url().to_string(),
-                    icon: None,
-                    kind: "bookmark",
-                });
-            }
-            if let Some(rec) = &self.recorder {
-                for e in rec.matches(q, 8) {
-                    let label = match e.title.as_deref().filter(|t| !t.is_empty()) {
-                        Some(t) => format!("{t} — {}", e.text),
-                        None => e.text.clone(),
-                    };
-                    rows.push(Suggestion {
-                        label,
-                        input: e.text.clone(),
-                        icon: e.favicon.clone(),
-                        complete: completion_for(&e.text, q),
-                        kind: "page",
-                    });
-                }
-            }
-            for d in dial::entries() {
-                if d.name.to_lowercase().contains(&ql) || d.url.to_lowercase().contains(&ql) {
-                    rows.push(Suggestion {
-                        label: format!("{} — {}", d.name, d.url),
-                        complete: completion_for(&d.url, q),
-                        input: d.url,
-                        icon: None,
-                        kind: "page",
-                    });
-                }
-            }
-            // Same destination from two sources — the first wins.
-            let mut seen = std::collections::HashSet::new();
-            rows.retain(|r| seen.insert(r.input.clone()));
-            rows.truncate(8);
-        }
-        let reply = SuggestReply {
-            q: q.to_string(),
-            rows,
-        };
-        let json = serde_json::to_string(&reply)?;
-        self.chrome
-            .eval(&format!("window.__cryo_suggest({json})"))?;
-        Ok(())
-    }
-
-    /// One window per process: a "new window" key spawns a sibling cryo
-    /// process. `--incognito` puts every view of that process on an
-    /// InPrivate profile — incognito is a property of the window, not a
-    /// tab, same as Chrome. A bare arg hands the child an address to open.
-    pub(super) fn spawn_window(incognito: bool, url: Option<&str>) -> anyhow::Result<()> {
-        let exe = std::env::current_exe()?;
-        let mut cmd = std::process::Command::new(exe);
-        // A spawned window keeps its address: the flag stops the child
-        // from handing it to us over the single-instance pipe.
-        cmd.arg("--new-window");
-        if incognito {
-            cmd.arg("--incognito");
-        }
-        if let Some(url) = url {
-            cmd.arg(url);
-        }
-        cmd.spawn()?;
-        Ok(())
-    }
-
-    pub(super) fn new_tab(&mut self) -> anyhow::Result<()> {
-        let id = self.registry.create(DEFAULT_URL.to_string());
-        if let Some(tab) = self.registry.get_mut(id) {
-            tab.set_title("New tab".to_string());
-        }
-        self.spawn_view_for(id, NEW_TAB_URL)?;
-        // A fresh tab means "type an address" — hand focus to the bar
-        // like every browser does, not to the new-tab page.
-        self.focus_address_bar()
-    }
-
-    /// Bring back the most recently closed tab — `activate` respawns the
-    /// surface, so a tab that was closed while frozen comes back through
-    /// the same restore path.
-    pub(super) fn reopen_closed(&mut self) -> anyhow::Result<()> {
-        match self.registry.reopen_closed() {
-            Some(id) => self.activate(id),
-            None => Ok(()),
-        }
-    }
-
-    /// Open `url` in a fresh tab — foreground for target=_blank /
-    /// Alt+Enter, background for Alt+Shift+Enter.
-    pub(super) fn spawn_tab(&mut self, url: &str, foreground: bool) -> anyhow::Result<()> {
-        let id = self.registry.create(url.to_string());
-        self.spawn_view_at(id, url)?;
-        if foreground {
-            self.activate(id)
+    /// Where an omnibox commit lands — modifier keys pick the surface:
+    /// plain Enter the active tab, Ctrl+Shift+Enter a new window,
+    /// Alt+Enter a foreground tab, Alt+Shift+Enter a background one.
+    /// What the user typed is itself worth remembering — the resolved
+    /// URL gets recorded when the navigation commits.
+    fn navigate_command(
+        &mut self,
+        input: &str,
+        ctrl: bool,
+        alt: bool,
+        shift: bool,
+        engine: Option<String>,
+    ) -> anyhow::Result<()> {
+        self.note_search_engine(engine);
+        self.remember(input);
+        let url = if ctrl && !alt && !shift {
+            canonize_nav_input(input, &self.search_engine)
         } else {
-            self.sync_chrome()
+            normalize_nav_input(input, &self.search_engine)
+        };
+        match (ctrl, alt, shift) {
+            (true, false, true) => Self::spawn_window(false, Some(&url)),
+            (false, true, false) => self.spawn_tab(&url, true),
+            (false, true, true) => self.spawn_tab(&url, false),
+            _ => self.navigate_active(&url),
         }
     }
 
-    /// Spawn the engine surface for `id`, register it, activate it.
-    pub(super) fn spawn_view_for(&mut self, id: TabId, url: &str) -> anyhow::Result<()> {
-        self.spawn_view_at(id, url)?;
-        self.activate(id)
+    /// The tab a menu command points at — the ⋮ menu carries no id, so
+    /// it means the active one; the strip's per-tab buttons name theirs.
+    fn tab_or_active(&self, id: Option<u64>) -> Option<TabId> {
+        id.map(TabId::from_raw)
+            .or_else(|| self.registry.active_id())
     }
 
     pub(super) fn activate(&mut self, id: TabId) -> anyhow::Result<()> {
@@ -275,6 +139,14 @@ impl App {
             self.restore_view(id)?;
         }
         self.registry.set_active(id)?;
+        // The clock the idle suspender reads: the outgoing tab starts
+        // counting cold time now, the incoming one stops.
+        if let Some(tab) = prev.and_then(|p| self.registry.get_mut(p)) {
+            tab.note_unfocused(self.clock.now());
+        }
+        if let Some(tab) = self.registry.get_mut(id) {
+            tab.note_focused();
+        }
         if let Some(view) = self.views.get(&id) {
             let (_, content_rect) = shell::layout(self.logical_size.0, self.logical_size.1);
             // Show before hiding: the incoming view becomes visible while
@@ -282,6 +154,11 @@ impl App {
             // the bare window behind them. Both changes settle in this
             // same event turn, so z-order between the two never reaches
             // the screen.
+            // A suspended view needs waking before it paints — a failed
+            // resume is reported but must not block the switch.
+            if let Err(e) = view.resume() {
+                crate::report!("resume tab {id}: {e:?}");
+            }
             view.set_bounds(content_rect)?;
             view.set_visible(true)?;
             view.focus()?;
@@ -308,7 +185,7 @@ impl App {
                 self.sync_chrome()
             }
             None => {
-                *control_flow = ControlFlow::Exit;
+                self.request_exit(control_flow);
                 Ok(())
             }
         }

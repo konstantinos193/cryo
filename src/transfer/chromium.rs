@@ -227,6 +227,7 @@ fn walk(node: &serde_json::Value, folder: &str, depth: usize, out: &mut Vec<Draf
                     url: url.to_string(),
                     folder: folder.to_string(),
                     added_at: added_at(child),
+                    favicon: None,
                 });
             }
             "folder" => {

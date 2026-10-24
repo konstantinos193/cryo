@@ -5,6 +5,7 @@ pub mod chrome;
 pub mod dial;
 pub mod error;
 pub mod pages;
+pub mod search;
 
 use crate::engine::Rect;
 

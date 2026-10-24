@@ -79,7 +79,7 @@ impl App {
             return Ok(());
         };
         update::launch_installer(u)?;
-        *control_flow = ControlFlow::Exit;
+        self.request_exit(control_flow);
         Ok(())
     }
 }

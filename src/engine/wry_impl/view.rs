@@ -3,7 +3,7 @@
 //! reaches and dispatches to `ops` (raw WebView2/Win32) where it doesn't.
 
 #[cfg(target_os = "windows")]
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 #[cfg(target_os = "windows")]
 use std::rc::Rc;
 #[cfg(target_os = "windows")]
@@ -28,7 +28,7 @@ use crate::engine::{
     AcceleratorHandler, DownloadHandler, FaviconHandler, FullscreenHandler, LoadChangeHandler,
     LoadFailureHandler,
 };
-use crate::engine::{ContentView, DownloadId, EngineError, Rect};
+use crate::engine::{ContentView, Cookie, DownloadId, EngineError, Rect};
 
 #[cfg(target_os = "windows")]
 use super::delay::Delayer;
@@ -109,21 +109,39 @@ impl WryView {
             let download_started = Arc::new(AtomicBool::new(false));
             // NavigationStarting ⇄ NavigationCompleted: the id of the
             // newest navigation, so a stale completion can't clear the
-            // loading signal a newer navigation is still using.
+            // loading signal a newer navigation is still using. The
+            // attempted URI and retry budget feed the completion's one
+            // silent retry for unclassified failures.
             let latest_nav = Rc::new(Cell::new(0u64));
+            let attempted = Rc::new(RefCell::new(String::new()));
+            let retry_budget = Rc::new(Cell::new(events::UNCLASSIFIED_RETRIES));
+            // The starting handler records the URI even when the app
+            // didn't ask for a loading signal, so it attaches whenever
+            // the completion handler exists.
+            let nav_start_needed = report.is_some() || on_load_change.is_some();
             let on_load_change: Option<Rc<dyn Fn(bool)>> = on_load_change.map(Rc::from);
-            let _nav_start_handler = on_load_change
-                .clone()
-                .map(|cb| events::attach_navigation_starting(&view, cb, latest_nav.clone()))
+            let _nav_start_handler = nav_start_needed
+                .then(|| {
+                    events::attach_navigation_starting(
+                        &view,
+                        on_load_change.clone().unwrap_or_else(|| Rc::new(|_| {})),
+                        latest_nav.clone(),
+                        attempted.clone(),
+                    )
+                })
                 .transpose()?;
-            let _navigation_handler = (report.is_some() || on_load_change.is_some())
+            let _navigation_handler = nav_start_needed
                 .then(|| {
                     events::attach_navigation_completed(
                         &view,
                         report.clone(),
-                        download_started.clone(),
-                        on_load_change.clone(),
-                        latest_nav.clone(),
+                        events::NavState {
+                            download_started: download_started.clone(),
+                            on_load_change: on_load_change.clone(),
+                            latest_nav: latest_nav.clone(),
+                            attempted: attempted.clone(),
+                            retry_budget: retry_budget.clone(),
+                        },
                         delayer,
                     )
                 })
@@ -366,6 +384,20 @@ impl ContentView for WryView {
         }
     }
 
+    fn cookies(&self, uri: &str) -> Result<Vec<Cookie>, EngineError> {
+        #[cfg(target_os = "windows")]
+        {
+            ops::cookies(&self.view, uri)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            // wry reaches no cookie API off Windows — an empty jar reads
+            // as signed-out, which is the honest answer.
+            let _ = uri;
+            Ok(Vec::new())
+        }
+    }
+
     fn cancel_download(&self, id: DownloadId) -> Result<(), EngineError> {
         #[cfg(target_os = "windows")]
         {
@@ -399,6 +431,50 @@ impl ContentView for WryView {
         {
             let _ = id;
             Ok(())
+        }
+    }
+
+    fn suspend(&self) -> Result<(), EngineError> {
+        #[cfg(target_os = "windows")]
+        {
+            ops::suspend(&self.view)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Ok(())
+        }
+    }
+
+    fn resume(&self) -> Result<(), EngineError> {
+        #[cfg(target_os = "windows")]
+        {
+            ops::resume(&self.view)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Ok(())
+        }
+    }
+
+    fn is_suspended(&self) -> Result<bool, EngineError> {
+        #[cfg(target_os = "windows")]
+        {
+            ops::is_suspended(&self.view)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Ok(false)
+        }
+    }
+
+    fn playing_audio(&self) -> Option<bool> {
+        #[cfg(target_os = "windows")]
+        {
+            ops::playing_audio(&self.view)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            None
         }
     }
 }

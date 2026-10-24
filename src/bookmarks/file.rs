@@ -25,6 +25,11 @@ struct RowFile {
     url: String,
     folder: String,
     added_at: u64,
+    /// The site's icon as a `data:` URL. New in v2 — `default` *is* the
+    /// v1 migration: an old row parses into the current DTO with `None`
+    /// and the first visit after upgrade fills it in (AGENTS §6).
+    #[serde(default)]
+    favicon: Option<String>,
 }
 
 impl From<&Bookmark> for RowFile {
@@ -35,6 +40,7 @@ impl From<&Bookmark> for RowFile {
             url: b.url().to_string(),
             folder: b.folder().to_string(),
             added_at: b.added_at(),
+            favicon: b.favicon().map(str::to_string),
         }
     }
 }
@@ -73,13 +79,13 @@ impl JsonFile {
 impl Store for JsonFile {
     fn load(&self) -> Result<Vec<Bookmark>, BookmarkError> {
         // A missing file is a fresh profile, not an error.
-        let bytes = match std::fs::read(&self.path) {
-            Ok(b) => b,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(self.read_err(e)),
+        let Some(bytes) = crate::read_file(&self.path).map_err(|e| self.read_err(e))? else {
+            return Ok(Vec::new());
         };
         let file: BookmarkFile = serde_json::from_slice(&bytes).map_err(BookmarkError::Parse)?;
-        if file.version != CURRENT_VERSION {
+        // Anything this build ever wrote is readable — v1 rows upgrade
+        // at the field default; a newer or bogus version is not a guess.
+        if !(1..=CURRENT_VERSION).contains(&file.version) {
             return Err(BookmarkError::Version(file.version));
         }
         // Hydration goes through the domain's one door; a row that no
@@ -95,6 +101,7 @@ impl Store for JsonFile {
                     &r.url,
                     &r.folder,
                     r.added_at,
+                    r.favicon.as_deref(),
                 )
                 .ok()
             })
@@ -102,19 +109,12 @@ impl Store for JsonFile {
     }
 
     fn save(&self, rows: &[Bookmark]) -> Result<(), BookmarkError> {
-        if let Some(dir) = self.path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| self.write_err(e))?;
-        }
         let file = BookmarkFile {
             version: CURRENT_VERSION,
             rows: rows.iter().map(RowFile::from).collect(),
         };
         let bytes = serde_json::to_vec(&file).map_err(BookmarkError::Parse)?;
-        // Write-then-rename: a crash mid-write leaves the old file whole.
-        let tmp = self.path.with_extension("json.tmp");
-        std::fs::write(&tmp, &bytes).map_err(|e| self.write_err(e))?;
-        std::fs::rename(&tmp, &self.path).map_err(|e| self.write_err(e))?;
-        Ok(())
+        crate::write_file_atomic(&self.path, &bytes).map_err(|e| self.write_err(e))
     }
 }
 
@@ -123,9 +123,7 @@ mod tests {
     use super::*;
 
     fn temp(tag: &str) -> PathBuf {
-        std::env::temp_dir()
-            .join(format!("cryo-bmfile-{tag}-{}", std::process::id()))
-            .join("bookmarks.json")
+        crate::test_dir(&format!("bmfile-{tag}")).join("bookmarks.json")
     }
 
     #[test]
@@ -176,11 +174,35 @@ mod tests {
     fn save_then_load_round_trips_every_field() {
         let path = temp("round");
         let store = JsonFile::new(path.clone());
-        let row =
-            Bookmark::hydrate(BookmarkId::from_raw(4), "A", "https://a.test", "News", 42).unwrap();
+        let row = Bookmark::hydrate(
+            BookmarkId::from_raw(4),
+            "A",
+            "https://a.test",
+            "News",
+            42,
+            Some("data:image/png;base64,zz"),
+        )
+        .unwrap();
         store.save(std::slice::from_ref(&row)).unwrap();
         let back = store.load().unwrap();
         assert_eq!(back, vec![row]);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn a_v1_file_loads_with_icons_unfilled() {
+        let path = temp("v1");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"version":1,"rows":[
+                 {"id":1,"title":"A","url":"https://a.test","folder":"","added_at":1}
+               ]}"#,
+        )
+        .unwrap();
+        let rows = JsonFile::new(path.clone()).load().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].favicon(), None);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

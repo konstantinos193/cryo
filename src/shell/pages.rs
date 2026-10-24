@@ -4,7 +4,7 @@
 //! `NavigateToString` HTML: a `data:`-document runs no scripts and its IPC
 //! messages never reach the host (wry drops unparseable Source URIs).
 
-use crate::shell::{chrome, dial, error};
+use crate::shell::{chrome, dial, error, search};
 
 /// Origin that all internal pages share. `is_internal_url` keys off this —
 /// keep the two in sync if the scheme registration ever changes.
@@ -28,6 +28,9 @@ pub fn internal_page(path: &str) -> Option<&'static str> {
         "/settings" => Some(SETTINGS_HTML),
         // The dial list both shell surfaces fetch at load.
         dial::PATH => Some(dial::JSON),
+        // The engine list the settings page offers and the new-tab page
+        // resolves its search box through.
+        search::PATH => Some(search::json()),
         // The error page reads its parameters from the query string, which
         // never reaches this resolver — one document covers every failure.
         error::ERROR_PATH => Some(error::ERROR_HTML),
@@ -115,8 +118,30 @@ pub const NEW_TAB_HTML: &str = r##"<!doctype html>
     // runs on cryo's own origin.
     if (/^javascript:/i.test(s)) return null;
     if (s.indexOf("://") !== -1 || /^(about|data|file):/i.test(s)) return s;
+    // A pasted Windows path becomes a file URL, like the Rust side's
+    // local_path_url — otherwise the drive letter reads as a host.
+    var asPath = s.replace(/\\/g, "/");
+    if (/^[a-zA-Z]:[\\/]/.test(s)) return "file:///" + encodeURI(asPath);
+    if (s.indexOf("\\\\") === 0) return "file://" + encodeURI(asPath.slice(2));
     if (s.indexOf(" ") === -1 && s.indexOf(".") !== -1) return "https://" + s;
-    return "https://duckduckgo.com/?q=" + encodeURIComponent(s);
+    var e = engine();
+    return e.template.replace("%s", encodeURIComponent(s));
+  }
+
+  // The search-engine pick is a slug or a custom URL template in the
+  // shell origin's localStorage ("cryo.searchEngine", written by
+  // /settings); the slug→engine map arrives over fetch("/engines").
+  // Until it lands — or if it never does — the default engine answers.
+  var engines = null;
+  function engine() {
+    var pick = localStorage.getItem("cryo.searchEngine") || "duckduckgo";
+    var e = engines && engines[pick];
+    if (e) return {name: e.name, template: e.prefix + "%s"};
+    if (pick.indexOf("://") !== -1 && pick.indexOf("%s") !== -1) {
+      return {name: pick.split("://")[1].split("/")[0] || "custom",
+              template: pick};
+    }
+    return {name: "DuckDuckGo", template: "https://duckduckgo.com/?q=%s"};
   }
 
   var box = document.getElementById("q");
@@ -126,6 +151,12 @@ pub const NEW_TAB_HTML: &str = r##"<!doctype html>
     if (url) location.href = url;
   });
   box.focus();
+
+  fetch("/engines").then(function (r) { return r.json(); }).then(function (list) {
+    engines = {};
+    list.forEach(function (e) { engines[e.slug] = e; });
+    box.placeholder = "Search " + engine().name + " or type a URL";
+  }).catch(function () {});
 
   // Speed dial — the same list the chrome's dial bar reads. Plain links:
   // this page is a content view, so it deliberately has no command
@@ -150,10 +181,15 @@ pub const NEW_TAB_HTML: &str = r##"<!doctype html>
 </html>
 "##;
 
-/// Settings: a read-only reference page — shortcuts, profile location,
-/// and what the engine cannot do. Actions that mutate state live in the
-/// chrome menu because internal pages in content tabs have no IPC (any
-/// website could drive the browser otherwise — see `NEW_TAB_HTML`).
+/// Settings: mostly a reference page — shortcuts, profile location,
+/// and what the engine cannot do. The one writable control is the
+/// default search engine, which works without IPC precisely because
+/// this page has none: the pick lives in the shell origin's
+/// localStorage — `cryo.searchEngine`, writeable only by shell
+/// documents — and `chrome.html` reports it back to the app on its
+/// `/cmd` wire (see `search.rs`). Everything else that mutates state
+/// stays in the chrome menu — see `NEW_TAB_HTML` for why a content
+/// view carries no command channel.
 pub const SETTINGS_HTML: &str = r##"<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><title>Settings</title><style>
@@ -170,11 +206,32 @@ pub const SETTINGS_HTML: &str = r##"<!doctype html>
   td { padding: 6px 0; border-bottom: 1px solid #23262c; vertical-align: top; }
   td.k { width: 220px; color: #9ec2f5; white-space: nowrap;
          font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+  select, input[type="text"] {
+    background: #1d2026; color: #e6e9ee; border: 1px solid #272b33;
+    border-radius: 7px; padding: 6px 10px; font: inherit;
+  }
+  input[type="text"] {
+    margin-top: 8px; width: 100%; box-sizing: border-box;
+    font-family: ui-monospace, Consolas, monospace; font-size: 13px;
+    -webkit-user-select: text; user-select: text;
+  }
+  select:focus, input[type="text"]:focus { outline: none; border-color: #2a7089; }
   .note { color: #8a8f98; }
 </style></head>
 <body>
   <h1>Settings</h1>
   <div class="note">cryo — a memory-obsessed browser shell.</div>
+
+  <h2>Search</h2>
+  <table>
+    <tr><td class="k">Search engine</td><td>
+      <select id="engine" aria-label="Default search engine"></select>
+      <input id="engine-tpl" type="text" spellcheck="false" hidden
+             placeholder="https://example.com/search?q=%s"
+             aria-label="Custom search URL">
+      <div class="note">Used by the address bar and the new-tab search box. Applies as soon as it is picked; for Custom, <code>%s</code> marks where the query goes.</div>
+    </td></tr>
+  </table>
 
   <h2>Profile &amp; sign-in</h2>
   <table>
@@ -204,6 +261,61 @@ pub const SETTINGS_HTML: &str = r##"<!doctype html>
     <tr><td class="k">Ctrl+Shift+Del</td><td>Clear browsing data</td></tr>
     <tr><td class="k">Ctrl+Shift+Q</td><td>Quit</td></tr>
   </table>
+<script>
+  // The pick is stored in this origin's localStorage — the same storage
+  // chrome.html and the new-tab page read. It is either a preset slug
+  // or a custom template: an http(s) URL holding %s where the encoded
+  // query goes. `cryo.searchEngine.custom` remembers the last template
+  // so toggling away and back doesn't lose it.
+  var KEY = "cryo.searchEngine";
+  var CUSTOM_KEY = "cryo.searchEngine.custom";
+  var sel = document.getElementById("engine");
+  var tpl = document.getElementById("engine-tpl");
+  function isTemplate(v) {
+    v = v.trim();
+    var m = /^https?:\/\/[^\s/]+/.exec(v);
+    return !!m && v.indexOf("%s") !== -1 && !/\s/.test(v);
+  }
+  function showTpl() { tpl.hidden = sel.value !== "custom"; }
+  fetch("/engines").then(function (r) { return r.json(); }).then(function (list) {
+    list.forEach(function (e) {
+      var o = document.createElement("option");
+      o.value = e.slug;
+      o.textContent = e.name;
+      sel.appendChild(o);
+    });
+    var o = document.createElement("option");
+    o.value = "custom";
+    o.textContent = "Custom…";
+    sel.appendChild(o);
+    var pick = localStorage.getItem(KEY) || "duckduckgo";
+    if (list.some(function (e) { return e.slug === pick; })) {
+      sel.value = pick;
+    } else {
+      sel.value = "custom";
+      tpl.value = isTemplate(pick) ? pick : (localStorage.getItem(CUSTOM_KEY) || "");
+    }
+    showTpl();
+  }).catch(function () {});
+  sel.addEventListener("change", function () {
+    showTpl();
+    if (sel.value !== "custom") {
+      localStorage.setItem(KEY, sel.value);
+      return;
+    }
+    // Nothing is stored until the input holds a valid template — the
+    // previous pick keeps working meanwhile.
+    if (!tpl.value) tpl.value = localStorage.getItem(CUSTOM_KEY) || "";
+    if (isTemplate(tpl.value)) localStorage.setItem(KEY, tpl.value.trim());
+    tpl.focus();
+  });
+  tpl.addEventListener("input", function () {
+    if (isTemplate(tpl.value)) {
+      localStorage.setItem(KEY, tpl.value.trim());
+      localStorage.setItem(CUSTOM_KEY, tpl.value.trim());
+    }
+  });
+</script>
 </body>
 </html>
 "##;
@@ -218,6 +330,7 @@ mod tests {
         assert!(internal_page("/newtab").is_some());
         assert!(internal_page("/settings").is_some());
         assert!(internal_page(dial::PATH).is_some());
+        assert!(internal_page(search::PATH).is_some());
         assert!(internal_page("/etc/passwd").is_none());
     }
 

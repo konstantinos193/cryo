@@ -14,6 +14,8 @@
 //! `Debug` is redacted and there is no `Display`, because the one
 //! reporting seam (`crate::report!`) formats with `Debug`.
 
+use zeroize::Zeroize;
+
 mod dpapi;
 pub mod fake;
 mod file;
@@ -62,6 +64,14 @@ impl std::fmt::Debug for Secret {
     }
 }
 
+impl Drop for Secret {
+    /// Plaintext doesn't linger in freed heap: every dropped copy wipes
+    /// its bytes — best effort, same as the file adapter's buffer.
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
 /// One saved sign-in. Immutable: a changed password replaces the row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Credential {
@@ -86,6 +96,13 @@ pub struct Draft {
     pub secret: String,
     pub note: String,
     pub updated_at: u64,
+}
+
+impl Drop for Draft {
+    /// Carries plaintext like a `Secret` does — wipe it the same way.
+    fn drop(&mut self) {
+        self.secret.zeroize();
+    }
 }
 
 /// What `add_all` did.
@@ -209,6 +226,12 @@ impl Credential {
     }
 }
 
+/// The account identity `is()` expresses, as a hashable value — the
+/// lowercased origin plus the exact username — for `add_all`'s index.
+fn cred_key(c: &Credential) -> (String, String) {
+    (c.origin.to_ascii_lowercase(), c.username.clone())
+}
+
 /// Newlines and NULs in an origin mean a mangled CSV, not a site.
 fn has_controls(s: &str) -> bool {
     s.chars().any(|c| c.is_control())
@@ -258,40 +281,79 @@ impl Credentials {
         self.rows.iter().find(|c| c.is(origin, username))
     }
 
-    /// Save one sign-in. An existing row with the same key is replaced —
-    /// the vault holds one password per account, the current one.
-    pub fn add(&mut self, draft: &Draft) -> Result<Saved, VaultError> {
-        let fresh = Credential::hydrate(
+    /// Draft → `Credential`: the validation half of `add`, shared with
+    /// `add_all`.
+    fn draft_credential(&self, draft: &Draft) -> Result<Credential, VaultError> {
+        Credential::hydrate(
             &draft.origin,
             &draft.username,
             Secret::new(draft.secret.clone()),
             &draft.note,
             draft.updated_at,
-        )?;
-        if let Some(slot) = self
-            .rows
-            .iter_mut()
-            .find(|c| c.is(&fresh.origin, &fresh.username))
-        {
-            if slot.secret == fresh.secret && slot.note == fresh.note {
-                return Ok(Saved::Unchanged);
-            }
-            *slot = fresh;
-            return Ok(Saved::Updated);
-        }
-        if self.rows.len() >= MAX_CREDENTIALS {
-            return Err(VaultError::Full);
-        }
-        self.rows.push(fresh);
-        Ok(Saved::Created)
+        )
     }
 
-    /// Bulk import through the same door `add` uses.
+    /// Store a validated row: replace in place when `pos` names the
+    /// same account (reporting whether anything actually changed), else
+    /// append under the bound. `add` and `add_all` share this once the
+    /// key lookup is done.
+    fn store_valid(&mut self, fresh: Credential, pos: Option<usize>) -> Result<Saved, VaultError> {
+        match pos {
+            Some(i) => {
+                let slot = &mut self.rows[i];
+                if slot.secret == fresh.secret && slot.note == fresh.note {
+                    return Ok(Saved::Unchanged);
+                }
+                *slot = fresh;
+                Ok(Saved::Updated)
+            }
+            None => {
+                if self.rows.len() >= MAX_CREDENTIALS {
+                    return Err(VaultError::Full);
+                }
+                self.rows.push(fresh);
+                Ok(Saved::Created)
+            }
+        }
+    }
+
+    /// Save one sign-in. An existing row with the same key is replaced —
+    /// the vault holds one password per account, the current one.
+    pub fn add(&mut self, draft: &Draft) -> Result<Saved, VaultError> {
+        let fresh = self.draft_credential(draft)?;
+        let pos = self
+            .rows
+            .iter()
+            .position(|c| c.is(&fresh.origin, &fresh.username));
+        self.store_valid(fresh, pos)
+    }
+
+    /// Bulk import through the same doors `add` uses — `draft_credential`
+    /// validates, `store_valid` stores — but the account lookup runs
+    /// against a position index built once, so the import costs its own
+    /// size, not its size squared.
     pub fn add_all(&mut self, drafts: &[Draft]) -> MergeReport {
         let mut report = MergeReport::default();
+        let mut pos: std::collections::HashMap<(String, String), usize> = self
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (cred_key(c), i))
+            .collect();
         for draft in drafts {
-            match self.add(draft) {
-                Ok(Saved::Created) => report.added += 1,
+            let fresh = match self.draft_credential(draft) {
+                Ok(f) => f,
+                Err(_) => {
+                    report.rejected += 1;
+                    continue;
+                }
+            };
+            let key = cred_key(&fresh);
+            match self.store_valid(fresh, pos.get(&key).copied()) {
+                Ok(Saved::Created) => {
+                    pos.insert(key, self.rows.len() - 1);
+                    report.added += 1;
+                }
                 Ok(Saved::Updated) => report.updated += 1,
                 Ok(Saved::Unchanged) => report.duplicates += 1,
                 Err(VaultError::Full) => report.overflowed += 1,

@@ -15,7 +15,8 @@
 
 use crate::bookmarks::{BookmarkId, Draft};
 use crate::shell::chrome::{
-    ChromeBookmark, ChromeLibrary, ChromePassword, ChromeSource, Notice, SecretReply,
+    favicon_data_url, ChromeBookmark, ChromeLibrary, ChromePassword, ChromeSource, Notice,
+    SecretReply,
 };
 use crate::shell::pages;
 
@@ -26,6 +27,12 @@ use super::{unix_now, App, DEFAULT_URL};
 /// honest and keeps one `eval` from carrying a megabyte.
 pub(super) const MAX_PANEL_ROWS: usize = 1_000;
 
+/// Most bar rows one `ChromeState` carries. The bar is a strip, not the
+/// library — it overflows long before this, and the rows ride inside
+/// every state push, favicon `data:` URLs included. Deeper kept pages
+/// are still reachable from the library panel.
+const BAR_ROWS: usize = 64;
+
 impl App {
     /// The ★ button and Ctrl+D: keep the active page, or drop it again.
     pub(super) fn bookmark_active(&mut self) -> anyhow::Result<()> {
@@ -33,6 +40,9 @@ impl App {
             return Ok(());
         };
         let (url, title) = (tab.url().to_string(), tab.title().to_string());
+        // The icon the tab already wears, if one has arrived — a late
+        // `FaviconChanged` fills it in through `set_favicon` instead.
+        let favicon = tab.favicon().map(favicon_data_url);
         // The new-tab page and the shell's own surfaces are not
         // destinations — there is nothing to come back to.
         if url == DEFAULT_URL || pages::is_internal_url(&url) {
@@ -49,6 +59,7 @@ impl App {
                     // The ★ keeps to the bar, where the user can see it.
                     folder: String::new(),
                     added_at: unix_now(),
+                    favicon,
                 };
                 if let Err(e) = self.bookmarks.add(&draft) {
                     return self.notice(false, "Could not keep that page", vec![e.to_string()]);
@@ -70,11 +81,18 @@ impl App {
         else {
             return Ok(());
         };
-        self.dismiss_overlays()?;
         match (ctrl, shift) {
-            (true, false) => self.spawn_tab(&url, true),
+            // Background-open is the library's multi-open path: keep the
+            // panel in place so another saved page is one click away.
             (true, true) => self.spawn_tab(&url, false),
-            _ => self.navigate_active(&url),
+            (true, false) => {
+                self.dismiss_overlays()?;
+                self.spawn_tab(&url, true)
+            }
+            _ => {
+                self.dismiss_overlays()?;
+                self.navigate_active(&url)
+            }
         }
     }
 
@@ -86,12 +104,13 @@ impl App {
         self.push_library()
     }
 
-    /// The bar's rows, as `ChromeState` carries them.
+    /// The bar's rows, as `ChromeState` carries them — capped for the
+    /// strip, not the panel: every `sync_chrome` resends these.
     pub(super) fn bar_rows(&self) -> Vec<ChromeBookmark> {
         self.bookmarks
             .marks()
             .bar()
-            .take(MAX_PANEL_ROWS)
+            .take(BAR_ROWS)
             .map(wire_bookmark)
             .collect()
     }
@@ -244,6 +263,8 @@ fn wire_bookmark(mark: &crate::bookmarks::Bookmark) -> ChromeBookmark {
         title: mark.title().to_string(),
         url: mark.url().to_string(),
         folder: mark.folder().to_string(),
+        added_at: mark.added_at(),
+        favicon: mark.favicon().map(str::to_string),
     }
 }
 

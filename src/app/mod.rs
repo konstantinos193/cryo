@@ -5,24 +5,32 @@
 //! `impl App` is split by responsibility, one file per slice: `keys` maps
 //! input to commands, `surfaces` owns every view's birth and death (the
 //! `views`/`registry` invariant lives there), `actions` holds the user
-//! verbs and the chrome-command dispatch, `update` runs the self-update
-//! flow, `library` owns bookmarks and saved passwords, `transfer` runs
-//! the import/export flows. This file keeps the state itself, the event
-//! entry points and the window-layout plumbing.
+//! verbs and the chrome-command dispatch, `events` owns what the engine
+//! surfaces report back, `chrome` pushes state into the chrome document,
+//! `suggest` answers the omnibox, `update` runs the self-update flow,
+//! `account` tracks the Google session, `library` owns bookmarks and
+//! saved passwords, `transfer` runs the import/export flows. This file
+//! keeps the state itself, the event entry points and the window-layout
+//! plumbing.
 
+mod account;
 mod actions;
+mod chrome;
 mod downloads;
 mod dragout;
+mod events;
 mod keys;
 mod library;
+mod suggest;
 mod surfaces;
 mod transfer;
 mod update;
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::time::Duration;
 
-use tao::event::{Event, WindowEvent};
+use tao::event::{Event, StartCause, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopProxy};
 use tao::keyboard::ModifiersState;
 use tao::window::Window;
@@ -31,11 +39,10 @@ use crate::bookmarks::Keeper;
 use crate::engine::{Accelerator, ContentView, DownloadUpdate, Engine, LoadFailure, Rect};
 use crate::persist::Recorder;
 use crate::shell;
-use crate::shell::chrome::{
-    favicon_data_url, normalize_nav_input, ChromeCommand, ChromeState, ChromeTab,
-};
-use crate::shell::pages::{self, NEW_TAB_URL};
-use crate::tabs::{TabId, TabRegistry, TabState};
+use crate::shell::chrome::{normalize_nav_input, ChromeCommand};
+use crate::shell::pages::NEW_TAB_URL;
+use crate::shell::search::SearchEngine;
+use crate::tabs::{Clock, TabId, TabRegistry};
 use crate::update::{Outcome, Update};
 use crate::vault::Vault;
 
@@ -43,6 +50,10 @@ use crate::vault::Vault;
 /// `NEW_TAB_URL`; `about:blank` stays the tab's logical address so the
 /// address bar starts empty and internal URLs never escape into it.
 pub(crate) const DEFAULT_URL: &str = "about:blank";
+
+/// How often the event loop wakes to give cold background tabs a
+/// suspended renderer (`suspend_idle_views` does the deciding).
+pub(crate) const IDLE_TICK: Duration = Duration::from_secs(15);
 
 /// The address to hand the engine for a tab's domain URL. `about:blank`
 /// is a never-painting document in WebView2 — the internal new-tab page
@@ -111,11 +122,18 @@ pub enum AppEvent {
     /// A background update check finished — started at launch and by the
     /// menu's "Check for updates".
     UpdateChecked(Outcome),
+    /// A worker answered who the profile's Google session belongs to —
+    /// `None` reads as signed out.
+    GoogleSession(Option<crate::account::Session>),
 }
 
 pub struct App {
     window: Rc<Window>,
     engine: Rc<dyn Engine>,
+    /// The clock freeze times are stamped through (AGENTS §6) — the
+    /// composition root injects it so budget policy and tests control
+    /// what "now" means.
+    clock: Rc<dyn Clock>,
     proxy: EventLoopProxy<AppEvent>,
     registry: TabRegistry,
     /// Engine surfaces keyed by tab — a map parallel to `registry` by
@@ -138,6 +156,11 @@ pub struct App {
     /// view is stretched over the whole window so the popup can paint
     /// above the content views.
     overlay_open: bool,
+    /// Where non-URL omnibox input goes. The pick lives in the shell
+    /// origin's localStorage (the settings page writes it); the chrome
+    /// document reports it on its `/cmd` wire and `note_search_engine`
+    /// keeps this copy — the storage area itself never reaches the app.
+    search_engine: SearchEngine,
     /// Typed inputs and visited URLs — the omnibox's memory. `None` in
     /// incognito windows: forgetting is their whole point.
     recorder: Option<Recorder>,
@@ -176,6 +199,16 @@ pub struct App {
     /// A manual check was requested — the next `UpdateChecked` outcome
     /// gets a dialog instead of staying silent.
     update_prompt: bool,
+    /// The Google session the account button last painted — `None`
+    /// shows the "Sign in" pill.
+    google: Option<crate::account::Session>,
+    /// The one in-flight session check and whether a second request
+    /// folded into it (see `account::SessionCheck`).
+    google_check: account::SessionCheck,
+    /// The window has begun shutting down. WebView2 rejects every call
+    /// after controller disposal starts, while tao may still deliver
+    /// queued resize and view events.
+    exiting: bool,
 }
 
 /// What a window remembers, as `lib.rs` wires it: visits, kept pages
@@ -207,6 +240,7 @@ impl App {
     pub fn new(
         window: Rc<Window>,
         engine: Rc<dyn Engine>,
+        clock: Rc<dyn Clock>,
         proxy: EventLoopProxy<AppEvent>,
         open_url: Option<String>,
         profile: Profile,
@@ -220,7 +254,13 @@ impl App {
         let mut registry = TabRegistry::new();
         // A spawned window can be handed an address to open (Ctrl+Shift+
         // Enter, shell args). Blank or absent means the new-tab page.
-        let (domain, load) = match open_url.as_deref().map(normalize_nav_input) {
+        // The stored engine only arrives with the chrome document's
+        // `ready`, after this address is already resolved — a launch-arg
+        // search phrase is the one input that always takes the default.
+        let (domain, load) = match open_url
+            .as_deref()
+            .map(|u| normalize_nav_input(u, &SearchEngine::DEFAULT))
+        {
             Some(u) if u != DEFAULT_URL => (u.clone(), u),
             _ => (DEFAULT_URL.to_string(), NEW_TAB_URL.to_string()),
         };
@@ -239,6 +279,7 @@ impl App {
         Ok(Self {
             window,
             engine,
+            clock,
             proxy,
             registry,
             views,
@@ -248,6 +289,7 @@ impl App {
             chrome_focused: false,
             page_fullscreen: false,
             overlay_open: false,
+            search_engine: SearchEngine::DEFAULT,
             recorder: profile.recorder,
             bookmarks: profile.bookmarks,
             vault: profile.vault,
@@ -259,112 +301,52 @@ impl App {
             retry_tabs: HashSet::new(),
             pending_update: None,
             update_prompt: false,
+            google: None,
+            google_check: account::SessionCheck::Idle,
+            exiting: false,
         })
     }
 
     pub fn handle_event(&mut self, event: Event<'_, AppEvent>, control_flow: &mut ControlFlow) {
+        if self.exiting {
+            return;
+        }
         match event {
             Event::WindowEvent { event, .. } => match event {
-                WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
+                WindowEvent::CloseRequested => self.request_exit(control_flow),
                 WindowEvent::Resized(size) => self.resize(size.width, size.height),
                 WindowEvent::ModifiersChanged(m) => self.modifiers = m,
                 WindowEvent::KeyboardInput { event, .. } => self.on_key(&event, control_flow),
                 _ => {}
             },
             Event::UserEvent(e) => self.dispatch(e, control_flow),
+            Event::NewEvents(StartCause::ResumeTimeReached { .. }) => self.suspend_idle_views(),
             _ => {}
         }
+    }
+
+    /// Mark the controller graph unavailable before asking tao to exit.
+    /// Queued callbacks can then drain without touching disposed WebViews.
+    pub(super) fn request_exit(&mut self, control_flow: &mut ControlFlow) {
+        self.exiting = true;
+        *control_flow = ControlFlow::Exit;
     }
 
     fn dispatch(&mut self, event: AppEvent, control_flow: &mut ControlFlow) {
         let result = match event {
             AppEvent::Accelerator(acc) => self.on_accelerator(acc, control_flow),
             AppEvent::Chrome(cmd) => self.on_chrome(cmd, control_flow),
-            AppEvent::TitleChanged(id, title) => {
-                let url = self.registry.get(id).map(|t| t.url().to_string());
-                if let Some(tab) = self.registry.get_mut(id) {
-                    tab.set_title(title.clone());
-                }
-                // Titles arrive after the URL was already recorded — this
-                // attaches it so suggestions can match on it. Internal
-                // pages no-op: they were never recorded.
-                if let Some(url) = url {
-                    self.note_title(&url, &title);
-                }
-                self.sync_chrome()
-            }
-            AppEvent::Navigated(id, url) => {
-                // Internal pages are shell surfaces, not tab destinations —
-                // never record them as a tab's address.
-                if pages::is_internal_url(&url) {
-                    return;
-                }
-                // The visit counts whether the load works out or not —
-                // real omniboxes remember typed destinations too.
-                // about:blank is no destination at all — downloads that
-                // re-report their host's blank start would litter it in.
-                if url != DEFAULT_URL {
-                    self.remember(&url);
-                }
-                // A retry tab reporting somewhere other than its own
-                // download URI (or the blank it never left) means the
-                // user took the tab over — it stops being disposable.
-                if self.retry_tabs.contains(&id)
-                    && url != DEFAULT_URL
-                    && self.registry.get(id).is_some_and(|t| t.url() != url)
-                {
-                    self.retry_tabs.remove(&id);
-                }
-                if let Some(tab) = self.registry.get_mut(id) {
-                    // A view that already froze can still have events in
-                    // flight from before the drop — they must not move the
-                    // frozen tab's address away from its snapshot's.
-                    if tab.state() == TabState::Active {
-                        tab.navigate(url);
-                    }
-                }
-                if self.registry.active_id() == Some(id) {
-                    self.sync_chrome()
-                } else {
-                    Ok(())
-                }
-            }
-            AppEvent::FaviconChanged(id, png) => {
-                let url = self.registry.get(id).map(|t| t.url().to_string());
-                let icon = png.as_deref().map(favicon_data_url);
-                if let Some(tab) = self.registry.get_mut(id) {
-                    // Same in-flight rule as Navigated: a view already
-                    // frozen can still emit its last icon — don't write
-                    // it over the frozen tab's.
-                    if tab.state() == TabState::Active {
-                        tab.set_favicon(png);
-                    }
-                }
-                // The icon outlives the tab — the omnibox paints it
-                // beside the remembered visit. Internal pages don't
-                // reach history, so nothing records them.
-                if let (Some(url), Some(icon)) = (url, icon) {
-                    if !pages::is_internal_url(&url) {
-                        self.note_favicon(&url, &icon);
-                    }
-                }
-                self.sync_chrome()
-            }
-            AppEvent::LoadChanged(id, loading) => {
-                if let Some(tab) = self.registry.get_mut(id) {
-                    // Same in-flight rule as Navigated — a dropped view's
-                    // last events must not write into a frozen tab.
-                    tab.set_loading(loading);
-                }
-                self.sync_chrome()
-            }
+            AppEvent::TitleChanged(id, title) => self.on_title_changed(id, title),
+            AppEvent::Navigated(id, url) => self.on_navigated(id, url),
+            AppEvent::FaviconChanged(id, png) => self.on_favicon_changed(id, png),
+            AppEvent::LoadChanged(id, loading) => self.on_load_changed(id, loading),
             AppEvent::OpenInNewTab(url) => self.spawn_tab(&url, true),
             AppEvent::ExternalOpen(url) => {
                 // The user clicked a link expecting to watch it land —
                 // the window may be minimized or behind other windows.
                 self.window.set_minimized(false);
                 self.window.set_focus();
-                self.spawn_tab(&normalize_nav_input(&url), true)
+                self.spawn_tab(&normalize_nav_input(&url, &self.search_engine), true)
             }
             AppEvent::PageFullscreen(id, on) => self.page_fullscreen(id, on),
             AppEvent::LoadFailed(id, failure) => self.show_error(id, failure),
@@ -373,62 +355,13 @@ impl App {
             AppEvent::Imported(outcome) => self.on_imported(outcome),
             AppEvent::ImportSources(sources) => self.on_import_sources(sources),
             AppEvent::UpdateChecked(outcome) => self.on_update(outcome, control_flow),
+            AppEvent::GoogleSession(session) => self.on_google_session(session),
         };
         #[cfg(debug_assertions)]
         self.assert_views_consistent();
         if let Err(e) = result {
             crate::report!("{e:?}");
         }
-    }
-
-    /// Chrome bounds for the current overlay state: the strip normally,
-    /// the whole window while an overlay is open.
-    fn chrome_rect(&self) -> Rect {
-        let (w, h) = self.logical_size;
-        if self.overlay_open {
-            Rect {
-                x: 0.0,
-                y: 0.0,
-                w,
-                h,
-            }
-        } else {
-            shell::layout(w, h).0
-        }
-    }
-
-    /// Chrome overlays (the ⋮ menu, the omnibox dropdown) are part of the
-    /// chrome document, but a view can't paint outside its own bounds —
-    /// while one is open the chrome view is raised above the content
-    /// views and stretched over the whole window. Its background is
-    /// transparent, so only the strip and the popup paint; the page shows
-    /// through and any click outside lands on the chrome document, which
-    /// dismisses the overlay.
-    pub(super) fn set_overlay_open(&mut self, open: bool) -> anyhow::Result<()> {
-        if self.overlay_open == open {
-            return Ok(());
-        }
-        self.overlay_open = open;
-        self.chrome.set_bounds(self.chrome_rect())?;
-        if open {
-            self.chrome.bring_to_front()?;
-        }
-        Ok(())
-    }
-
-    /// App-side actions that replace what's on screen must close overlays —
-    /// the document can't see them, so it's synced through `__cryo_overlay`
-    /// before the bounds come back down.
-    pub(super) fn dismiss_overlays(&mut self) -> anyhow::Result<()> {
-        if !self.overlay_open {
-            return Ok(());
-        }
-        self.chrome
-            .eval("window.__cryo_overlay && window.__cryo_overlay(false)")?;
-        // The library panel is one of those overlays — once it is shut
-        // there is nothing to push to it.
-        self.forget_library();
-        self.set_overlay_open(false)
     }
 
     /// Remember a visit or a typed input — the one door into `persist`.
@@ -494,43 +427,5 @@ impl App {
                 crate::report!("{e:?}");
             }
         }
-    }
-
-    pub(super) fn sync_chrome(&self) -> anyhow::Result<()> {
-        // History depth only exists while a view is live — a frozen or
-        // discarded tab's arrows stay grey until it restores.
-        let (can_back, can_fwd) = match self.active_view() {
-            Some(v) => (v.can_go_back()?, v.can_go_forward()?),
-            None => (false, false),
-        };
-        let state = ChromeState {
-            tabs: self
-                .registry
-                .iter()
-                .map(|t| ChromeTab {
-                    id: t.id().get(),
-                    title: t.title().to_string(),
-                    active: self.registry.active_id() == Some(t.id()),
-                    state: t.state().as_str(),
-                    favicon: t.favicon().map(favicon_data_url),
-                    loading: t.is_loading(),
-                })
-                .collect(),
-            active_url: self
-                .registry
-                .active()
-                .map(|t| t.url().to_string())
-                .filter(|u| u != "about:blank")
-                .unwrap_or_default(),
-            can_back,
-            can_fwd,
-            update_version: self.pending_update.as_ref().map(|u| u.version.to_string()),
-            downloads: self.download_rows(),
-            bookmarks: self.bar_rows(),
-            starred: self.active_starred(),
-        };
-        let json = serde_json::to_string(&state)?;
-        self.chrome.eval(&format!("window.__cryo_update({json})"))?;
-        Ok(())
     }
 }

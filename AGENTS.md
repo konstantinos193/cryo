@@ -93,7 +93,9 @@ value objects, aggregates, domain services. That's it.
 - **Bounded contexts = top-level modules.** `tabs`, `engine`, `shell`
   (window/UI), `persist` (history recorder), `bookmarks`, `vault`
   (passwords), `transfer` (foreign-file import/export), `instance`
-  (single-instance handoff), `update` (self-update). `memory` is the
+  (single-instance handoff), `update` (self-update), `account` (Google
+  session detection — HTTP and foreign-wire parsing are session
+  plumbing, not window UI, so it is not `shell`). `memory` is the
   planned budgets context — it does not exist yet, but when it does a
   `Budget` lives there and `tabs` *asks* memory rather than computing
   budgets itself. Each context owns its vocabulary and its types. New

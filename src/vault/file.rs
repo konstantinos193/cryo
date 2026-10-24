@@ -96,10 +96,8 @@ impl SealedFile {
 impl Store for SealedFile {
     fn load(&self) -> Result<Vec<Credential>, VaultError> {
         // A missing file is a fresh profile, not an error.
-        let bytes = match std::fs::read(&self.path) {
-            Ok(b) => b,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(self.read_err(e)),
+        let Some(bytes) = crate::read_file(&self.path).map_err(|e| self.read_err(e))? else {
+            return Ok(Vec::new());
         };
         if bytes.len() < HEADER || !bytes.starts_with(MAGIC) {
             return Err(VaultError::NotAVault);
@@ -138,9 +136,6 @@ impl Store for SealedFile {
     }
 
     fn save(&self, rows: &[Credential]) -> Result<(), VaultError> {
-        if let Some(dir) = self.path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| self.write_err(e))?;
-        }
         let body = VaultBody {
             rows: rows.iter().map(RowFile::from).collect(),
         };
@@ -156,11 +151,7 @@ impl Store for SealedFile {
         out.extend_from_slice(MAGIC);
         out.extend_from_slice(&CURRENT_VERSION.to_le_bytes());
         out.extend_from_slice(&sealed);
-        // Write-then-rename: a crash mid-write leaves the old vault whole.
-        let tmp = self.path.with_extension("bin.tmp");
-        std::fs::write(&tmp, &out).map_err(|e| self.write_err(e))?;
-        std::fs::rename(&tmp, &self.path).map_err(|e| self.write_err(e))?;
-        Ok(())
+        crate::write_file_atomic(&self.path, &out).map_err(|e| self.write_err(e))
     }
 }
 
@@ -170,9 +161,7 @@ mod tests {
     use super::*;
 
     fn temp(tag: &str) -> PathBuf {
-        std::env::temp_dir()
-            .join(format!("cryo-vault-{tag}-{}", std::process::id()))
-            .join("vault.bin")
+        crate::test_dir(&format!("vault-{tag}")).join("vault.bin")
     }
 
     fn row(origin: &str, user: &str, secret: &str) -> Credential {

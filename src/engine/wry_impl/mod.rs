@@ -101,6 +101,22 @@ const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,\
      msSmartScreenProtection,HardwareSecureDecoding,\
      HardwareSecureDecodingExperiment,HardwareSecureDecodingFallback";
 
+/// Middle-click is a browser-chrome gesture WebView2 never routes to
+/// `NewWindowRequested` — the navigation just lands in the same view.
+/// When the app asks for new-window requests at all, this script gives
+/// it the complete set: a captured auxclick on an anchor is turned into
+/// a `window.open`, which does raise the event (and which we then deny
+/// in favour of our own tab). Middle-click off a link keeps its engine
+/// default (autoscroll); javascript: and non-http(s) hrefs stay in the
+/// page's hands.
+const AUX_CLICK_JS: &str = r#"addEventListener('auxclick',e=>{
+if(e.button!==1)return;
+const a=e.target&&e.target.closest?e.target.closest('a[href]'):null;
+if(!a||!/^https?:/.test(a.href))return;
+e.preventDefault();
+window.open(a.href,'_blank');
+},true);"#;
+
 #[cfg(target_os = "windows")]
 fn browser_args() -> String {
     let mut args = String::from(BROWSER_ARGS);
@@ -154,6 +170,7 @@ impl Engine for WryEngine {
                 on_new_window(url);
                 NewWindowResponse::Deny
             });
+            builder = builder.with_initialization_script(AUX_CLICK_JS);
         }
         if let Some(on_permission) = spec.on_permission {
             builder = builder.with_permission_handler(move |kind| {

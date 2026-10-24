@@ -114,6 +114,15 @@
     background: transparent; color: #9ec2f5; font: inherit; cursor: pointer;
   }
   #signin:hover { background: #2a2f38; }
+  /* Signed in: the pill collapses to a bare round button holding the
+     account picture (or the name's initial), like Chrome's avatar. */
+  #signin.signed { padding: 1px; border-color: transparent; }
+  #signin .ava { width: 22px; height: 22px; border-radius: 50%; display: block; }
+  #signin .initial {
+    width: 22px; height: 22px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: #5a8adf; color: #fff; font-size: 12px;
+  }
   /* Downloads button: hidden until a file starts; the thin bar under
      the glyph is aggregate in-flight progress. */
   #dl { position: relative; }
@@ -215,28 +224,48 @@
      behind it so the page does not read as interactive. */
   #lib {
     display: none; position: fixed; inset: 0; z-index: 20;
-    background: rgba(9, 10, 12, .55);
+    background: rgba(6, 8, 12, .72); backdrop-filter: blur(10px);
     align-items: center; justify-content: center;
   }
   #lib.open { display: flex; }
   #lib .panel {
     display: flex; flex-direction: column;
-    width: min(880px, calc(100vw - 48px)); max-height: 78vh;
-    background: #1f2228; border: 1px solid #3a3f47; border-radius: 12px;
-    box-shadow: 0 18px 50px rgba(0, 0, 0, .55); overflow: hidden;
+    width: min(1040px, calc(100vw - 48px)); height: min(740px, calc(100vh - 64px));
+    background: #15181e; border: 1px solid #353b46; border-radius: 18px;
+    box-shadow: 0 28px 80px rgba(0, 0, 0, .68); overflow: hidden;
   }
   #lib header {
-    display: flex; align-items: center; gap: 4px;
-    padding: 10px 12px; border-bottom: 1px solid #2a2e35;
+    display: flex; align-items: center; gap: 18px;
+    min-height: 64px; padding: 10px 16px; border-bottom: 1px solid #282d35;
+    background: rgba(28, 32, 39, .88);
+  }
+  #lib .brand {
+    display: flex; align-items: center; gap: 10px; min-width: 160px;
+    color: #f3f7fb; font-size: 14px; font-weight: 650;
+  }
+  #lib .brand-mark {
+    display: grid; place-items: center; width: 30px; height: 30px;
+    border: 1px solid #3b6473; border-radius: 9px;
+    background: linear-gradient(145deg, #193e4d, #17252e); color: #a9e8f3;
+  }
+  #lib nav {
+    display: flex; align-items: center; gap: 3px; padding: 3px;
+    background: #111419; border: 1px solid #292f38; border-radius: 10px;
   }
   #lib .tab-btn {
-    border: 0; border-radius: 7px; padding: 6px 12px;
-    background: transparent; color: #c9cdd4; font: inherit; cursor: pointer;
+    border: 0; border-radius: 7px; padding: 7px 12px;
+    background: transparent; color: #929aa6; font: inherit; cursor: pointer;
   }
-  #lib .tab-btn:hover { background: #282c33; }
-  #lib .tab-btn.on { background: #2e323a; color: #fff; }
-  #lib .close { margin-left: auto; font-size: 15px; }
-  #lib .body { padding: 10px 14px 16px; overflow-y: auto; }
+  #lib .tab-btn:hover { color: #dce2e9; }
+  #lib .tab-btn.on { background: #29303a; color: #fff; box-shadow: 0 1px 3px #090b0e; }
+  #lib .close {
+    display: grid; place-items: center; margin-left: auto; width: 32px; height: 32px;
+    border: 0; border-radius: 9px; background: transparent; color: #929aa6;
+    font: inherit; font-size: 18px; line-height: 1; cursor: pointer;
+  }
+  #lib .close:hover { background: #2a3038; color: #fff; }
+  #lib .body { flex: 1; min-height: 0; padding: 18px 20px 22px; overflow-y: auto; }
+  #lib .body.bookmarks-body { padding: 0; overflow: hidden; }
   #lib .search {
     width: 100%; height: 28px; margin: 2px 0 8px;
     background: #26292f; border: 1px solid #363a42; border-radius: 7px;
@@ -278,6 +307,112 @@
   .lnote { margin: 8px 2px; color: #8a8f98; line-height: 1.55; }
   .lnote.warn { color: #e3a9a9; }
   .lempty { padding: 18px 2px; color: #8a8f98; }
+  /* Bookmarks are a retrieval surface, not a settings table. Folder
+     scope stays visible on the left while results scroll on the right. */
+  .bookmark-shell { display: flex; height: 100%; min-height: 0; }
+  .bookmark-folders {
+    width: 210px; flex: 0 0 auto; padding: 24px 12px 18px;
+    overflow-y: auto; border-right: 1px solid #282d35; background: #12151a;
+  }
+  .bookmark-folders h3 {
+    margin: 0 10px 12px; color: #737d8a; font-size: 10px; font-weight: 700;
+    letter-spacing: .12em; text-transform: uppercase;
+  }
+  .folder-btn {
+    display: flex; align-items: center; gap: 9px; width: 100%; min-width: 0;
+    padding: 8px 10px; border: 0; border-radius: 8px; background: transparent;
+    color: #aeb5bf; font: inherit; text-align: left; cursor: pointer;
+  }
+  .folder-btn:hover { background: #1d2229; color: #e7ebf0; }
+  .folder-btn.on { background: #21323b; color: #c9f3fa; }
+  .folder-btn svg { width: 15px; height: 15px; flex: 0 0 auto; }
+  .folder-btn .folder-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .folder-btn .folder-count {
+    margin-left: auto; color: #737d8a; font-size: 10px; font-variant-numeric: tabular-nums;
+  }
+  .folder-btn.on .folder-count { color: #83b9c4; }
+  .bookmark-main { display: flex; flex: 1; min-width: 0; flex-direction: column; }
+  .bookmark-top { padding: 25px 28px 17px; border-bottom: 1px solid #282d35; }
+  .bookmark-titlebar { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 17px; }
+  .bookmark-titlebar h2 { color: #f2f5f8; font-size: 20px; line-height: 1.2; font-weight: 650; }
+  .bookmark-subtitle { margin-top: 4px; color: #818a96; font-size: 11px; }
+  .bookmark-import { margin-left: auto; }
+  .bookmark-search-row { display: flex; align-items: center; gap: 10px; }
+  .bookmark-search-wrap { position: relative; flex: 1; }
+  .bookmark-search-wrap svg {
+    position: absolute; left: 12px; top: 50%; width: 15px; height: 15px;
+    color: #727c89; transform: translateY(-50%); pointer-events: none;
+  }
+  #lib .bookmark-search {
+    width: 100%; height: 38px; padding: 0 38px;
+    border: 1px solid #343b46; border-radius: 10px; outline: none;
+    background: #101318; color: #edf1f5; font: inherit;
+    -webkit-user-select: text; user-select: text;
+  }
+  #lib .bookmark-search:focus { border-color: #548da0; box-shadow: 0 0 0 3px rgba(83, 151, 170, .12); }
+  .search-clear {
+    display: none; position: absolute; right: 7px; top: 6px; width: 26px; height: 26px;
+    border: 0; border-radius: 7px; background: transparent; color: #77818d; cursor: pointer;
+  }
+  .search-clear.show { display: block; }
+  .search-clear:hover { background: #252b33; color: #fff; }
+  .bookmark-sort {
+    height: 38px; padding: 0 30px 0 11px; border: 1px solid #343b46;
+    border-radius: 10px; background: #171b21; color: #bfc6cf; font: inherit; outline: none;
+  }
+  .bookmark-results { flex: 1; min-height: 0; padding: 12px 18px 18px; overflow-y: auto; }
+  .bookmark-summary { padding: 2px 10px 9px; color: #707a87; font-size: 10px; }
+  .bookmark-card {
+    display: flex; align-items: center; gap: 12px; min-height: 58px; padding: 8px 10px;
+    border: 1px solid transparent; border-radius: 11px; cursor: pointer; outline: none;
+  }
+  .bookmark-card:hover, .bookmark-card:focus { background: #1c2128; border-color: #2c333d; }
+  .site-mark {
+    display: grid; place-items: center; width: 34px; height: 34px; flex: 0 0 auto;
+    border: 1px solid rgba(255,255,255,.08); border-radius: 10px;
+    color: #e8f4f7; font-size: 13px; font-weight: 700; text-transform: uppercase;
+  }
+  .site-fav { width: 20px; height: 20px; border-radius: 5px; }
+  .bookmark-copy { flex: 1; min-width: 0; }
+  .bookmark-name { overflow: hidden; color: #e5e9ee; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  .bookmark-meta { display: flex; align-items: center; gap: 7px; margin-top: 3px; min-width: 0; color: #747e8b; font-size: 10px; }
+  .bookmark-host { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bookmark-folder-pill {
+    max-width: 190px; padding: 1px 6px; overflow: hidden; border-radius: 5px;
+    background: #242a32; color: #929daa; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .bookmark-actions { display: flex; align-items: center; gap: 3px; opacity: 0; }
+  .bookmark-card:hover .bookmark-actions, .bookmark-card:focus-within .bookmark-actions { opacity: 1; }
+  .icon-btn {
+    display: grid; place-items: center; width: 30px; height: 30px; border: 0;
+    border-radius: 8px; background: transparent; color: #89939f; cursor: pointer;
+  }
+  .icon-btn:hover { background: #2a3038; color: #e8edf2; }
+  .icon-btn.danger:hover { background: #3a2427; color: #f1a5aa; }
+  .icon-btn svg { width: 15px; height: 15px; pointer-events: none; }
+  .delete-check { display: flex; align-items: center; gap: 5px; color: #d7a2a5; font-size: 10px; }
+  .delete-check button { padding: 5px 8px; border: 0; border-radius: 7px; font: inherit; cursor: pointer; }
+  .delete-check .yes { background: #6d3036; color: #fff; }
+  .delete-check .no { background: #292f37; color: #bdc4cd; }
+  .bookmark-empty { display: grid; place-items: center; height: 100%; min-height: 220px; text-align: center; }
+  .bookmark-empty-mark {
+    display: grid; place-items: center; width: 48px; height: 48px; margin: 0 auto 12px;
+    border-radius: 14px; background: #20262d; color: #6f98a3; font-size: 22px;
+  }
+  .bookmark-empty h3 { color: #d8dde4; font-size: 13px; }
+  .bookmark-empty p { max-width: 330px; margin-top: 5px; color: #747e8b; font-size: 11px; line-height: 1.5; }
+  @media (max-width: 720px) {
+    #lib .panel { width: calc(100vw - 20px); height: calc(100vh - 20px); }
+    #lib .brand { min-width: auto; }
+    #lib .brand span:last-child { display: none; }
+    #lib header { gap: 8px; padding-inline: 10px; }
+    #lib .tab-btn { padding-inline: 8px; }
+    .bookmark-folders { width: 54px; padding-inline: 7px; }
+    .bookmark-folders h3, .folder-name, .folder-count { display: none; }
+    .folder-btn { justify-content: center; padding-inline: 8px; }
+    .bookmark-top { padding: 18px 16px 14px; }
+    .bookmark-sort { max-width: 110px; }
+  }
   /* What an import or export did. Sits bottom-right, out of the way of
      the panel's own content, and times itself out. */
   #toast {
@@ -315,11 +450,14 @@
   <div id="lib">
     <div class="panel">
       <header>
-        <button class="tab-btn" data-pane="bookmarks">Bookmarks</button>
-        <button class="tab-btn" data-pane="passwords">Passwords</button>
-        <button class="tab-btn" data-pane="import">Import</button>
-        <button class="tab-btn" data-pane="export">Export</button>
-        <button class="tab-btn close" title="Close (Esc)">✕</button>
+        <div class="brand"><span class="brand-mark">❄</span><span>Cryo library</span></div>
+        <nav aria-label="Library sections">
+          <button class="tab-btn" data-pane="bookmarks">Bookmarks</button>
+          <button class="tab-btn" data-pane="passwords">Passwords</button>
+          <button class="tab-btn" data-pane="import">Import</button>
+          <button class="tab-btn" data-pane="export">Export</button>
+        </nav>
+        <button class="close" title="Close (Esc)" aria-label="Close library">×</button>
       </header>
       <div class="body"></div>
     </div>
@@ -333,7 +471,13 @@
   const ipc = (obj) => fetch('/cmd', {method: 'POST', body: JSON.stringify(obj)});
   const tabsEl = document.getElementById('tabs');
   const urlEl = document.getElementById('url');
-  ipc({cmd: 'ready'});
+  // The default search engine pick lives in the shell origin's
+  // localStorage (the settings page writes it): a preset slug or a
+  // custom %s URL template. The app can't see the storage area, so
+  // commands that consult it carry the current value — read fresh each
+  // time, a change in /settings lands with the next keystroke.
+  const enginePick = () => localStorage.getItem('cryo.searchEngine');
+  ipc({cmd: 'ready', engine: enginePick()});
 
   const backBtn = document.getElementById('back');
   const fwdBtn = document.getElementById('fwd');
@@ -464,6 +608,12 @@
       // Items can refuse at click time when the state forbids them —
       // the app would no-op anyway, but a dead click shouldn't look live.
       if (item.ok && !item.ok()) return;
+      // `lib` items open a library pane — they carry no `cmd` because
+      // openLib posts the pane's `library` command itself.
+      if (item.lib) {
+        openLib(item.lib);
+        return;
+      }
       ipc(item.cmd);
     };
     menuPop.appendChild(el);
@@ -479,8 +629,11 @@
     setDl(!dlOpen);
   };
   // Row buttons live inside the pop — clicks there must not bubble to
-  // the document's dismiss-all.
+  // the document's dismiss-all. The menu needs it too: its `lib` items
+  // open the library, and a click that reaches the document would shut
+  // the panel in the same gesture that opened it.
   dlPop.onclick = (e) => e.stopPropagation();
+  menuPop.onclick = (e) => e.stopPropagation();
   document.addEventListener('click', () => {
     setMenu(false); setOmni(false); setDl(false); setLib(false);
   });
@@ -513,7 +666,8 @@
 
   const go = (input, e) => {
     ipc({cmd: 'navigate', input,
-         ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey});
+         ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey,
+         engine: enginePick()});
     urlEl.blur();
   };
 
@@ -534,7 +688,7 @@
     }
     // The old rows stay until the reply lands — clearing them here
     // would flash an empty popup on every keystroke.
-    ipc({cmd: 'suggest', q});
+    ipc({cmd: 'suggest', q, engine: enginePick()});
   };
 
   const omniIcon = (r) => {
@@ -631,7 +785,10 @@
     } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'l') {
       // Edge's paste-and-go.
       navigator.clipboard.readText().then((t) => {
-        if (t) { ipc({cmd: 'navigate', input: t}); urlEl.blur(); }
+        if (t) {
+          ipc({cmd: 'navigate', input: t, engine: enginePick()});
+          urlEl.blur();
+        }
       }).catch(() => {});
       e.preventDefault();
     }
@@ -653,16 +810,26 @@
     const bar = document.getElementById('dial');
     bar.innerHTML = '';
     const rows = bookmarks.length
-      ? bookmarks.map((b) => ({name: b.title, url: b.url, id: b.id}))
-      : dialEntries.map((d) => ({name: d.name, url: d.url, id: null}));
+      ? bookmarks.map((b) => ({name: b.title, url: b.url, id: b.id, icon: b.favicon}))
+      : dialEntries.map((d) => ({name: d.name, url: d.url, id: null, icon: null}));
     for (const r of rows) {
       const el = document.createElement('button');
       el.className = 'dial';
       el.title = r.url + '\nClick: open here · Ctrl/middle-click: new tab' +
                  (r.id === null ? '' : ' · right-click: remove');
-      const dot = document.createElement('span');
+      // A kept page paints the site's icon; everything else keeps the
+      // letter tile.
+      let dot;
+      if (r.icon) {
+        dot = document.createElement('img');
+        dot.src = r.icon;
+        dot.alt = '';
+        dot.draggable = false;
+      } else {
+        dot = document.createElement('span');
+        dot.textContent = (r.name || r.url).charAt(0).toUpperCase();
+      }
       dot.className = 'dot';
-      dot.textContent = (r.name || r.url).charAt(0).toUpperCase();
       const label = document.createElement('span');
       label.textContent = r.name || r.url;
       el.append(dot, label);
@@ -862,6 +1029,8 @@
   let libPane = 'bookmarks';
   let libData = {pane: 'bookmarks', bookmarks: [], passwords: [], sources: []};
   let libFilter = '';
+  let bookmarkScope = 'all';
+  let bookmarkSort = 'newest';
   // Secrets the user revealed in this sitting, keyed origin + username.
   // Cleared when the panel closes, so reopening hides them again.
   const revealed = new Map();
@@ -891,36 +1060,140 @@
   };
 
   const paintBookmarks = () => {
-    const search = node('input', 'search');
-    search.type = 'text';
+    const shell = node('div', 'bookmark-shell');
+    const folders = node('aside', 'bookmark-folders');
+    folders.appendChild(node('h3', '', 'Browse'));
+    const main = node('section', 'bookmark-main');
+    const top = node('div', 'bookmark-top');
+    const titlebar = node('div', 'bookmark-titlebar');
+    const heading = node('div');
+    heading.append(node('h2', '', 'Bookmarks'), node('div', 'bookmark-subtitle',
+      libData.bookmarks.length + (libData.bookmarks.length === 1 ? ' saved page' : ' saved pages')));
+    const importBtn = button('Import', 'bookmark-import', () => openLib('import'));
+    titlebar.append(heading, importBtn);
+
+    const searchRow = node('div', 'bookmark-search-row');
+    const searchWrap = node('div', 'bookmark-search-wrap');
+    searchWrap.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>';
+    const search = node('input', 'bookmark-search');
+    search.type = 'search';
     search.spellcheck = false;
-    search.placeholder = 'Search bookmarks';
+    search.placeholder = 'Search title, website, or folder';
+    search.setAttribute('aria-label', 'Search bookmarks');
     search.value = libFilter;
-    search.oninput = () => { libFilter = search.value; paintRows(); };
-    libBody.appendChild(search);
-    const list = node('div');
-    libBody.appendChild(list);
+    const clear = node('button', 'search-clear' + (libFilter ? ' show' : ''), '×');
+    clear.title = 'Clear search';
+    clear.onclick = () => {
+      libFilter = ''; search.value = ''; clear.classList.remove('show'); paintRows(); search.focus();
+    };
+    searchWrap.append(search, clear);
+    const sort = node('select', 'bookmark-sort');
+    sort.setAttribute('aria-label', 'Sort bookmarks');
+    for (const [value, label] of [['newest', 'Newest'], ['az', 'A–Z'], ['site', 'Website']]) {
+      const option = node('option', '', label);
+      option.value = value; option.selected = value === bookmarkSort; sort.appendChild(option);
+    }
+    sort.onchange = () => { bookmarkSort = sort.value; paintRows(); };
+    searchRow.append(searchWrap, sort);
+    top.append(titlebar, searchRow);
+    const list = node('div', 'bookmark-results');
+    main.append(top, list);
+    shell.append(folders, main);
+    libBody.appendChild(shell);
+
+    const folderCounts = new Map();
+    for (const b of libData.bookmarks) {
+      const key = b.folder || '';
+      folderCounts.set(key, (folderCounts.get(key) || 0) + 1);
+    }
+    if (bookmarkScope !== 'all' && !folderCounts.has(bookmarkScope)) bookmarkScope = 'all';
+    const folderIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3.5 6.5h6l2 2h9v9.5a2 2 0 0 1-2 2h-15z"/></svg>';
+    const scopeButton = (key, label, count, icon) => {
+      const b = node('button', 'folder-btn' + (bookmarkScope === key ? ' on' : ''));
+      b.title = label;
+      b.innerHTML = icon || folderIcon;
+      b.append(node('span', 'folder-name', label), node('span', 'folder-count', String(count)));
+      b.onclick = () => { bookmarkScope = key; paintLib(); };
+      folders.appendChild(b);
+    };
+    scopeButton('all', 'All bookmarks', libData.bookmarks.length,
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3.5h12v17l-6-4-6 4z"/></svg>');
+    if (folderCounts.has('')) scopeButton('', 'Bookmarks bar', folderCounts.get(''));
+    [...folderCounts.entries()].filter(([name]) => name).sort((a, b) => a[0].localeCompare(b[0]))
+      .forEach(([name, count]) => scopeButton(name, name, count));
 
     const paintRows = () => {
       list.innerHTML = '';
       const needle = libFilter.trim().toLowerCase();
-      const rows = libData.bookmarks.filter((b) => !needle ||
-        (b.title + ' ' + b.url + ' ' + b.folder).toLowerCase().includes(needle));
+      const rows = libData.bookmarks.filter((b) =>
+        (bookmarkScope === 'all' || b.folder === bookmarkScope) && (!needle ||
+        (b.title + ' ' + b.url + ' ' + b.folder).toLowerCase().includes(needle)));
+      const host = (url) => {
+        try { return new URL(url).hostname.replace(/^www\./, '') || url; } catch (_) { return url; }
+      };
+      rows.sort((a, b) => bookmarkSort === 'az' ? a.title.localeCompare(b.title)
+        : bookmarkSort === 'site' ? host(a.url).localeCompare(host(b.url))
+        : (b.added_at || 0) - (a.added_at || 0));
       if (!rows.length) {
-        list.appendChild(node('div', 'lempty', libData.bookmarks.length
-          ? 'Nothing matches that.'
-          : 'No bookmarks yet. Press Ctrl+D on a page, or bring them over in the Import pane.'));
+        const empty = node('div', 'bookmark-empty');
+        const copy = node('div');
+        copy.append(node('div', 'bookmark-empty-mark', needle ? '⌕' : '☆'),
+          node('h3', '', libData.bookmarks.length ? 'No bookmarks found' : 'Your library is ready'),
+          node('p', '', libData.bookmarks.length
+            ? 'Try another search or choose a different folder.'
+            : 'Save any page with Ctrl+D, or import bookmarks from another browser.'));
+        empty.appendChild(copy); list.appendChild(empty);
         return;
       }
+      list.appendChild(node('div', 'bookmark-summary', rows.length +
+        (rows.length === 1 ? ' result' : ' results')));
       for (const b of rows) {
-        const r = node('div', 'lrow');
-        const main = node('div', 'main');
-        main.append(node('div', 't', b.title), node('div', 'u', b.url));
-        r.appendChild(main);
-        if (b.folder) r.appendChild(node('div', 'fold', b.folder));
-        r.appendChild(button('Open', '', (e) =>
-          ipc({cmd: 'bookmark_open', id: b.id, ctrl: e.ctrlKey, shift: e.shiftKey})));
-        r.appendChild(button('✕', '', () => ipc({cmd: 'bookmark_remove', id: b.id})));
+        const r = node('div', 'bookmark-card');
+        r.tabIndex = 0; r.title = b.url;
+        const site = host(b.url);
+        const mark = node('div', 'site-mark');
+        const hue = [...site].reduce((n, c) => n + c.charCodeAt(0), 0) % 360;
+        mark.style.background = 'hsl(' + hue + ' 28% 25%)';
+        // The site's icon on the tile when one has arrived; the letter
+        // stays for pages never visited (or visited before v2).
+        if (b.favicon) {
+          const img = node('img', 'site-fav');
+          img.src = b.favicon;
+          img.alt = '';
+          img.draggable = false;
+          mark.appendChild(img);
+        } else {
+          mark.textContent = site[0] || b.title[0] || '?';
+        }
+        const copy = node('div', 'bookmark-copy');
+        const meta = node('div', 'bookmark-meta');
+        meta.appendChild(node('span', 'bookmark-host', site));
+        if (b.folder) meta.appendChild(node('span', 'bookmark-folder-pill', b.folder));
+        copy.append(node('div', 'bookmark-name', b.title), meta);
+        const actions = node('div', 'bookmark-actions');
+        const newTab = node('button', 'icon-btn');
+        newTab.title = 'Open in background tab';
+        newTab.setAttribute('aria-label', 'Open ' + b.title + ' in background tab');
+        newTab.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 4h6v6M20 4l-9 9"/><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></svg>';
+        newTab.onclick = (e) => {
+          e.stopPropagation(); ipc({cmd: 'bookmark_open', id: b.id, ctrl: true, shift: true});
+        };
+        const remove = node('button', 'icon-btn danger');
+        remove.title = 'Remove bookmark'; remove.setAttribute('aria-label', 'Remove ' + b.title);
+        remove.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg>';
+        remove.onclick = (e) => {
+          e.stopPropagation(); actions.innerHTML = '';
+          const check = node('div', 'delete-check', 'Remove?');
+          const no = node('button', 'no', 'Cancel');
+          no.onclick = (ev) => { ev.stopPropagation(); paintRows(); };
+          const yes = node('button', 'yes', 'Remove');
+          yes.onclick = (ev) => { ev.stopPropagation(); ipc({cmd: 'bookmark_remove', id: b.id}); };
+          check.append(no, yes); actions.appendChild(check);
+        };
+        actions.append(newTab, remove);
+        r.append(mark, copy, actions);
+        r.onclick = (e) => ipc({cmd: 'bookmark_open', id: b.id, ctrl: e.ctrlKey, shift: e.shiftKey});
+        r.onkeydown = (e) => { if (e.key === 'Enter') r.click(); };
         list.appendChild(r);
       }
       if (libData.more_bookmarks) {
@@ -929,7 +1202,15 @@
           (libData.bookmarks.length + libData.more_bookmarks) + ' kept.'));
       }
     };
+    search.oninput = () => {
+      libFilter = search.value; clear.classList.toggle('show', !!libFilter); paintRows();
+    };
+    search.onkeydown = (e) => {
+      if (e.key === 'Enter') list.querySelector('.bookmark-card')?.click();
+      if (e.key === 'ArrowDown') { e.preventDefault(); list.querySelector('.bookmark-card')?.focus(); }
+    };
     paintRows();
+    setTimeout(() => search.focus(), 0);
   };
 
   const paintPasswords = () => {
@@ -1042,6 +1323,7 @@
       btn.classList.toggle('on', btn.dataset.pane === libPane);
     }
     libBody.innerHTML = '';
+    libBody.classList.toggle('bookmarks-body', libPane === 'bookmarks');
     if (libPane === 'bookmarks') paintBookmarks();
     else if (libPane === 'passwords') paintPasswords();
     else if (libPane === 'import') paintImport();
@@ -1073,6 +1355,14 @@
   toast.onclick = () => toast.classList.remove('open');
 
   document.getElementById('star').onclick = () => ipc({cmd: 'bookmark_page'});
+
+  // Shelf-only pushes: progress ticks repaint the shelf without paying
+  // for a whole-state sync. lastState stays in step so the next full
+  // update's started/settled diffing still sees the truth.
+  window.__cryo_dl = (rows) => {
+    renderDl(rows || [], lastState);
+    lastState.downloads = rows || [];
+  };
 
   window.__cryo_update = (state) => {
     const prev = lastState;
@@ -1155,6 +1445,38 @@
     star.classList.toggle('on', !!state.starred);
     star.title = state.starred
       ? 'Remove bookmark (Ctrl+D)' : 'Bookmark this page (Ctrl+D)';
+    // The account button mirrors the profile's Google session: the
+    // picture (or an initial) when signed in, the pill when not.
+    const signin = document.getElementById('signin');
+    if (state.account) {
+      const key = state.account.name + '|' + (state.account.avatar || '');
+      if (signin.dataset.k !== key) {
+        signin.dataset.k = key;
+        signin.innerHTML = '';
+        if (state.account.avatar) {
+          const img = document.createElement('img');
+          img.className = 'ava';
+          img.src = state.account.avatar;
+          img.alt = '';
+          signin.appendChild(img);
+        } else {
+          const dot = document.createElement('span');
+          dot.className = 'initial';
+          dot.textContent =
+            Array.from(state.account.name.trim())[0]?.toUpperCase() || '?';
+          signin.appendChild(dot);
+        }
+      }
+      signin.classList.add('signed');
+      signin.title = state.account.email
+        ? 'Google account — ' + state.account.email
+        : 'Google account — ' + state.account.name;
+    } else {
+      signin.classList.remove('signed');
+      delete signin.dataset.k;
+      signin.textContent = 'Sign in';
+      signin.title = 'Sign in with your Google account';
+    }
   };
 </script>
 </body>

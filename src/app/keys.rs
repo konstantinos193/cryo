@@ -230,7 +230,7 @@ impl App {
             KeyCommand::DuplicateTab => self.duplicate_active(),
             KeyCommand::MuteTab => self.mute_active(),
             KeyCommand::Quit | KeyCommand::CloseWindow => {
-                *control_flow = ControlFlow::Exit;
+                self.request_exit(control_flow);
                 Ok(())
             }
             KeyCommand::GoHome => self.navigate_active(DEFAULT_URL),
@@ -251,10 +251,7 @@ impl App {
             KeyCommand::ViewSource => self.view_source(),
             KeyCommand::Zoom(step) => self.zoom_active(step),
             KeyCommand::Screenshot => self.screenshot_active(),
-            KeyCommand::ClearBrowsingData => self
-                .chrome
-                .clear_browsing_data()
-                .map_err(|e| anyhow::anyhow!(e)),
+            KeyCommand::ClearBrowsingData => self.clear_data(),
             KeyCommand::BookmarkPage => self.bookmark_active(),
             KeyCommand::Library => self.toggle_library(),
             KeyCommand::FreezeActive => match self.registry.active_id() {

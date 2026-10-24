@@ -95,6 +95,9 @@ pub fn parse(text: &str) -> Vec<Draft> {
                     added_at: attribute(tag, "add_date")
                         .and_then(|d| d.trim().parse::<u64>().ok())
                         .unwrap_or(0),
+                    // The file format carries no icon — the first visit
+                    // after the import fills it in.
+                    favicon: None,
                 });
                 i = after;
                 continue;
@@ -491,6 +494,7 @@ mod tests {
                     url: url.to_string(),
                     folder: folder.to_string(),
                     added_at: 1_700_000_000,
+                    favicon: None,
                 })
                 .unwrap();
         }
@@ -539,6 +543,7 @@ mod tests {
                 url: "https://a.test".into(),
                 folder: String::new(),
                 added_at: 5,
+                favicon: None,
             })
             .unwrap();
         let rows: Vec<&Bookmark> = marks.rows().iter().collect();

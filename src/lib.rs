@@ -14,6 +14,7 @@ macro_rules! report {
     };
 }
 
+pub mod account;
 pub mod app;
 pub mod bookmarks;
 pub mod engine;
@@ -58,6 +59,67 @@ pub(crate) fn data_dir() -> std::path::PathBuf {
                 .map(|h| std::path::PathBuf::from(h).join(".local").join("share"))
         });
     base.unwrap_or_else(std::env::temp_dir).join("cryo")
+}
+
+/// Read a whole file — `Ok(None)` when it isn't there, since a missing
+/// file is a fresh profile, not an error. Every store adapter reads
+/// through this so the rule lives once (AGENTS §2).
+pub(crate) fn read_file(path: &std::path::Path) -> Result<Option<Vec<u8>>, std::io::Error> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Write `bytes` to `path` atomically: the parent dir is created, the
+/// payload lands on a sibling `.tmp` name, and a rename puts it in
+/// place — a crash mid-write leaves the old file whole. Every store
+/// adapter writes through this so the dance lives once (AGENTS §2).
+pub(crate) fn write_file_atomic(
+    path: &std::path::Path,
+    bytes: &[u8],
+) -> Result<(), std::io::Error> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, path)
+}
+
+/// Standard base64 with padding — one small encoder beats a dependency
+/// for the places a `data:` URL is built (the favicon strip, the account
+/// picture). Lives here for the same reason `read_file` does: the rule
+/// exists once, at the crate root every module can reach.
+pub(crate) fn base64(bytes: &[u8]) -> String {
+    const ALPHA: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = u32::from(chunk[0]) << 16
+            | u32::from(*chunk.get(1).unwrap_or(&0)) << 8
+            | u32::from(*chunk.get(2).unwrap_or(&0));
+        out.push(ALPHA[(n >> 18) as usize & 63] as char);
+        out.push(ALPHA[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHA[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHA[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// A temp dir no other test on this machine shares — the store
+/// adapters' file tests all scratch in one.
+#[cfg(test)]
+pub(crate) fn test_dir(tag: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("cryo-{tag}-{}", std::process::id()))
 }
 
 pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyhow::Result<()> {
@@ -139,10 +201,20 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
             incognito: false,
         }
     };
-    let mut app = App::new(window, engine, proxy, open_url, profile)?;
+    let mut app = App::new(
+        window,
+        engine,
+        Rc::new(tabs::SystemClock),
+        proxy,
+        open_url,
+        profile,
+    )?;
 
     event_loop.run(move |event, _target, control_flow| {
-        *control_flow = ControlFlow::Wait;
+        // A heartbeat, not a poll: the loop wakes at least this often so
+        // background tabs that have gone cold can be suspended — the
+        // timer is the event loop's own, no second thread (AGENTS §9).
+        *control_flow = ControlFlow::WaitUntil(std::time::Instant::now() + app::IDLE_TICK);
         app.handle_event(event, control_flow);
     });
 }
@@ -180,4 +252,19 @@ fn with_icons(builder: WindowBuilder) -> anyhow::Result<WindowBuilder> {
     Ok(builder
         .with_window_icon(Some(title_bar))
         .with_taskbar_icon(Some(taskbar)))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn base64_pads_to_quads() {
+        // Vectors from RFC 4648.
+        assert_eq!(super::base64(b""), "");
+        assert_eq!(super::base64(b"f"), "Zg==");
+        assert_eq!(super::base64(b"fo"), "Zm8=");
+        assert_eq!(super::base64(b"foo"), "Zm9v");
+        assert_eq!(super::base64(b"foob"), "Zm9vYg==");
+        assert_eq!(super::base64(b"fooba"), "Zm9vYmE=");
+        assert_eq!(super::base64(b"foobar"), "Zm9vYmFy");
+    }
 }

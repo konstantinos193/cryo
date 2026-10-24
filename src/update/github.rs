@@ -65,7 +65,20 @@ pub fn download_installer(manifest: &ReleaseManifest) -> Result<PathBuf, UpdateE
 }
 
 fn sha256_hex(path: &std::path::Path) -> Result<String, UpdateError> {
-    let bytes = std::fs::read(path).map_err(UpdateError::VerifyInstaller)?;
-    let digest = Sha256::digest(&bytes);
+    use std::io::Read;
+
+    let mut file = std::fs::File::open(path).map_err(UpdateError::VerifyInstaller)?;
+    let mut hasher = Sha256::new();
+    // Streamed, not `fs::read` — an installer is tens of megabytes and
+    // hashing is cheap enough to never hold the whole file at once.
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf).map_err(UpdateError::VerifyInstaller)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let digest = hasher.finalize();
     Ok(digest.iter().map(|b| format!("{b:02x}")).collect())
 }

@@ -59,6 +59,15 @@ const MAX_ENTRIES: usize = 5_000;
 /// The most a single suggest query returns.
 const MAX_MATCHES: usize = 8;
 
+/// Longest icon kept, in `data:` URL characters.
+const MAX_FAVICON: usize = 128_000;
+
+/// Mutations a `Recorder` lets stack up before it pays a full write.
+/// `record` fires on every navigation — rewriting a 5000-entry file
+/// each time is disk churn on the event loop; a handful of pending
+/// writes costs a crash at most the last few visits.
+const FLUSH_EVERY: u32 = 16;
+
 /// The wire version `JsonFile` writes and reads.
 pub(crate) const CURRENT_VERSION: u32 = 1;
 
@@ -116,6 +125,29 @@ impl Entry {
             favicon: None,
         })
     }
+
+    /// The hydration door for stored rows (AGENTS §6): same rules as
+    /// `new`, plus the icon our own file was allowed to keep. A row the
+    /// door can't validate — a hand-edited file's empty `text`, say —
+    /// is refused, and the store drops it rather than failing the file.
+    pub fn hydrate(
+        text: &str,
+        title: Option<&str>,
+        uses: u32,
+        last_seen: u64,
+        favicon: Option<&str>,
+    ) -> Result<Self, PersistError> {
+        let mut entry = Self::new(text, title, uses, last_seen)?;
+        // Only a `data:` URL survives the door: the omnibox paints this
+        // string verbatim, so a stored `https://` icon would be a fetch
+        // to a hand-edited host. The row itself is fine — the icon is
+        // cosmetic and the next visit refills it.
+        entry.favicon = favicon
+            .map(str::trim)
+            .filter(|f| f.starts_with("data:") && f.len() <= MAX_FAVICON)
+            .map(str::to_string);
+        Ok(entry)
+    }
 }
 
 /// Ordered visit memory. Dedupes by `text`, ranks matches by uses then
@@ -128,7 +160,15 @@ pub struct History {
 impl History {
     /// Hydration door — the one place stored bytes become a `History`.
     /// The caller has already migrated the wire format.
-    pub fn from_entries(entries: Vec<Entry>) -> Self {
+    pub fn from_entries(mut entries: Vec<Entry>) -> Self {
+        // The file can't be trusted to hold the bound either — a
+        // hand-edited 50,000-row history enters memory at its size
+        // unless the door enforces it. Same eviction as `merge`:
+        // strongest first, then cut.
+        if entries.len() > MAX_ENTRIES {
+            entries.sort_by_key(|e| std::cmp::Reverse((e.uses, e.last_seen)));
+            entries.truncate(MAX_ENTRIES);
+        }
         Self { entries }
     }
 
@@ -179,12 +219,18 @@ impl History {
 
     /// Attach a title to an entry already remembered — navigations record
     /// the URL before the document's title arrives. No entry, no write.
-    pub fn note_title(&mut self, text: &str, title: &str) {
+    /// Returns whether anything changed, so the caller only flushes on a
+    /// real update — title events repeat what the file already holds.
+    pub fn note_title(&mut self, text: &str, title: &str) -> bool {
         if title.is_empty() {
-            return;
+            return false;
         }
-        if let Some(e) = self.entries.iter_mut().find(|e| e.text == text) {
-            e.title = Some(title.to_string());
+        match self.entries.iter_mut().find(|e| e.text == text) {
+            Some(e) if e.title.as_deref() != Some(title) => {
+                e.title = Some(title.to_string());
+                true
+            }
+            _ => false,
         }
     }
 
@@ -192,8 +238,10 @@ impl History {
     /// the visit was recorded, like titles. No entry, no write. Returns
     /// whether anything changed so the caller only flushes on a real
     /// update — icon events repeat a `data:` URL we may already hold.
+    /// An oversized payload is refused: a favicon is a few kilobytes,
+    /// not a megabyte.
     pub fn note_favicon(&mut self, text: &str, data_url: &str) -> bool {
-        if data_url.is_empty() {
+        if data_url.is_empty() || data_url.len() > MAX_FAVICON {
             return false;
         }
         match self.entries.iter_mut().find(|e| e.text == text) {
@@ -212,12 +260,20 @@ impl History {
     /// first. Titles already here are kept — ours came from a document
     /// we actually loaded. Trimming to `MAX_ENTRIES` happens once, at
     /// the end, by strength, so a 50,000-row file costs one sort rather
-    /// than 50,000 evictions.
+    /// than 50,000 evictions. Duplicates resolve through a position
+    /// index — a linear find per row would square the import's size.
     pub fn merge(&mut self, imported: Vec<Entry>) -> MergeReport {
         let mut report = MergeReport::default();
+        let mut pos: std::collections::HashMap<String, usize> = self
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.text.clone(), i))
+            .collect();
         for row in imported {
-            match self.entries.iter_mut().find(|e| e.text == row.text) {
-                Some(mine) => {
+            match pos.get(&row.text) {
+                Some(&i) => {
+                    let mine = &mut self.entries[i];
                     mine.uses = mine.uses.max(row.uses);
                     mine.last_seen = mine.last_seen.max(row.last_seen);
                     if mine.title.is_none() {
@@ -229,6 +285,7 @@ impl History {
                     report.merged += 1;
                 }
                 None => {
+                    pos.insert(row.text.clone(), self.entries.len());
                     self.entries.push(row);
                     report.added += 1;
                 }
@@ -276,10 +333,14 @@ pub trait Store {
 }
 
 /// The service the app drives: `History` stays authoritative in memory,
-/// flushed through the `Store` after every mutation.
+/// flushed through the `Store` — batched, not on every mutation, since a
+/// navigation is far more frequent than a durable write is worth.
+/// Whatever is unflushed goes out on drop.
 pub struct Recorder {
     history: History,
     store: Box<dyn Store>,
+    /// Mutations since the last write — the batch `FLUSH_EVERY` counts.
+    unsaved: u32,
 }
 
 impl Recorder {
@@ -297,6 +358,7 @@ impl Recorder {
         Self {
             history: History::from_entries(entries),
             store: Box::new(store),
+            unsaved: 0,
         }
     }
 
@@ -306,10 +368,12 @@ impl Recorder {
         Self {
             history: History::default(),
             store: Box::new(Memory),
+            unsaved: 0,
         }
     }
 
-    /// Remember `text` and flush. `seen_at` comes from the caller — no
+    /// Remember `text` and mark the batch; the write lands every
+    /// `FLUSH_EVERY` mutations. `seen_at` comes from the caller — no
     /// ambient clock inside the domain.
     pub fn record(
         &mut self,
@@ -318,13 +382,17 @@ impl Recorder {
         seen_at: u64,
     ) -> Result<(), PersistError> {
         self.history.record(text, title, seen_at);
-        self.store.save(self.history.entries())
+        self.dirty()
     }
 
-    /// Attach a document title to a remembered URL and flush.
+    /// Attach a document title to a remembered URL — and mark the batch
+    /// only when the title actually changed, since title events repeat
+    /// what the file already holds.
     pub fn note_title(&mut self, text: &str, title: &str) -> Result<(), PersistError> {
-        self.history.note_title(text, title);
-        self.store.save(self.history.entries())
+        if self.history.note_title(text, title) {
+            self.dirty()?;
+        }
+        Ok(())
     }
 
     /// Attach a site's icon (`data:` URL) to a remembered URL and flush —
@@ -332,21 +400,36 @@ impl Recorder {
     /// repeat what the file already holds.
     pub fn note_favicon(&mut self, text: &str, data_url: &str) -> Result<(), PersistError> {
         if self.history.note_favicon(text, data_url) {
-            self.store.save(self.history.entries())?;
+            self.dirty()?;
         }
         Ok(())
+    }
+
+    /// A mutation went in — write it out once the batch is full.
+    fn dirty(&mut self) -> Result<(), PersistError> {
+        self.unsaved += 1;
+        if self.unsaved >= FLUSH_EVERY {
+            self.flush()?;
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<(), PersistError> {
+        self.unsaved = 0;
+        self.store.save(self.history.entries())
     }
 
     pub fn matches(&self, needle: &str, limit: usize) -> Vec<&Entry> {
         self.history.matches(needle, limit)
     }
 
-    /// Fold an imported history in and flush once. The caller has
-    /// already built valid entries through `Entry::new`.
+    /// Fold an imported history in and flush once — an explicit user
+    /// action earns an immediate write, unlike routine recording.
+    /// The caller has already built valid entries through `Entry::new`.
     pub fn import(&mut self, entries: Vec<Entry>) -> Result<MergeReport, PersistError> {
         let report = self.history.merge(entries);
         if report.added > 0 || report.merged > 0 {
-            self.store.save(self.history.entries())?;
+            self.flush()?;
         }
         Ok(report)
     }
@@ -354,6 +437,19 @@ impl Recorder {
     /// Everything remembered — what an export writes out.
     pub fn entries(&self) -> &[Entry] {
         self.history.entries()
+    }
+}
+
+impl Drop for Recorder {
+    /// A crashed or closing window must not lose the pending batch —
+    /// flush what `dirty` left behind. A failed write is reported, not
+    /// `?`'d: `Drop` has nowhere to return an error to.
+    fn drop(&mut self) {
+        if self.unsaved > 0 {
+            if let Err(e) = self.store.save(self.history.entries()) {
+                crate::report!("flushing history on drop: {e:?}");
+            }
+        }
     }
 }
 
@@ -459,6 +555,8 @@ mod tests {
         let path = dir.join("history.json");
         let mut rec = Recorder::open(JsonFile::new(path.clone()));
         rec.record("https://a", Some("A"), 42).unwrap();
+        // Recording batches its write — the drop pays what is pending.
+        drop(rec);
         let rec2 = Recorder::open(JsonFile::new(path.clone()));
         assert_eq!(rec2.matches("https://a", 5)[0].uses, 1);
         assert_eq!(rec2.matches("https://a", 5)[0].last_seen, 42);
@@ -483,6 +581,34 @@ mod tests {
         assert_eq!(e.title, None);
         assert_eq!(e.uses, 1, "an imported visit happened at least once");
         assert_eq!(e.last_seen, 7);
+    }
+
+    #[test]
+    fn hydrate_drops_a_favicon_that_is_not_self_contained() {
+        let e = Entry::hydrate(
+            "https://a",
+            None,
+            1,
+            1,
+            Some("https://tracker.example/x.png"),
+        )
+        .unwrap();
+        assert_eq!(e.favicon, None, "a remote icon is a fetch — refused");
+        let e = Entry::hydrate("https://a", None, 1, 1, Some("data:image/png;base64,zz")).unwrap();
+        assert_eq!(e.favicon.as_deref(), Some("data:image/png;base64,zz"));
+    }
+
+    #[test]
+    fn hydration_enforces_the_bound_a_file_could_not_hold() {
+        let rows: Vec<Entry> = (0..MAX_ENTRIES + 10)
+            .map(|i| Entry::new(&format!("https://{i}"), None, i as u32 + 1, i as u64).unwrap())
+            .collect();
+        let h = History::from_entries(rows);
+        assert_eq!(h.entries().len(), MAX_ENTRIES);
+        assert!(
+            h.entries().iter().all(|e| e.uses > 10),
+            "the weakest ten were evicted"
+        );
     }
 
     #[test]

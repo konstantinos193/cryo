@@ -51,6 +51,7 @@ fn bookmark(title: &str, url: &str, folder: &str) -> bookmarks::Draft {
         url: url.to_string(),
         folder: folder.to_string(),
         added_at: 1_700_000_000,
+        favicon: None,
     }
 }
 

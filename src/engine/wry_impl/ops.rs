@@ -4,13 +4,13 @@
 //! dispatches each `ContentView` method that needs one here.
 
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-    ICoreWebView2Profile2, ICoreWebView2_13, ICoreWebView2_25, ICoreWebView2_8,
-    COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
+    ICoreWebView2Profile2, ICoreWebView2_13, ICoreWebView2_2, ICoreWebView2_25, ICoreWebView2_3,
+    ICoreWebView2_8, COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
 };
-use windows::core::Interface;
+use windows::core::{Interface, PWSTR};
 use wry::{WebView, WebViewExtWindows};
 
-use crate::engine::EngineError;
+use crate::engine::{Cookie, EngineError};
 
 /// `Page.reload {ignoreCache:true}` over the DevTools protocol —
 /// WebView2's own reload API has no cache-bypass variant.
@@ -134,6 +134,49 @@ pub(super) fn set_zoom_factor(view: &WebView, factor: f64) -> Result<(), EngineE
     unsafe { view.controller().SetZoomFactor(factor) }.map_err(|e| EngineError::View(e.to_string()))
 }
 
+/// `TrySuspend` (_3): the renderer sleeps — script and timers stop and
+/// its working set shrinks — while the controller and its session state
+/// live on. Async by nature: the completion is fire-and-forget, a
+/// refused suspend (foreground view, active capture) simply doesn't
+/// take. Runtimes older than _3 answer `Ok(())` and stay awake.
+pub(super) fn suspend(view: &WebView) -> Result<(), EngineError> {
+    let Ok(wv) = view.webview().cast::<ICoreWebView2_3>() else {
+        return Ok(());
+    };
+    let done = webview2_com::TrySuspendCompletedHandler::create(Box::new(|_hr, _did| Ok(())));
+    unsafe { wv.TrySuspend(&done) }.map_err(|e| EngineError::View(e.to_string()))
+}
+
+/// `Resume` (_3): waking a suspended view. Idempotent — resuming a view
+/// that never slept is a no-op, so callers needn't check first.
+pub(super) fn resume(view: &WebView) -> Result<(), EngineError> {
+    let Ok(wv) = view.webview().cast::<ICoreWebView2_3>() else {
+        return Ok(());
+    };
+    unsafe { wv.Resume() }.map_err(|e| EngineError::View(e.to_string()))
+}
+
+/// `IsSuspended` (_3). `false` on older runtimes — the safe answer,
+/// since the only caller only ever suspends.
+pub(super) fn is_suspended(view: &WebView) -> Result<bool, EngineError> {
+    let Ok(wv) = view.webview().cast::<ICoreWebView2_3>() else {
+        return Ok(false);
+    };
+    let mut suspended = windows::core::BOOL::default();
+    unsafe { wv.IsSuspended(&mut suspended) }.map_err(|e| EngineError::View(e.to_string()))?;
+    Ok(suspended.as_bool())
+}
+
+/// `IsDocumentPlayingAudio` (_8): the suspend policy's veto — sleeping
+/// a tab mid-song would mute it. `None` where the runtime can't answer;
+/// the caller treats unknown as "might be playing" and leaves it awake.
+pub(super) fn playing_audio(view: &WebView) -> Option<bool> {
+    let wv = view.webview().cast::<ICoreWebView2_8>().ok()?;
+    let mut playing = windows::core::BOOL::default();
+    unsafe { wv.IsDocumentPlayingAudio(&mut playing) }.ok()?;
+    Some(playing.as_bool())
+}
+
 /// CapturePreview streams PNG bytes into an in-memory IStream; the
 /// completion handler signals a channel `wait_with_pump` blocks on —
 /// the event loop keeps spinning while WebView2 writes.
@@ -198,6 +241,57 @@ pub(super) fn save_as(view: &WebView) -> Result<(), EngineError> {
     }
 }
 
+/// The profile's cookie jar for `uri`. `GetCookies` answers through a
+/// callback, so the channel + `wait_with_pump` blocks this thread while
+/// the loop keeps spinning — the capture path does the same.
+pub(super) fn cookies(view: &WebView, uri: &str) -> Result<Vec<Cookie>, EngineError> {
+    unsafe {
+        let wv: ICoreWebView2_2 = view
+            .webview()
+            .cast()
+            .map_err(|e| EngineError::View(e.to_string()))?;
+        let manager = wv
+            .CookieManager()
+            .map_err(|e| EngineError::View(e.to_string()))?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let done = webview2_com::GetCookiesCompletedHandler::create(Box::new(move |hr, list| {
+            let read = (|| -> windows::core::Result<Vec<Cookie>> {
+                hr?;
+                let list = list.ok_or_else(|| {
+                    windows::core::Error::from_hresult(windows::core::HRESULT(-1))
+                })?;
+                let mut count = 0;
+                list.Count(&mut count)?;
+                let mut out = Vec::with_capacity(count as usize);
+                for i in 0..count {
+                    let cookie = list.GetValueAtIndex(i)?;
+                    let mut name = PWSTR::null();
+                    cookie.Name(&mut name)?;
+                    let mut value = PWSTR::null();
+                    cookie.Value(&mut value)?;
+                    out.push(Cookie {
+                        name: webview2_com::take_pwstr(name),
+                        value: webview2_com::take_pwstr(value),
+                    });
+                }
+                Ok(out)
+            })();
+            // A failed send means `wait_with_pump` already gave up —
+            // nobody is left to signal.
+            if tx.send(read).is_err() {
+                crate::report!("cookie read arrived with no receiver");
+            }
+            Ok(())
+        }));
+        manager
+            .GetCookies(&windows::core::HSTRING::from(uri), &done)
+            .map_err(|e| EngineError::View(e.to_string()))?;
+        webview2_com::wait_with_pump(rx)
+            .map_err(|e| EngineError::View(e.to_string()))?
+            .map_err(|e| EngineError::View(e.to_string()))
+    }
+}
+
 pub(super) fn clear_browsing_data(view: &WebView) -> Result<(), EngineError> {
     unsafe {
         let wv: ICoreWebView2_13 = view
@@ -208,9 +302,21 @@ pub(super) fn clear_browsing_data(view: &WebView) -> Result<(), EngineError> {
             .Profile()
             .and_then(|p| p.cast())
             .map_err(|e| EngineError::View(e.to_string()))?;
-        let done = webview2_com::ClearBrowsingDataCompletedHandler::create(Box::new(|_hr| Ok(())));
+        // The wipe is async — callers that re-read the jar right after
+        // (the account check does) need `Ok` to mean finished, so the
+        // completion is awaited rather than fired and forgotten.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let done = webview2_com::ClearBrowsingDataCompletedHandler::create(Box::new(move |hr| {
+            if tx.send(hr).is_err() {
+                crate::report!("clear-data result arrived with no receiver");
+            }
+            Ok(())
+        }));
         profile
             .ClearBrowsingDataAll(&done)
+            .map_err(|e| EngineError::View(e.to_string()))?;
+        webview2_com::wait_with_pump(rx)
+            .map_err(|e| EngineError::View(e.to_string()))?
             .map_err(|e| EngineError::View(e.to_string()))
     }
 }

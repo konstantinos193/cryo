@@ -31,9 +31,12 @@ pub type NavigateHandler = Box<dyn Fn(String) -> bool>;
 /// Called before the engine consumes a key. Return `true` to swallow it,
 /// `false` to let the engine (or the page) have it.
 pub type AcceleratorHandler = Box<dyn Fn(Accelerator) -> bool>;
-/// Page asked for a new window (target=_blank, ctrl/middle/shift+click,
-/// `window.open`). We deny the popup and open a tab ourselves — the URL is
-/// the only thing the app needs.
+/// Page asked for a new window (target=_blank, middle-click,
+/// `window.open`). We deny the popup and open a tab ourselves — the URL
+/// is the only thing the app needs. Registering this handler is also
+/// what activates the middle-click shim: the engine can't tell the
+/// gesture apart from a plain navigation, so the backend rewrites
+/// middle-clicks on anchors into `window.open` to reach this callback.
 pub type NewWindowHandler = Box<dyn Fn(String)>;
 /// Called when a navigation ended without a document. See [`LoadFailure`] for
 /// what counts — cancelled loads and credential prompts do not. `Send + Sync`
@@ -207,6 +210,10 @@ pub trait ContentView {
     fn capture_png(&self) -> Result<Vec<u8>, EngineError>;
     /// Show the engine's native save-as UI for the current page.
     fn save_as(&self) -> Result<(), EngineError>;
+    /// Every cookie this view's profile would send for `uri` — HttpOnly
+    /// included. Profile-scoped like `clear_browsing_data`: any view
+    /// answers for the whole jar.
+    fn cookies(&self, uri: &str) -> Result<Vec<Cookie>, EngineError>;
     /// Wipe every kind of browsing data for this view's profile —
     /// profile-scoped, so calling it on any view clears them all.
     fn clear_browsing_data(&self) -> Result<(), EngineError>;
@@ -219,6 +226,29 @@ pub trait ContentView {
     fn pause_download(&self, id: DownloadId) -> Result<(), EngineError>;
     /// Restart a paused download. Unknown ids are a no-op.
     fn resume_download(&self, id: DownloadId) -> Result<(), EngineError>;
+    /// Ask the engine to sleep the view's renderer without dropping it —
+    /// the freeze machinery's lighter cousin for tabs merely hidden, not
+    /// frozen. A no-op where the engine can't suspend.
+    fn suspend(&self) -> Result<(), EngineError>;
+    /// Wake a suspended view. A no-op on a view that never slept or on
+    /// an engine that can't suspend.
+    fn resume(&self) -> Result<(), EngineError>;
+    /// Whether the view's renderer is currently suspended. `false` where
+    /// the engine can't say — the safe answer, since callers only ever
+    /// suspend.
+    fn is_suspended(&self) -> Result<bool, EngineError>;
+    /// Whether the page is playing audio. `None` when the engine can't
+    /// say — callers must then assume it might be, before suspending.
+    fn playing_audio(&self) -> Option<bool>;
+}
+
+/// One cookie from the profile's jar, in our own vocabulary — name and
+/// value only, which is all a `Cookie:` header needs. Backends hand
+/// them back; what they get sent to is the caller's business.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Cookie {
+    pub name: String,
+    pub value: String,
 }
 
 /// A download's identity within its view — a per-view sequence, so the

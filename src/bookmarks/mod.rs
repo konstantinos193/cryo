@@ -49,6 +49,9 @@ pub struct Bookmark {
     folder: String,
     /// Unix seconds. Imports keep the source's date when it has one.
     added_at: u64,
+    /// The site's icon as a `data:` URL — what the bar and the library
+    /// paint instead of a letter tile. `None` until a visit brings one.
+    favicon: Option<String>,
 }
 
 /// A bookmark as a foreign source proposes it: unvalidated strings with
@@ -60,6 +63,9 @@ pub struct Draft {
     pub url: String,
     pub folder: String,
     pub added_at: u64,
+    /// Foreign formats carry no icons we can read — importers leave
+    /// `None` and the first visit fills it in.
+    pub favicon: Option<String>,
 }
 
 /// What `add_all` did: enough to tell the user, without naming urls.
@@ -89,8 +95,13 @@ const MAX_URL: usize = 2_048;
 const MAX_FOLDER: usize = 300;
 const MAX_DEPTH: usize = 8;
 
-/// The wire version `JsonFile` writes and reads.
-pub(crate) const CURRENT_VERSION: u32 = 1;
+/// Longest icon kept, in `data:` URL characters. A favicon PNG is a few
+/// kilobytes; a megabyte payload in a bookmark file is not an icon.
+const MAX_FAVICON: usize = 128_000;
+
+/// The wire version `JsonFile` writes and reads. v1 rows had no
+/// `favicon` — the file adapter migrates them at the boundary.
+pub(crate) const CURRENT_VERSION: u32 = 2;
 
 #[derive(thiserror::Error, Debug)]
 #[non_exhaustive]
@@ -129,6 +140,7 @@ impl Bookmark {
         url: &str,
         folder: &str,
         added_at: u64,
+        favicon: Option<&str>,
     ) -> Result<Self, BookmarkError> {
         let url = url.trim();
         if url.is_empty() {
@@ -149,6 +161,7 @@ impl Bookmark {
             url: url.to_string(),
             folder: normalize_folder(folder),
             added_at,
+            favicon: clean_favicon(favicon),
         })
     }
 
@@ -172,6 +185,11 @@ impl Bookmark {
         self.added_at
     }
 
+    /// The site's icon as a `data:` URL, when one has arrived.
+    pub fn favicon(&self) -> Option<&str> {
+        self.favicon.as_deref()
+    }
+
     /// Bar rows are the ones with no folder — what the strip shows.
     pub fn in_bar(&self) -> bool {
         self.folder.is_empty()
@@ -185,6 +203,14 @@ fn bookmarkable(url: &str) -> bool {
     const KEEP: [&str; 4] = ["http://", "https://", "file:///", "about:"];
     let lower = url.to_lowercase();
     KEEP.iter().any(|p| lower.starts_with(p))
+}
+
+/// An icon worth keeping: an image `data:` URL under the bound. A row
+/// whose icon is anything else still loads — the icon is decorative,
+/// so it is dropped rather than costing the bookmark.
+fn clean_favicon(raw: Option<&str>) -> Option<String> {
+    let raw = raw?.trim();
+    (raw.len() <= MAX_FAVICON && raw.starts_with("data:image/")).then(|| raw.to_string())
 }
 
 /// Keep the path readable and bounded: trim each segment, drop empties,
@@ -282,23 +308,22 @@ impl Bookmarks {
         self.rows.iter().find(|b| b.url == url).map(|b| b.id)
     }
 
-    /// Keep one page. A duplicate reports the row already there instead
-    /// of growing the registry.
-    pub fn add(&mut self, draft: &Draft) -> Result<BookmarkId, BookmarkError> {
-        let mark = Bookmark::hydrate(
+    /// Draft → `Bookmark`: the validation half of `add`, before dedupe
+    /// and capacity — `add` and `add_all` share it.
+    fn hydrated(&self, draft: &Draft) -> Result<Bookmark, BookmarkError> {
+        Bookmark::hydrate(
             BookmarkId(self.next_id),
             &draft.title,
             &draft.url,
             &draft.folder,
             draft.added_at,
-        )?;
-        if let Some(kept) = self
-            .rows
-            .iter()
-            .find(|b| b.folder == mark.folder && b.url == mark.url)
-        {
-            return Ok(kept.id);
-        }
+            draft.favicon.as_deref(),
+        )
+    }
+
+    /// Bound, then store — the insert both add paths share once the row
+    /// is known not to duplicate.
+    fn push(&mut self, mark: Bookmark) -> Result<BookmarkId, BookmarkError> {
         if self.rows.len() >= MAX_BOOKMARKS {
             return Err(BookmarkError::Full);
         }
@@ -308,20 +333,75 @@ impl Bookmarks {
         Ok(id)
     }
 
-    /// Bulk import. Every draft goes through the same door `add` uses;
-    /// the report is what the user sees afterwards.
+    /// Keep one page. A duplicate reports the row already there instead
+    /// of growing the registry.
+    pub fn add(&mut self, draft: &Draft) -> Result<BookmarkId, BookmarkError> {
+        let mark = self.hydrated(draft)?;
+        if let Some(kept) = self
+            .rows
+            .iter()
+            .find(|b| b.folder == mark.folder && b.url == mark.url)
+        {
+            return Ok(kept.id);
+        }
+        self.push(mark)
+    }
+
+    /// Bulk import. Every draft goes through the same doors `add` uses —
+    /// `hydrated` validates, `push` bounds and stores — but dedupe runs
+    /// against a key set built once, so the import costs its own size,
+    /// not its size squared. The report is what the user sees afterwards.
     pub fn add_all(&mut self, drafts: &[Draft]) -> MergeReport {
         let mut report = MergeReport::default();
+        let mut keys: std::collections::HashSet<(String, String)> = self
+            .rows
+            .iter()
+            .map(|b| (b.folder.clone(), b.url.clone()))
+            .collect();
         for draft in drafts {
-            let before = self.rows.len();
-            match self.add(draft) {
-                Ok(_) if self.rows.len() > before => report.added += 1,
-                Ok(_) => report.duplicates += 1,
-                Err(BookmarkError::Full) => report.overflowed += 1,
+            match self.hydrated(draft) {
                 Err(_) => report.rejected += 1,
+                Ok(mark) => {
+                    let key = (mark.folder.clone(), mark.url.clone());
+                    if keys.contains(&key) {
+                        report.duplicates += 1;
+                        continue;
+                    }
+                    match self.push(mark) {
+                        Ok(_) => {
+                            keys.insert(key);
+                            report.added += 1;
+                        }
+                        Err(BookmarkError::Full) => report.overflowed += 1,
+                        Err(_) => report.rejected += 1,
+                    }
+                }
             }
         }
         report
+    }
+
+    /// Attach a site's icon to every row pointing at `url` — the star
+    /// can be pressed before the icon arrives, and an imported bookmark
+    /// only gets one on its first visit. Same URL in different folders
+    /// is the same site, so all of them wear it. Returns whether
+    /// anything changed so the caller only flushes on a real update.
+    pub fn set_favicon(&mut self, url: &str, data_url: &str) -> bool {
+        let Some(icon) = clean_favicon(Some(data_url)) else {
+            return false;
+        };
+        let mut changed = false;
+        for b in &mut self.rows {
+            if b.url == url && b.favicon.as_deref() != Some(icon.as_str()) {
+                // Value objects are replaced wholesale, not patched.
+                *b = Bookmark {
+                    favicon: Some(icon.clone()),
+                    ..b.clone()
+                };
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Drop one row. Reports whether anything was there — the caller
@@ -418,6 +498,17 @@ impl Keeper {
         Ok(removed)
     }
 
+    /// Attach a site's icon (`data:` URL) to every row at `url` and
+    /// flush — but only when the icon actually changed, since favicon
+    /// events repeat what the file already holds.
+    pub fn set_favicon(&mut self, url: &str, data_url: &str) -> Result<bool, BookmarkError> {
+        if self.marks.set_favicon(url, data_url) {
+            self.flush()?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
     fn flush(&self) -> Result<(), BookmarkError> {
         self.store.save(self.marks.rows())
     }
@@ -433,6 +524,7 @@ mod tests {
             url: url.to_string(),
             folder: folder.to_string(),
             added_at: 100,
+            favicon: None,
         }
     }
 
@@ -578,8 +670,8 @@ mod tests {
     #[test]
     fn hydrate_keeps_ids_and_mints_above_the_highest() {
         let kept = vec![
-            Bookmark::hydrate(BookmarkId(7), "A", "https://a.test", "", 1).unwrap(),
-            Bookmark::hydrate(BookmarkId(3), "B", "https://b.test", "", 1).unwrap(),
+            Bookmark::hydrate(BookmarkId(7), "A", "https://a.test", "", 1, None).unwrap(),
+            Bookmark::hydrate(BookmarkId(3), "B", "https://b.test", "", 1, None).unwrap(),
         ];
         let mut marks = Bookmarks::hydrate(kept);
         assert_eq!(marks.rows()[0].id(), BookmarkId(7));
@@ -590,10 +682,49 @@ mod tests {
     #[test]
     fn hydrate_drops_stored_duplicates() {
         let kept = vec![
-            Bookmark::hydrate(BookmarkId(1), "A", "https://a.test", "", 1).unwrap(),
-            Bookmark::hydrate(BookmarkId(2), "A", "https://a.test", "", 1).unwrap(),
+            Bookmark::hydrate(BookmarkId(1), "A", "https://a.test", "", 1, None).unwrap(),
+            Bookmark::hydrate(BookmarkId(2), "A", "https://a.test", "", 1, None).unwrap(),
         ];
         assert_eq!(Bookmarks::hydrate(kept).len(), 1);
+    }
+
+    #[test]
+    fn set_favicon_wears_the_site_icon_in_every_folder() {
+        let mut marks = Bookmarks::default();
+        marks.add(&draft("A", "https://a.test", "")).unwrap();
+        marks.add(&draft("A", "https://a.test", "News")).unwrap();
+        marks.add(&draft("B", "https://b.test", "")).unwrap();
+        assert!(marks.set_favicon("https://a.test", "data:image/png;base64,xx"));
+        assert_eq!(marks.rows()[0].favicon(), Some("data:image/png;base64,xx"));
+        assert_eq!(marks.rows()[1].favicon(), Some("data:image/png;base64,xx"));
+        assert_eq!(marks.rows()[2].favicon(), None);
+        assert!(
+            !marks.set_favicon("https://a.test", "data:image/png;base64,xx"),
+            "the same icon again is a no-op"
+        );
+    }
+
+    #[test]
+    fn set_favicon_rejects_what_is_not_an_icon() {
+        let mut marks = Bookmarks::default();
+        marks.add(&draft("A", "https://a.test", "")).unwrap();
+        assert!(!marks.set_favicon("https://a.test", "javascript:0"));
+        assert!(!marks.set_favicon("https://a.test", ""));
+        assert_eq!(marks.rows()[0].favicon(), None);
+    }
+
+    #[test]
+    fn a_stored_row_with_a_bogus_icon_loads_without_one() {
+        let row = Bookmark::hydrate(
+            BookmarkId(1),
+            "A",
+            "https://a.test",
+            "",
+            1,
+            Some("https://x.evil"),
+        )
+        .unwrap();
+        assert_eq!(row.favicon(), None);
     }
 
     #[test]

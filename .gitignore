@@ -1,4 +1,5 @@
 /target
+/target-ci
 **/*.rs.bk
 *.pdb
 .env
@@ -9,5 +10,6 @@ installer/output/
 # dev tools.
 .devin/
 .playwright-mcp/
+.playwright-cli/
 nul
 register-as-default.reg

@@ -8,7 +8,7 @@ use std::path::Path;
 use tao::event_loop::ControlFlow;
 
 use crate::engine::{DownloadId, DownloadState, DownloadUpdate};
-use crate::shell::chrome::ChromeDownload;
+use crate::shell::chrome::{ChromeCommand, ChromeDownload};
 use crate::tabs::TabId;
 
 use super::dragout;
@@ -83,7 +83,7 @@ impl App {
         control_flow: &mut ControlFlow,
     ) -> anyhow::Result<()> {
         let terminal = !matches!(u.state, DownloadState::InProgress | DownloadState::Paused);
-        match self
+        let inserted = match self
             .downloads
             .iter_mut()
             .find(|e| e.tab == tab && e.engine_id == u.id)
@@ -93,6 +93,7 @@ impl App {
                 e.total = u.total;
                 e.state = u.state;
                 e.path = u.path;
+                false
             }
             None => {
                 self.download_seq += 1;
@@ -111,8 +112,9 @@ impl App {
                     let drop = self.downloads.len() - SHELF_CAP;
                     self.downloads.drain(..drop);
                 }
+                true
             }
-        }
+        };
         // A retry tab exists only to hold the navigation — no engine has
         // a "download this URL" call, so a real view fetches it. Once the
         // transfer settles the tab is litter: close it like Chrome's
@@ -121,7 +123,23 @@ impl App {
         if terminal && self.retry_tabs.remove(&tab) && self.registry.len() > 1 {
             return self.close_tab(tab, control_flow);
         }
-        self.sync_chrome()
+        // A new row changes more than the shelf — the ⬇ button appears —
+        // so it earns a full sync. Progress ticks at ~12 Hz only repaint
+        // the shelf; serializing every tab, icon and bookmark for that
+        // is the churn the split exists to avoid.
+        if inserted {
+            self.sync_chrome()
+        } else {
+            self.push_downloads()
+        }
+    }
+
+    /// Push just the shelf rows — the light sibling of `sync_chrome`,
+    /// for progress updates that change nothing else.
+    pub(super) fn push_downloads(&self) -> anyhow::Result<()> {
+        let json = serde_json::to_string(&self.download_rows())?;
+        self.chrome.eval(&format!("window.__cryo_dl({json})"))?;
+        Ok(())
     }
 
     /// `id`'s view is gone — anything it was downloading died with it.
@@ -133,6 +151,32 @@ impl App {
             {
                 e.state = DownloadState::Interrupted;
             }
+        }
+    }
+
+    /// The shelf's command family — `on_chrome` hands the whole
+    /// `Download*` arm set here so the strip dispatch stays a table of
+    /// one-liners. `key` is the app-issued row number the wire carries.
+    pub(super) fn download_command(&mut self, cmd: ChromeCommand) -> anyhow::Result<()> {
+        match cmd {
+            ChromeCommand::DownloadCancel { key } => self.cancel_download(key),
+            ChromeCommand::DownloadOpen { key } => {
+                self.open_download(key);
+                Ok(())
+            }
+            ChromeCommand::DownloadPause { key } => self.pause_download(key),
+            ChromeCommand::DownloadResume { key } => self.resume_download(key),
+            ChromeCommand::DownloadRetry { key } => self.retry_download(key),
+            ChromeCommand::DownloadDrag { key } => {
+                self.drag_download(key);
+                Ok(())
+            }
+            ChromeCommand::DownloadShow { key } => {
+                self.reveal_download(key);
+                Ok(())
+            }
+            ChromeCommand::DownloadsClear => self.clear_finished_downloads(),
+            _ => unreachable!("dispatch only hands Download* commands here"),
         }
     }
 
