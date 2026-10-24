@@ -15,6 +15,7 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2FaviconChangedEventHandler, ICoreWebView2NavigationCompletedEventArgs,
     ICoreWebView2NavigationCompletedEventArgs2, ICoreWebView2NavigationCompletedEventHandler,
     ICoreWebView2NavigationStartingEventHandler, ICoreWebView2ProcessFailedEventHandler,
+    ICoreWebView2SourceChangedEventHandler,
     ICoreWebView2_15, COREWEBVIEW2_FAVICON_IMAGE_FORMAT_PNG, COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
     COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN, COREWEBVIEW2_PROCESS_FAILED_KIND,
     COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
@@ -174,6 +175,41 @@ fn accelerator_key(vk: u32) -> Option<AcceleratorKey> {
 /// Asks the page whether the server sent anything worth rendering.
 const EMPTY_BODY_PROBE: &str =
     "(function(){var b=document.body;return !b||(!b.children.length&&!b.textContent.trim());})()";
+
+/// Attach `SourceChanged`: the only event that reports same-document URL
+/// changes — an SPA's `history.pushState`/`popstate` moves `Source` without
+/// any NavigationStarting/Completed, so the address bar would otherwise
+/// stay on the URL the real navigation carried. `attempted` holds the URI
+/// that navigation reported; a SourceChanged merely echoing it is skipped,
+/// anything else is a move the navigation handlers never saw and gets
+/// reported through `on_navigate`. The event can't be vetoed — the URI has
+/// already changed — so the callback's return is dropped.
+pub(super) fn attach_source_changed(
+    view: &WebView,
+    on_navigate: Rc<dyn Fn(String) -> bool>,
+    attempted: Rc<RefCell<String>>,
+) -> Result<ICoreWebView2SourceChangedEventHandler, EngineError> {
+    let handler =
+        webview2_com::SourceChangedEventHandler::create(Box::new(move |webview, _args| {
+            let Some(wv) = webview else { return Ok(()) };
+            let mut uri = windows::core::PWSTR::null();
+            unsafe { wv.Source(&mut uri)? };
+            let uri = unsafe { uri.to_string() }.unwrap_or_default();
+            let mut seen = attempted.borrow_mut();
+            if !uri.is_empty() && uri != *seen {
+                *seen = uri.clone();
+                on_navigate(uri);
+            }
+            Ok(())
+        }));
+    let mut token = 0i64;
+    unsafe {
+        view.webview()
+            .add_SourceChanged(&handler, &mut token)
+            .map_err(|e| EngineError::Spawn(e.to_string()))?;
+    }
+    Ok(handler)
+}
 
 /// Attach `NavigationStarting`: remembers the newest navigation's id and
 /// reports "loading". A navigation that supersedes one still in flight

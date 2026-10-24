@@ -17,7 +17,7 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2ContainsFullScreenElementChangedEventHandler,
     ICoreWebView2DownloadStartingEventHandler, ICoreWebView2FaviconChangedEventHandler,
     ICoreWebView2NavigationCompletedEventHandler, ICoreWebView2NavigationStartingEventHandler,
-    ICoreWebView2ProcessFailedEventHandler,
+    ICoreWebView2ProcessFailedEventHandler, ICoreWebView2SourceChangedEventHandler,
 };
 use wry::WebView;
 
@@ -73,6 +73,8 @@ pub(super) struct WryView {
     _navigation_handler: Option<ICoreWebView2NavigationCompletedEventHandler>,
     #[cfg(target_os = "windows")]
     _nav_start_handler: Option<ICoreWebView2NavigationStartingEventHandler>,
+    #[cfg(target_os = "windows")]
+    _source_handler: Option<ICoreWebView2SourceChangedEventHandler>,
     #[cfg(target_os = "windows")]
     _process_handler: Option<ICoreWebView2ProcessFailedEventHandler>,
     #[cfg(target_os = "windows")]
@@ -146,6 +148,14 @@ impl WryView {
                     )
                 })
                 .transpose()?;
+            // SourceChanged shares `attempted` with the navigation pair:
+            // it's the SPA signal — pushState/popstate moves `Source` with
+            // no navigation events, and this is what keeps the address bar
+            // honest on sites like GitHub.
+            let _source_handler = on_navigate
+                .clone()
+                .map(|cb| events::attach_source_changed(&view, cb, attempted.clone()))
+                .transpose()?;
             let downloads = downloads::ActiveDownloads::default();
             let _download_handler = downloads::attach(
                 &view,
@@ -171,6 +181,7 @@ impl WryView {
                 downloads,
                 _navigation_handler,
                 _nav_start_handler,
+                _source_handler,
                 _process_handler,
                 _fullscreen_handler,
                 _favicon_handler,
