@@ -39,7 +39,14 @@ pub(super) fn respond(
     }
     match resolve_page(path) {
         Some(html) => Response::builder()
-            .header(CONTENT_TYPE, "text/html; charset=utf-8")
+            .header(
+                CONTENT_TYPE,
+                if path.ends_with(".svg") {
+                    "image/svg+xml"
+                } else {
+                    "text/html; charset=utf-8"
+                },
+            )
             .body(Cow::Borrowed(html.as_bytes()))
             .expect("static headers are valid"),
         None => Response::builder()

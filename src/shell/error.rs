@@ -73,7 +73,8 @@ fn hex(nibble: u8) -> char {
 /// copy; `<title>` is set from script because the tab strip reads it.
 pub const ERROR_HTML: &str = r##"<!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>Problem loading page</title><style>
+<head><meta charset="utf-8"><title>Problem loading page</title>
+<link rel="icon" type="image/svg+xml" href="/icon.svg"><style>
   :root {
     color-scheme: dark;
     --bg1: #11141a; --bg2: #181d25; --line: #262d38;

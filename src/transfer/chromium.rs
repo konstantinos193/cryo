@@ -27,17 +27,59 @@ const MAX_DEPTH: usize = 16;
 
 /// The browsers worth looking for, and where their user data lives.
 /// `User Data` holds one directory per profile; Opera's profile folder
-/// is the leaf itself.
-const FAMILY: [(&str, Root, &str); 7] = [
+/// is the leaf itself. Release channels are separate installs with
+/// their own user-data roots — a Beta-only install still counts.
+const FAMILY: [(&str, Root, &str); 16] = [
     ("Microsoft Edge", Root::Local, r"Microsoft\Edge\User Data"),
+    (
+        "Microsoft Edge Beta",
+        Root::Local,
+        r"Microsoft\Edge Beta\User Data",
+    ),
+    (
+        "Microsoft Edge Dev",
+        Root::Local,
+        r"Microsoft\Edge Dev\User Data",
+    ),
+    (
+        "Microsoft Edge Canary",
+        Root::Local,
+        r"Microsoft\Edge SxS\User Data",
+    ),
     ("Google Chrome", Root::Local, r"Google\Chrome\User Data"),
+    (
+        "Google Chrome Beta",
+        Root::Local,
+        r"Google\Chrome Beta\User Data",
+    ),
+    (
+        "Google Chrome Dev",
+        Root::Local,
+        r"Google\Chrome Dev\User Data",
+    ),
+    (
+        "Google Chrome Canary",
+        Root::Local,
+        r"Google\Chrome SxS\User Data",
+    ),
     (
         "Brave",
         Root::Local,
         r"BraveSoftware\Brave-Browser\User Data",
     ),
+    (
+        "Brave Beta",
+        Root::Local,
+        r"BraveSoftware\Brave-Browser-Beta\User Data",
+    ),
+    (
+        "Brave Nightly",
+        Root::Local,
+        r"BraveSoftware\Brave-Browser-Nightly\User Data",
+    ),
     ("Vivaldi", Root::Local, r"Vivaldi\User Data"),
     ("Chromium", Root::Local, r"Chromium\User Data"),
+    ("Arc", Root::Local, r"Arc\User Data"),
     ("Opera", Root::Roaming, r"Opera Software\Opera Stable"),
     ("Opera GX", Root::Roaming, r"Opera Software\Opera GX Stable"),
 ];

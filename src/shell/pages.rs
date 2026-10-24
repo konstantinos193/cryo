@@ -34,6 +34,7 @@ pub fn internal_page(path: &str) -> Option<&'static str> {
         "/chrome" => Some(chrome::CHROME_HTML),
         "/newtab" => Some(NEW_TAB_HTML),
         "/settings" => Some(SETTINGS_HTML),
+        "/icon.svg" => Some(include_str!("../../assets/icon.svg")),
         // The dial list both shell surfaces fetch at load.
         dial::PATH => Some(dial::JSON),
         // The engine list the settings page offers and the new-tab page
@@ -55,7 +56,8 @@ pub fn internal_page(path: &str) -> Option<&'static str> {
 /// would let any website drive the browser.
 pub const NEW_TAB_HTML: &str = r##"<!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>New tab</title><style>
+<head><meta charset="utf-8"><title>New tab</title>
+<link rel="icon" type="image/svg+xml" href="/icon.svg"><style>
   :root {
     color-scheme: dark;
     --bg1: #11141a; --bg2: #181d25; --line: #262d38;
@@ -212,7 +214,8 @@ pub const NEW_TAB_HTML: &str = r##"<!doctype html>
 /// content views still have no general-purpose command channel.
 pub const SETTINGS_HTML: &str = r##"<!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>Settings</title><style>
+<head><meta charset="utf-8"><title>Settings</title>
+<link rel="icon" type="image/svg+xml" href="/icon.svg"><style>
   :root {
     color-scheme: dark;
     --bg0: #0b0e12; --bg1: #11141a; --bg2: #181d25; --bg3: #202631;
@@ -231,7 +234,7 @@ pub const SETTINGS_HTML: &str = r##"<!doctype html>
   table {
     width: 100%; border-collapse: collapse;
     background: var(--bg2); border: 1px solid var(--line);
-    border-radius: 14px; overflow: hidden;
+    border-radius: 14px; overflow: visible;
   }
   td { padding: 12px 14px; border-bottom: 1px solid rgba(255,255,255,.05); vertical-align: top; }
   tr:last-child td { border-bottom: 0; }
@@ -257,6 +260,7 @@ pub const SETTINGS_HTML: &str = r##"<!doctype html>
   /* Same custom-dropdown pattern the chrome library uses — a native
      <select> popup can't carry this theme. */
   .xdrop { position: relative; display: inline-block; }
+  .xdrop.open { z-index: 10; }
   .xdrop-btn {
     display: flex; align-items: center; gap: 10px; min-width: 190px;
     padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px;
@@ -462,6 +466,18 @@ mod tests {
         ] {
             assert_eq!(download_folder_request(url), None);
         }
+    }
+
+    #[test]
+    fn built_in_pages_use_the_cryo_favicon() {
+        for path in ["/chrome", "/newtab", "/settings", error::ERROR_PATH] {
+            let html = internal_page(path).expect("built-in page exists");
+            assert!(html.contains("<link rel=\"icon\" type=\"image/svg+xml\" href=\"/icon.svg\">"));
+        }
+        assert_eq!(
+            internal_page("/icon.svg"),
+            Some(include_str!("../../assets/icon.svg"))
+        );
     }
 
     #[test]

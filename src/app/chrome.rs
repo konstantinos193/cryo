@@ -106,7 +106,7 @@ impl App {
             downloads: self.download_rows(),
             bookmarks: self.bar_rows(),
             starred: self.active_starred(),
-            account: self.chrome_account(),
+            accounts: self.chrome_accounts(),
         };
         let json = serde_json::to_string(&state)?;
         self.chrome.eval(&format!("window.__cryo_update({json})"))?;

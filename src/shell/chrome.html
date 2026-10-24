@@ -2,6 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; overflow: hidden; }
@@ -228,7 +229,37 @@
     backdrop-filter: blur(18px) saturate(1.3);
     -webkit-backdrop-filter: blur(18px) saturate(1.3);
   }
-  #menu-pop.open, #omni-pop.open { display: block; }
+  #menu-pop.open, #omni-pop.open, #acct-pop.open { display: block; }
+  /* The account dropdown: every live session the jar holds, and a way
+     to add one more. `right` is set from the button's rect at open
+     time — the downloads button between it and the corner may hide. */
+  #acct-pop {
+    display: none; position: fixed; top: 40px; z-index: 10;
+    min-width: 250px; padding: 5px;
+    background: var(--pop-bg); border: 1px solid rgba(255, 255, 255, .09);
+    border-radius: 12px; box-shadow: var(--shadow);
+    backdrop-filter: blur(18px) saturate(1.3);
+    -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  }
+  .acct-row {
+    display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+    border-radius: 8px; cursor: pointer; transition: background .1s ease;
+  }
+  .acct-row:hover { background: rgba(255, 255, 255, .06); }
+  .acct-row .face {
+    width: 28px; height: 28px; flex: 0 0 auto; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--ice-deep); color: #eaf9fd; font-size: 13px;
+    overflow: hidden;
+  }
+  .acct-row .face img { width: 100%; height: 100%; }
+  .acct-row .nm { color: var(--tx); font-size: 12px; font-weight: 600; }
+  .acct-row .em { color: var(--tx3); font-size: 11px; }
+  .acct-add {
+    padding: 8px 12px; border-radius: 8px; color: var(--tx2);
+    cursor: pointer; white-space: nowrap; transition: background .1s ease, color .1s ease;
+  }
+  .acct-add:hover { background: rgba(255, 255, 255, .06); color: var(--tx); }
   /* The omnibox dropdown anchors under the toolbar (top = BAR_HEIGHT)
      and positions itself over the dial bar like every browser's does. */
   #omni-pop {
@@ -439,6 +470,7 @@
      can't carry the theme, so sort (and settings' engine pick) are
      button + listbox built here. */
   .xdrop { position: relative; flex: 0 0 auto; }
+  .xdrop.open { z-index: 10; }
   .xdrop-btn {
     display: flex; align-items: center; gap: 8px; height: 38px;
     padding: 0 12px; border: 1px solid var(--line); border-radius: 11px;
@@ -563,6 +595,7 @@
   <div id="loadbar"><i></i></div>
   <div id="dial"></div>
   <div id="menu-pop"></div>
+  <div id="acct-pop"></div>
   <div id="omni-pop"></div>
   <div id="dl-pop"></div>
   <div id="lib">
@@ -608,8 +641,8 @@
   // One button, two jobs: while a page loads it's the stop control.
   reloadBtn.onclick = () =>
     ipc({cmd: reloadBtn.classList.contains('loading') ? 'stop' : 'reload'});
-  document.getElementById('signin').onclick = () => ipc({cmd: 'sign_in'});
-
+  const signinBtn = document.getElementById('signin');
+  const acctPop = document.getElementById('acct-pop');
   const menuPop = document.getElementById('menu-pop');
   const omniPop = document.getElementById('omni-pop');
   const dlPop = document.getElementById('dl-pop');
@@ -620,9 +653,69 @@
   // content and stretches it over the whole window; the aggregate state
   // is reported so the bounds stay in sync. Clicks anywhere outside a
   // popup land on this document and dismiss.
-  let menuOpen = false, omniOpen = false, dlOpen = false, libOpen = false;
+  let menuOpen = false, omniOpen = false, dlOpen = false, libOpen = false,
+      acctOpen = false;
   const reportOverlay = () =>
-    ipc({cmd: 'overlay', open: menuOpen || omniOpen || dlOpen || libOpen});
+    ipc({cmd: 'overlay', open: menuOpen || omniOpen || dlOpen || libOpen || acctOpen});
+  // Signed in, the avatar opens a dropdown of every account in the jar;
+  // signed out, the same spot is still the sign-in pill.
+  const setAcct = (open) => {
+    if (open === acctOpen) return;
+    acctOpen = open;
+    acctPop.classList.toggle('open', open);
+    if (open) {
+      acctPop.style.right =
+        (document.documentElement.clientWidth - signinBtn.getBoundingClientRect().right) + 'px';
+      paintAcct();
+    }
+    reportOverlay();
+  };
+  const paintAcct = () => {
+    acctPop.innerHTML = '';
+    (lastState.accounts || []).forEach((a, i) => {
+      const row = document.createElement('div');
+      row.className = 'acct-row';
+      const face = document.createElement('span');
+      face.className = 'face';
+      if (a.avatar) {
+        const img = document.createElement('img');
+        img.src = a.avatar;
+        img.alt = '';
+        face.appendChild(img);
+      } else {
+        face.textContent = Array.from(a.name.trim())[0]?.toUpperCase() || '?';
+      }
+      const copy = document.createElement('div');
+      const nm = document.createElement('div');
+      nm.className = 'nm';
+      nm.textContent = a.name;
+      const em = document.createElement('div');
+      em.className = 'em';
+      em.textContent = a.email;
+      copy.append(nm, em);
+      row.append(face, copy);
+      row.onclick = () => { setAcct(false); ipc({cmd: 'account_open', index: i}); };
+      acctPop.appendChild(row);
+    });
+    const s = document.createElement('div');
+    s.className = 'sep';
+    acctPop.appendChild(s);
+    const add = document.createElement('div');
+    add.className = 'acct-add';
+    add.textContent = 'Add another account';
+    add.onclick = () => { setAcct(false); ipc({cmd: 'sign_in'}); };
+    acctPop.appendChild(add);
+  };
+  signinBtn.onclick = (e) => {
+    e.stopPropagation();
+    if ((lastState.accounts || []).length) {
+      setMenu(false); setOmni(false); setDl(false);
+      setAcct(!acctOpen);
+    } else {
+      ipc({cmd: 'sign_in'});
+    }
+  };
+  acctPop.onclick = (e) => e.stopPropagation();
   const setMenu = (open) => {
     if (open === menuOpen) return;
     menuOpen = open;
@@ -675,7 +768,7 @@
   // The app calls this when it replaces what's on screen (tab switch,
   // navigation, fullscreen) — the document can't see those actions.
   window.__cryo_overlay = (open) => {
-    if (!open) { setMenu(false); setOmni(false); setDl(false); setLib(false); }
+    if (!open) { setMenu(false); setOmni(false); setDl(false); setLib(false); setAcct(false); }
   };
   // Ctrl+J lands here — the engine's own downloads page is kept shut by
   // stealing the chord in key_command; this shelf is the replacement.
@@ -755,11 +848,11 @@
   dlPop.onclick = (e) => e.stopPropagation();
   menuPop.onclick = (e) => e.stopPropagation();
   document.addEventListener('click', () => {
-    setMenu(false); setOmni(false); setDl(false); setLib(false);
+    setMenu(false); setOmni(false); setDl(false); setLib(false); setAcct(false);
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      setMenu(false); setOmni(false); setDl(false); setLib(false);
+      setMenu(false); setOmni(false); setDl(false); setLib(false); setAcct(false);
     }
   });
 
@@ -1529,7 +1622,7 @@
       libBody.appendChild(node('div', 'lempty', 'Looking for installed browsers…'));
     } else if (!libData.sources.length) {
       libBody.appendChild(node('div', 'lempty',
-        'No Edge, Chrome, Brave, Vivaldi or Opera profile found on this machine.'));
+        'No Chrome, Edge, Firefox, Brave, Vivaldi or Opera profile found on this machine.'));
     }
     for (const s of libData.sources) {
       const r = node('div', 'lrow');
@@ -1544,7 +1637,7 @@
       libBody.appendChild(r);
     }
     libBody.appendChild(node('div', 'lnote',
-      'Bookmarks are read straight out of the other browser’s profile. ' +
+      'Bookmarks are read straight out of the other browser’s profile — Firefox included. ' +
       'Passwords are not: they sit in that browser’s own encrypted store, locked to its account. ' +
       'Export them from its settings — Edge: edge://settings/passwords, Chrome: chrome://password-manager/passwords — and choose that CSV above.'));
   };
@@ -1700,36 +1793,37 @@
     star.title = state.starred
       ? 'Remove bookmark (Ctrl+D)' : 'Bookmark this page (Ctrl+D)';
     // The account button mirrors the profile's Google session: the
-    // picture (or an initial) when signed in, the pill when not.
-    const signin = document.getElementById('signin');
-    if (state.account) {
-      const key = state.account.name + '|' + (state.account.avatar || '');
-      if (signin.dataset.k !== key) {
-        signin.dataset.k = key;
-        signin.innerHTML = '';
-        if (state.account.avatar) {
+    // first account's picture (or an initial) when signed in — the
+    // button's click lists them all — the pill when not.
+    const account = (state.accounts || [])[0];
+    if (account) {
+      const key = account.name + '|' + (account.avatar || '');
+      if (signinBtn.dataset.k !== key) {
+        signinBtn.dataset.k = key;
+        signinBtn.innerHTML = '';
+        if (account.avatar) {
           const img = document.createElement('img');
           img.className = 'ava';
-          img.src = state.account.avatar;
+          img.src = account.avatar;
           img.alt = '';
-          signin.appendChild(img);
+          signinBtn.appendChild(img);
         } else {
           const dot = document.createElement('span');
           dot.className = 'initial';
           dot.textContent =
-            Array.from(state.account.name.trim())[0]?.toUpperCase() || '?';
-          signin.appendChild(dot);
+            Array.from(account.name.trim())[0]?.toUpperCase() || '?';
+          signinBtn.appendChild(dot);
         }
       }
-      signin.classList.add('signed');
-      signin.title = state.account.email
-        ? 'Google account — ' + state.account.email
-        : 'Google account — ' + state.account.name;
+      signinBtn.classList.add('signed');
+      signinBtn.title = account.email
+        ? 'Google account — ' + account.email + ' (click to switch)'
+        : 'Google account — ' + account.name;
     } else {
-      signin.classList.remove('signed');
-      delete signin.dataset.k;
-      signin.textContent = 'Sign in';
-      signin.title = 'Sign in with your Google account';
+      signinBtn.classList.remove('signed');
+      delete signinBtn.dataset.k;
+      signinBtn.textContent = 'Sign in';
+      signinBtn.title = 'Sign in with your Google account';
     }
   };
 </script>

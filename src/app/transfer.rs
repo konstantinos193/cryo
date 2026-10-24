@@ -31,8 +31,8 @@ impl App {
         let picked = rfd::FileDialog::new()
             .set_title("Import bookmarks, passwords or history")
             .add_filter(
-                "Export files (*.html, *.csv, *.json)",
-                &["html", "htm", "csv", "json"],
+                "Export files (*.html, *.csv, *.json, *.jsonlz4)",
+                &["html", "htm", "csv", "json", "jsonlz4"],
             )
             .add_filter("All files", &["*"])
             .pick_file();
@@ -51,7 +51,7 @@ impl App {
         let Some(profile) = self.import_sources.as_ref().and_then(|s| s.get(index)) else {
             return Ok(());
         };
-        let source = Source::Profile(profile.bookmarks.clone());
+        let source = Source::Profile(profile.clone());
         self.start_import(source)
     }
 
@@ -75,16 +75,13 @@ impl App {
         self.notice(true, "Importing…", vec![format!("Reading {what}")])
     }
 
-    /// Look for installed Edge/Chrome/Brave/Vivaldi/Opera profiles. One
+    /// Look for installed Chromium- and Mozilla-family profiles. One
     /// directory walk and a couple of small reads per browser — off the
     /// loop, like every other disk read.
     pub(super) fn find_import_sources(&mut self) {
         let proxy = self.proxy.clone();
         std::thread::spawn(move || {
-            post(
-                &proxy,
-                AppEvent::ImportSources(transfer::chromium::profiles()),
-            );
+            post(&proxy, AppEvent::ImportSources(transfer::profiles()));
         });
     }
 

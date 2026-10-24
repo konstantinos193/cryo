@@ -30,15 +30,24 @@ pub const JAR_URL: &str = "https://accounts.google.com";
 const LIST_ACCOUNTS_URL: &str =
     "https://accounts.google.com/ListAccounts?gpsia=1&source=ChromiumBrowser&json=standard&laf=b64bin";
 
-/// Who the profile is signed in as — `None` means signed out.
+/// One signed-in Google identity.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Session {
+pub struct Account {
     /// Display name, or the email when Google sends no name.
     pub name: String,
     pub email: String,
     /// Account picture as a `data:` URL — `None` makes the UI draw the
     /// name's initial instead.
     pub avatar: Option<String>,
+}
+
+/// Who the profile is signed in as — `None` means signed out. A jar
+/// can hold several live accounts (Google multi-login); `accounts`
+/// keeps them in ListAccounts order, where the first is Google's
+/// default — `authuser=0` on every Google property.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Session {
+    pub accounts: Vec<Account>,
 }
 
 /// Read the session out of a profile jar. `None` when the jar holds no
@@ -77,19 +86,20 @@ pub fn fetch(cookies: &[Cookie]) -> Option<Session> {
             return None;
         }
     };
-    let (name, email, photo) = match parse_list_accounts(&body) {
-        Some(t) => t,
-        None => {
-            crate::report!("account check: ListAccounts reply named no account: {body:.200}");
-            return None;
-        }
-    };
-    let avatar = photo.as_deref().and_then(fetch_avatar);
-    Some(Session {
-        name,
-        email,
-        avatar,
-    })
+    let accounts = parse_list_accounts(&body);
+    if accounts.is_empty() {
+        crate::report!("account check: ListAccounts reply named no account: {body:.200}");
+        return None;
+    }
+    let accounts = accounts
+        .into_iter()
+        .map(|(name, email, photo)| Account {
+            name,
+            email,
+            avatar: photo.as_deref().and_then(fetch_avatar),
+        })
+        .collect();
+    Some(Session { accounts })
 }
 
 /// Whether `url` sits on a Google property — sign-ins, sign-outs and
@@ -118,10 +128,17 @@ enum Field<'a> {
 /// (9) and `signed_out` (14) flags — an entry that fails either check
 /// is a leftover cookie, not a live session. Chromium's own projection
 /// (`list_accounts_response.proto`) reads only a subset; field numbers
-/// here come from the wire as actually served.
-fn parse_list_accounts(body: &str) -> Option<(String, String, Option<String>)> {
-    let raw = crate::base64_decode(body.trim())?;
-    for field in proto_fields(&raw)? {
+/// here come from the wire as actually served. Returns every live
+/// account in jar order — multi-login lists them all.
+fn parse_list_accounts(body: &str) -> Vec<(String, String, Option<String>)> {
+    let mut out = Vec::new();
+    let Some(raw) = crate::base64_decode(body.trim()) else {
+        return out;
+    };
+    let Some(fields) = proto_fields(&raw) else {
+        return out;
+    };
+    for field in fields {
         let (1, Field::Bytes(msg)) = field else {
             continue;
         };
@@ -137,13 +154,13 @@ fn parse_list_accounts(body: &str) -> Option<(String, String, Option<String>)> {
         let name = str_field(&f, 2).filter(|s| !s.is_empty()).unwrap_or(email);
         let photo = str_field(&f, 4)
             .filter(|s| s.starts_with("https://") && s.contains("googleusercontent.com"));
-        return Some((
+        out.push((
             name.to_string(),
             email.to_string(),
             photo.map(str::to_string),
         ));
     }
-    None
+    out
 }
 
 /// Field `tag`'s string value in a parsed message, if present.
@@ -274,7 +291,9 @@ mod tests {
         account.extend(tstr(2, "Konst"));
         account.extend(tstr(3, "konst@example.com"));
         account.extend(tstr(4, "https://lh3.googleusercontent.com/a/abc=s64"));
-        let (name, email, photo) = parse_list_accounts(&reply(&[&account])).unwrap();
+        let accounts = parse_list_accounts(&reply(&[&account]));
+        assert_eq!(accounts.len(), 1);
+        let (name, email, photo) = &accounts[0];
         assert_eq!(name, "Konst");
         assert_eq!(email, "konst@example.com");
         assert_eq!(
@@ -286,16 +305,30 @@ mod tests {
     #[test]
     fn a_reply_without_photo_still_names_the_account() {
         let account = [tstr(2, "A B"), tstr(3, "a@b.com")].concat();
-        let (name, email, photo) = parse_list_accounts(&reply(&[&account])).unwrap();
-        assert_eq!((name, email, photo), ("A B".into(), "a@b.com".into(), None));
+        let accounts = parse_list_accounts(&reply(&[&account]));
+        assert_eq!(
+            accounts.as_slice(),
+            &[("A B".to_string(), "a@b.com".to_string(), None)]
+        );
     }
 
     #[test]
     fn a_missing_name_falls_back_to_the_email() {
         let account = tstr(3, "a@b.com");
-        let (name, email, _) = parse_list_accounts(&reply(&[&account])).unwrap();
-        assert_eq!(name, "a@b.com");
-        assert_eq!(email, "a@b.com");
+        let accounts = parse_list_accounts(&reply(&[&account]));
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].0, "a@b.com");
+        assert_eq!(accounts[0].1, "a@b.com");
+    }
+
+    #[test]
+    fn multi_login_lists_every_live_account() {
+        let first = [tstr(2, "A B"), tstr(3, "a@b.com")].concat();
+        let second = [tstr(2, "C D"), tstr(3, "c@d.com")].concat();
+        let accounts = parse_list_accounts(&reply(&[&first, &second]));
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(accounts[1].0, "C D");
+        assert_eq!(accounts[1].1, "c@d.com");
     }
 
     #[test]
@@ -309,15 +342,16 @@ mod tests {
         expired.extend(tvar(9, 0));
         let mut live = tstr(3, "live@example.com");
         live.extend(tvar(9, 1));
-        let (name, _, _) = parse_list_accounts(&reply(&[&dead, &expired, &live])).unwrap();
-        assert_eq!(name, "live@example.com");
+        let accounts = parse_list_accounts(&reply(&[&dead, &expired, &live]));
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].0, "live@example.com");
     }
 
     #[test]
     fn an_empty_account_list_is_no_session() {
-        assert!(parse_list_accounts(&reply(&[])).is_none());
-        assert!(parse_list_accounts(&reply(&[&tstr(2, "no email")])).is_none());
-        assert!(parse_list_accounts("not proto").is_none());
+        assert!(parse_list_accounts(&reply(&[])).is_empty());
+        assert!(parse_list_accounts(&reply(&[&tstr(2, "no email")])).is_empty());
+        assert!(parse_list_accounts("not proto").is_empty());
     }
 
     #[test]

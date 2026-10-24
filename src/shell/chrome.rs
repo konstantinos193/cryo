@@ -55,6 +55,12 @@ pub enum ChromeCommand {
     /// Open Google sign-in in a new tab — the profile cookie jar is shared,
     /// so signing in once applies to every site and survives restarts.
     SignIn,
+    /// An account picked off the avatar's dropdown — the app opens that
+    /// account's Google home under its `authuser` index, which is its
+    /// position in the ListAccounts order the state carries.
+    AccountOpen {
+        index: u64,
+    },
     NewIncognito,
     DevTools,
     ClearData,
@@ -281,9 +287,10 @@ pub struct ChromeState {
     pub bookmarks: Vec<ChromeBookmark>,
     /// The active tab's address is kept — the ★ fills in.
     pub starred: bool,
-    /// The Google session the account button shows — `None` keeps the
-    /// "Sign in" pill.
-    pub account: Option<ChromeAccount>,
+    /// The Google session the account button shows: every live account
+    /// in jar order — the button wears the first, the dropdown lists
+    /// them all. Empty keeps the "Sign in" pill.
+    pub accounts: Vec<ChromeAccount>,
 }
 
 /// The account button's face: what `crate::account` found in the

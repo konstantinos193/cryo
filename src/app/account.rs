@@ -89,12 +89,21 @@ impl App {
         cleared.and_then(|()| self.sync_chrome())
     }
 
-    /// `ChromeState`'s copy of the session.
-    pub(super) fn chrome_account(&self) -> Option<ChromeAccount> {
-        self.google.as_ref().map(|s| ChromeAccount {
-            name: s.name.clone(),
-            email: s.email.clone(),
-            avatar: s.avatar.clone(),
-        })
+    /// `ChromeState`'s copy of the session: every live account in jar
+    /// order — the dropdown lists them all, the button wears the first.
+    pub(super) fn chrome_accounts(&self) -> Vec<ChromeAccount> {
+        self.google
+            .as_ref()
+            .map(|s| {
+                s.accounts
+                    .iter()
+                    .map(|a| ChromeAccount {
+                        name: a.name.clone(),
+                        email: a.email.clone(),
+                        avatar: a.avatar.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 }

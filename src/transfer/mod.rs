@@ -15,6 +15,8 @@
 //!   it, so it is cryo's bookmark interchange both ways.
 //! - `chromium` — the plaintext `Bookmarks` file inside an installed
 //!   Edge/Chrome/Brave/Vivaldi/Opera profile, read in place.
+//! - `firefox` — the `bookmarks-*.jsonlz4` backup Mozilla-family
+//!   profiles write on every change, read in place.
 //! - `passwords` — the CSV a browser writes when the user asks it to
 //!   export passwords, and the CSV it reads back.
 //! - `history` — cryo's own CSV, so a profile's memory can move
@@ -31,6 +33,7 @@
 
 pub mod chromium;
 mod csv;
+pub mod firefox;
 pub mod history;
 pub mod netscape;
 pub mod passwords;
@@ -43,6 +46,14 @@ use crate::vault;
 
 pub use chromium::Profile;
 
+/// Every readable browser profile on this machine — the Chromium
+/// family first, then the Mozilla one.
+pub fn profiles() -> Vec<Profile> {
+    let mut out = chromium::profiles();
+    out.extend(firefox::profiles());
+    out
+}
+
 /// Largest file read. A bookmark export is kilobytes and a big password
 /// CSV is hundreds; anything past this is not one of these formats, and
 /// reading it would hand a browser's worth of memory to a text parser.
@@ -54,15 +65,17 @@ pub enum Source {
     /// A file the user picked. What it holds is sniffed from its
     /// content, not its extension — browsers disagree about those.
     File(PathBuf),
-    /// A `Bookmarks` file inside an installed profile, as found by
-    /// `chromium::profiles`.
-    Profile(PathBuf),
+    /// A file inside an installed profile, as found by
+    /// `chromium::profiles` or `firefox::profiles`. The whole profile
+    /// travels along so the report names it the way discovery did.
+    Profile(Profile),
 }
 
 impl Source {
     pub fn path(&self) -> &Path {
         match self {
-            Source::File(p) | Source::Profile(p) => p,
+            Source::File(p) => p,
+            Source::Profile(p) => &p.bookmarks,
         }
     }
 }
@@ -151,18 +164,38 @@ pub fn read(source: &Source, stamped_at: u64) -> Result<Bundle, TransferError> {
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| path.display().to_string());
 
-    // A profile's Bookmarks file is known by where it came from, so it
-    // skips the sniffing and any doubt about a 30 MB one.
-    if let Source::Profile(_) = source {
+    // A profile's file is known by where it came from, so it skips the
+    // sniffing and any doubt about a 30 MB one.
+    if let Source::Profile(profile) = source {
+        let bytes = std::fs::read(&profile.bookmarks).map_err(|source| TransferError::Read {
+            path: profile.bookmarks.display().to_string(),
+            source,
+        })?;
+        let bookmarks = if firefox::looks_like(&bytes) {
+            firefox::parse_bytes(&bytes)?
+        } else {
+            chromium::parse(&bytes)?
+        };
         return Ok(Bundle {
             payload: Payload::Bookmarks,
-            bookmarks: chromium::read_file(path)?,
-            source: profile_label(path),
+            bookmarks,
+            source: format!("{} · {}", profile.browser, profile.name),
             ..Bundle::default()
         });
     }
 
-    let text = read_text(path)?;
+    let bytes = read_bytes(path)?;
+    // A compressed Firefox backup is binary; check its magic before
+    // any decoding turns it into noise.
+    if firefox::looks_like(&bytes) {
+        return Ok(Bundle {
+            payload: Payload::Bookmarks,
+            bookmarks: firefox::parse_bytes(&bytes)?,
+            source: name,
+            ..Bundle::default()
+        });
+    }
+    let text = decode(&bytes);
     // Order matters only where two sniffs could both answer: a password
     // CSV is asked about before a history one, because losing a
     // password file to the wrong reader is the worse mistake.
@@ -170,6 +203,14 @@ pub fn read(source: &Source, stamped_at: u64) -> Result<Bundle, TransferError> {
         return Ok(Bundle {
             payload: Payload::Bookmarks,
             bookmarks: chromium::parse(text.as_bytes())?,
+            source: name,
+            ..Bundle::default()
+        });
+    }
+    if firefox::looks_like_json(&text) {
+        return Ok(Bundle {
+            payload: Payload::Bookmarks,
+            bookmarks: firefox::parse(text.as_bytes())?,
             source: name,
             ..Bundle::default()
         });
@@ -218,34 +259,10 @@ pub fn write(path: &Path, text: &str) -> Result<(), TransferError> {
     })
 }
 
-/// `…\Microsoft\Edge\User Data\Default\Bookmarks` → "Edge · Default".
-/// The profile list already knows these names; an import started from
-/// it still has to say what it read.
-fn profile_label(path: &Path) -> String {
-    let profile = path
-        .parent()
-        .and_then(|p| p.file_name())
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let browser = path
-        .ancestors()
-        .nth(3)
-        .and_then(|p| p.file_name())
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
-    match (browser.is_empty(), profile.is_empty()) {
-        (false, false) => format!("{browser} · {profile}"),
-        (true, false) => profile,
-        _ => path.display().to_string(),
-    }
-}
-
-/// Read a file as text, whatever encoding the exporter chose.
-///
-/// UTF-8 is what every browser writes, but a CSV that has been through
-/// Excel can come back UTF-16, and a mangled byte should cost one
-/// character rather than the import.
-fn read_text(path: &Path) -> Result<String, TransferError> {
+/// Read a file's bytes, bounded by `MAX_FILE` — anything past that is
+/// not one of these formats, and reading it would hand a browser's
+/// worth of memory to a text parser.
+fn read_bytes(path: &Path) -> Result<Vec<u8>, TransferError> {
     let size = std::fs::metadata(path)
         .map_err(|source| TransferError::Read {
             path: path.display().to_string(),
@@ -258,11 +275,10 @@ fn read_text(path: &Path) -> Result<String, TransferError> {
             bytes: size,
         });
     }
-    let bytes = std::fs::read(path).map_err(|source| TransferError::Read {
+    std::fs::read(path).map_err(|source| TransferError::Read {
         path: path.display().to_string(),
         source,
-    })?;
-    Ok(decode(&bytes))
+    })
 }
 
 /// Bytes to text: UTF-16 where a byte-order mark says so, UTF-8 (lossy)
@@ -439,9 +455,15 @@ mod tests {
                 {"type":"url","name":"A","url":"https://a.test"}]}}}"#,
         )
         .unwrap();
-        let bundle = read(&Source::Profile(path), 1).unwrap();
+        let profile = Profile {
+            browser: "Microsoft Edge".to_string(),
+            name: "Default".to_string(),
+            bookmarks: path,
+            count: 1,
+        };
+        let bundle = read(&Source::Profile(profile), 1).unwrap();
         assert_eq!(bundle.payload, Payload::Bookmarks);
-        assert_eq!(bundle.source, "Edge · Default");
+        assert_eq!(bundle.source, "Microsoft Edge · Default");
         let _ = std::fs::remove_dir_all(&base);
     }
 

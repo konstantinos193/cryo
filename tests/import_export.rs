@@ -194,10 +194,16 @@ fn an_installed_profile_is_read_in_place() {
     )
     .expect("write the profile");
 
-    let bundle = transfer::read(&Source::Profile(file), 1).expect("read the profile");
+    let profile = transfer::Profile {
+        browser: "Microsoft Edge".to_string(),
+        name: "Default".to_string(),
+        bookmarks: file,
+        count: 3,
+    };
+    let bundle = transfer::read(&Source::Profile(profile), 1).expect("read the profile");
     assert_eq!(bundle.payload, Payload::Bookmarks);
     assert_eq!(
-        bundle.source, "Edge · Default",
+        bundle.source, "Microsoft Edge · Default",
         "the report names the profile"
     );
     let mut mine = keeper(&dir.path("bookmarks.json"));
@@ -398,6 +404,34 @@ fn each_kind_of_file_is_recognised_by_what_is_in_it() {
         let bundle = transfer::read(&Source::File(file), 1)
             .unwrap_or_else(|e| panic!("{name} should be readable: {e}"));
         assert_eq!(bundle.payload, expected, "{name}");
+        assert_eq!(bundle.len(), 1, "{name}");
+    }
+
+    // A Firefox backup, both ways it arrives: compressed `jsonlz4`
+    // and the plain JSON tree underneath.
+    let tree = r#"{"type":"text/x-moz-place-container","children":[
+        {"root":"toolbarFolder","type":"text/x-moz-place-container","children":[
+          {"type":"text/x-moz-place","title":"A","uri":"https://a.test"}]}]}"#;
+    let mut lz4 = b"mozLz40\0".to_vec();
+    lz4.extend_from_slice(&(tree.len() as u32).to_le_bytes());
+    // One literal run: token 0xf0, then len-15 as 0xff-terminated bytes.
+    lz4.push(0xf0);
+    let mut rest = tree.len() - 15;
+    while rest >= 0xff {
+        lz4.push(0xff);
+        rest -= 0xff;
+    }
+    lz4.push(rest as u8);
+    lz4.extend_from_slice(tree.as_bytes());
+    for (name, bytes) in [
+        ("bookmarks-2026-10-24.jsonlz4", lz4.clone()),
+        ("backup.json", tree.as_bytes().to_vec()),
+    ] {
+        let file = dir.path(name);
+        std::fs::write(&file, bytes).expect("write");
+        let bundle = transfer::read(&Source::File(file), 1)
+            .unwrap_or_else(|e| panic!("{name} should be readable: {e}"));
+        assert_eq!(bundle.payload, Payload::Bookmarks, "{name}");
         assert_eq!(bundle.len(), 1, "{name}");
     }
 

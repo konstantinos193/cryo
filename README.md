@@ -13,6 +13,10 @@
 
 <p align="center"><b>A memory-obsessed browser shell in Rust. Tabs freeze. Budgets hold.</b></p>
 
+<p align="center">
+  <img src="assets/screenshot.png" alt="cryo browsing its own repository" width="800">
+</p>
+
 Your browser's plan for 40 open tabs is to let them eat until something dies.
 cryo's plan is a freezer.
 
@@ -23,6 +27,10 @@ into the policy layer instead: lifecycle, budgets, accounting. A tab that stops
 earning its RAM gets frozen. cryo takes a snapshot, destroys the webview and
 hands your memory back. Click the tab and it respawns where it left off, none
 the wiser. Discard is the same mercy killing without the keepsake.
+
+Why not a tab-suspender extension? Extensions can't drop the webview — the
+renderer process keeps its memory either way. cryo owns the process, so a
+frozen tab's RAM is actually gone, not merely promised away.
 
 ## Status
 
@@ -108,25 +116,18 @@ Middle-click a tab to close it.
 
 ## Architecture
 
-```
-            ┌─────────────┐
-            │    main     │   arg parsing only (--incognito, URL seed)
-            └──────┬──────┘
-                   ▼
-            ┌─────────────┐      ┌──────────────────────────────┐
-            │     app     │────▶│ persist, bookmarks, vault,   │
-            │ (event loop)│      │ transfer, instance, update   │
-            └──────┬──────┘      └──────────────────────────────┘
-                   ▼
-            ┌─────────────┐
-            │    tabs     │   Tab entity, ordered registry, closed stack
-            └──────┬──────┘
-                   ▼
-            ┌─────────────┐
-            │   engine    │   Engine/ContentView traits in OUR types;
-            │  (wry impl) │   fake engine for tests; the platform
-            │             │   webview is quarantined in here
-            └─────────────┘
+```mermaid
+flowchart TD
+    main["main<br/>arg parsing only (--incognito, URL seed)"]
+    app["app<br/>(event loop)"]
+    services["persist, bookmarks, vault,<br/>transfer, instance, update"]
+    tabs["tabs<br/>Tab entity, ordered registry, closed stack"]
+    engine["engine (wry impl)<br/>Engine/ContentView traits in OUR types;<br/>fake engine for tests; the platform<br/>webview is quarantined in here"]
+
+    main --> app
+    app --> services
+    app --> tabs
+    tabs --> engine
 ```
 
 Dependencies point one way: policy never imports plumbing. `wry` types exist
@@ -143,9 +144,11 @@ and it gets checked in review.
 ## Install and run
 
 Prebuilt binaries for Windows, Linux and macOS are on the
-[releases page](https://github.com/konstantinos193/cryo/releases). WebView2
-ships with Windows 10/11; on Linux wry wants WebKitGTK; macOS brings WKWebView
-for free.
+[releases page](https://github.com/konstantinos193/cryo/releases).
+
+Requirements: Windows 10/11 (WebView2 ships with the OS), a Linux with
+WebKitGTK installed (wry's appetite, not ours), or macOS (WKWebView comes
+free).
 
 Or build it. Rust stable:
 
