@@ -2,7 +2,10 @@
 //! our own types. `wry` types appear only in `wry_impl`; `fake` exists
 //! for tests. A Servo backend slots in here later without touching policy.
 
+pub mod accounting;
 pub mod fake;
+#[cfg(feature = "servo-engine")]
+pub mod servo_impl;
 pub mod wry_impl;
 
 /// Position and size in logical pixels, relative to the parent window.
@@ -413,12 +416,26 @@ pub enum LoadFailure {
 
 /// Factory for views. One engine per window.
 pub trait Engine {
+    /// Give the engine's own loop a turn. Backends that drive their own
+    /// loop through the platform's (WebView2 inside wry) leave this a
+    /// no-op; Servo calls `Servo::spin_event_loop` from here whenever the
+    /// app dispatches an event or a waker-posted `EngineWake` arrives.
+    fn spin_event_loop(&self) {}
+
+    fn measure_memory(&self, _complete: accounting::MemoryCallback) -> Result<(), EngineError> {
+        Err(EngineError::ReadStats(
+            "Memory accounting is unavailable on this backend".into(),
+        ))
+    }
+
     fn spawn(&self, spec: ViewSpec) -> Result<Box<dyn ContentView>, EngineError>;
 }
 
 #[derive(thiserror::Error, Debug)]
 #[non_exhaustive]
 pub enum EngineError {
+    #[error("memory accounting failed: {0}")]
+    ReadStats(String),
     #[error("view creation failed: {0}")]
     Spawn(String),
     #[error("navigation failed: {0}")]

@@ -253,8 +253,11 @@ mod imp {
     /// Modal OLE drag of `path`, copy-only. Called on the event loop
     /// thread while the shelf's button is still held — `DoDragDrop`
     /// pumps its own message loop, so the window stays live and drops
-    /// on our own views still land.
+    /// on our own views still land. Queued paints are scrubbed first —
+    /// OLE's pump would dispatch them into tao's handler (see
+    /// `engine::wry_impl::pump`).
     pub(super) fn run(path: &Path) {
+        crate::engine::wry_impl::pump::clear_pending_paints();
         unsafe {
             // Already initialized on this thread — S_FALSE counts as
             // success. A mismatched apartment (RPC_E_CHANGED_MODE) is

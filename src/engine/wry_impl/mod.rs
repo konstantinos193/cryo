@@ -6,6 +6,7 @@
 //! operations wry doesn't reach), `downloads` (the file shelf's engine
 //! side) and `delay` (the shared deferred worker).
 
+mod accounting;
 #[cfg(target_os = "windows")]
 mod delay;
 #[cfg(target_os = "windows")]
@@ -19,6 +20,8 @@ mod permission_profile;
 #[cfg(target_os = "windows")]
 mod permissions;
 mod protocol;
+#[cfg(target_os = "windows")]
+pub(crate) mod pump;
 mod view;
 
 #[cfg(target_os = "windows")]
@@ -152,8 +155,7 @@ fn browser_args() -> String {
 fn create_environment() -> Result<ICoreWebView2Environment, EngineError> {
     use std::sync::mpsc::channel;
     use webview2_com::{
-        wait_with_pump, CoreWebView2EnvironmentOptions,
-        CreateCoreWebView2EnvironmentCompletedHandler,
+        CoreWebView2EnvironmentOptions, CreateCoreWebView2EnvironmentCompletedHandler,
         Microsoft::Web::WebView2::Win32::{
             CreateCoreWebView2EnvironmentWithOptions, ICoreWebView2EnvironmentOptions,
         },
@@ -192,12 +194,28 @@ fn create_environment() -> Result<ICoreWebView2Environment, EngineError> {
         )
     }
     .map_err(|e| EngineError::Spawn(e.to_string()))?;
-    wait_with_pump(rx)
+    pump::wait_with_pump(rx)
         .map_err(|e| EngineError::Spawn(e.to_string()))?
         .map_err(|e| EngineError::Spawn(e.to_string()))
 }
 
 impl Engine for WryEngine {
+    #[cfg(target_os = "windows")]
+    fn measure_memory(
+        &self,
+        complete: crate::engine::accounting::MemoryCallback,
+    ) -> Result<(), EngineError> {
+        accounting::measure(self.environment.borrow().as_ref(), complete)
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn measure_memory(
+        &self,
+        complete: crate::engine::accounting::MemoryCallback,
+    ) -> Result<(), EngineError> {
+        accounting::measure(complete)
+    }
+
     fn spawn(&self, spec: ViewSpec) -> Result<Box<dyn ContentView>, EngineError> {
         let access = spec.access;
         let internal = Arc::new(AtomicBool::new(
@@ -309,6 +327,11 @@ impl Engine for WryEngine {
                 true
             });
         }
+
+        // `build_as_child` waits on its own pump; clear queued paints or a
+        // mid-spawn WM_PAINT re-enters tao's handler (see `pump`).
+        #[cfg(target_os = "windows")]
+        pump::clear_pending_paints();
 
         // SAFETY: `parent` is the handle of the window `App` owns for the
         // whole event loop — no spawn can outlive it.

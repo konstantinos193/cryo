@@ -72,7 +72,8 @@ Policy is the product. Policy never imports plumbing.
             └─────────────┘
 ```
 
-- `wry`/WebView2 types may appear **only** inside `engine/`. `tao` types
+- `wry`/WebView2 and `servo` types may appear **only** inside `engine/`.
+  `tao` types
   may appear only in `app`/`shell`/`lib.rs` (the event-loop owner) — never
   in `tabs`, `memory` or `persist`. Anywhere else they appear, the PR gets
   rejected.
@@ -90,7 +91,8 @@ Use the parts of DDD that prevent spaghetti; skip the parts that generate
 boilerplate. No `IRepositoryFactoryBuilder` nonsense — contexts, entities,
 value objects, aggregates, domain services. That's it.
 
-- **Bounded contexts = top-level modules.** `tabs`, `engine`, `shell`
+- **Bounded contexts = top-level modules.** `tabs`, `engine` (wry backend
+  by default; `servo_impl` behind `--features servo-engine`), `shell`
   (window/UI), `persist` (history recorder), `bookmarks`, `vault`
   (passwords), `transfer` (foreign-file import/export), `instance`
   (single-instance handoff), `update` (self-update), `account` (Google
@@ -251,3 +253,48 @@ or every persistence change becomes spaghetti.
     change scattered as matching edits across three modules?
 11. A comment this diff made stale, or a function mixing plumbing and
     policy in one body?
+
+## Live freeze-memory verification (Windows)
+
+`src/app/freeze_probe.rs` is an opt-in test using the real app freeze path and
+local HTTP fixtures. In PowerShell, set `$env:CRYO_FREEZE_CASE` to `light`,
+`heap`, or `shared`, then run:
+
+```powershell
+cargo test live_freeze_memory -- --ignored --nocapture
+```
+
+`heap` touches and retains 64 MiB; `shared` opens two such same-origin pages.
+Default WebView2 settings do not guarantee those pages share a renderer. To
+exercise sharing, set `$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` to
+`--process-per-site --renderer-process-limit=1` for that test process only.
+Clear that override afterward; these are not production defaults.
+
+The test emits `FREEZE_PROBE` JSON with process IDs, kinds, private bytes and
+working sets before freeze, after an idle control interval, and 1/5 seconds
+after freeze, plus `delta_from_baseline_mib` — renderers are shared across
+views, so a tab's cost is only ever a process delta, never a per-tab figure.
+It keeps an untouched tab active and verifies measured tabs stay
+frozen, since freezing an active tab can restore a frozen neighbour. Reject
+incomplete samples. Compare private commitments and PID lifetimes; do not call
+summed working sets unique physical RAM or promise an immediate per-tab saving.
+
+`cargo test live_ram_budget -- --ignored --nocapture` exercises the real sampler,
+automatic freeze and protected work under a 128 MiB budget, then restores the
+frozen tab through the real spawn path. It marks fixture tabs cold instead of
+waiting two minutes; restore grace has deterministic policy tests. Run live
+probes separately (one test filter per process), not together with `--ignored`
+alone.
+
+Blocking WebView2 waits inside a tao handler go through
+`engine::wry_impl::pump`: tao buffers every mid-handler event except
+`RedrawRequested`, which it dispatches re-entrantly — a `WM_PAINT` delivered by
+a pump (wry's controller creation, OLE `DoDragDrop`, cookie/capture waits)
+panics "event handler is re-entrant". The pump eats paints and `ValidateRect`s
+their regions; call `clear_pending_paints` before any modal loop we don't own.
+
+Launch configuration: `CRYO_MEMORY_BUDGET_MIB` is a positive MiB integer,
+default 1024. It budgets engine private commitments — WebView2's environment on
+Windows, the WebKit child-process tree on Linux/macOS — not host memory or
+unique physical RAM. Platforms without a sampler adapter retain manual freezing
+without the old 24-view fallback.

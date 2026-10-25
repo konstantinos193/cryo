@@ -1,6 +1,6 @@
 [package]
 name = "cryo"
-version = "0.7.1"
+version = "0.8.0"
 edition = "2021"
 description = "A memory-obsessed browser shell written in Rust. Tabs freeze. Budgets hold."
 license = "MIT"
@@ -23,6 +23,15 @@ wry = "0.57"
 url = "2"
 # Scrubs plaintext out of dropped heap — the vault's Secret and Draft.
 zeroize = "1"
+# Phase 5: the Servo backend. `image` only encodes PNG for favicons and
+# screenshots; `servo` is the embedding crate. Behind `--features
+# servo-engine` so the wry default never pays the mozjs/clang build.
+servo = { version = "0.7.0", optional = true }
+image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
+dpi = { version = "0.1", optional = true }
+
+[features]
+servo-engine = ["dep:servo", "dep:image", "dep:dpi"]
 
 # The vault protector off Windows: a random key in the OS keychain
 # (Secret Service / Keychain) sealing vault bytes with XChaCha20-Poly1305.
@@ -30,6 +39,10 @@ zeroize = "1"
 chacha20poly1305 = "0.11"
 getrandom = "0.4"
 keyring = "4"
+
+# libproc for memory accounting (proc_listchildpids, proc_pid_rusage).
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2.191"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Direct dep because the `windows::core::implement` macro expands to
@@ -41,15 +54,19 @@ windows = { version = "0.62", features = [
     "Win32_Globalization",
     "Win32_Security",
     "Win32_Security_Cryptography",
+    "Win32_Graphics_Gdi",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_IO",
+    "Win32_System_LibraryLoader",
     "Win32_System_Memory",
     "Win32_System_Ole",
     "Win32_System_Pipes",
+    "Win32_System_ProcessStatus",
     "Win32_System_SystemServices",
     "Win32_System_Threading",
+    "Win32_UI_HiDpi",
     "Win32_UI_Shell",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",

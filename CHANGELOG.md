@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.8.0
+
+### Added
+
+- Measured memory budgets on Windows. Every five seconds Cryo samples WebView2
+  process memory; two over-budget samples freeze the coldest eligible tab until
+  usage falls to 90% of the budget. Set `CRYO_MEMORY_BUDGET_MIB` (default 1024)
+  to change it.
+- Protection rules: foreground, loading, downloading, audio-playing, prompting,
+  recently-used, user-input and permission-requesting views are never frozen
+  automatically; shared renderers are not billed to individual tabs.
+- `Engine::measure_memory` and `Engine::spin_event_loop` ports, with WebView2
+  accounting adapters on Windows and macOS/Linux groundwork.
+- Experimental Servo engine backend behind `--features servo-engine`.
+- Opt-in live probes on Windows (`CRYO_FREEZE_CASE`, `live_ram_budget`) that
+  exercise the real freeze and budget paths and report process memory deltas.
+
+### Removed
+
+- The 24-live-view cap; a measured budget replaces the count heuristic.
+
 ## 0.7.1
 
 ### Fixed

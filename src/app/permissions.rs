@@ -63,6 +63,16 @@ impl App {
             _ => "unsupported capability",
         };
         let valid = origin.is_some() && origin == live_origin;
+        if valid
+            && matches!(
+                request.kind,
+                PermissionKind::Microphone | PermissionKind::Camera | PermissionKind::Other
+            )
+        {
+            if let Some(tab) = self.registry.get_mut(view.tab()) {
+                tab.resources_mut().automatic_freeze_blocked = true;
+            }
+        }
         let known = origin
             .as_ref()
             .and_then(|o| self.permission_grants.0.get(&(o.clone(), request.kind)))

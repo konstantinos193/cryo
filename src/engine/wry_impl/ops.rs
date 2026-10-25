@@ -206,7 +206,7 @@ pub(super) fn capture_png(view: &WebView) -> Result<Vec<u8>, EngineError> {
             )
             .map_err(|e| EngineError::View(e.to_string()))?;
         // The completed-callback hands the HRESULT as a Result.
-        webview2_com::wait_with_pump(rx)
+        super::pump::wait_with_pump(rx)
             .map_err(|e| EngineError::View(e.to_string()))?
             .map_err(|e| EngineError::View(e.to_string()))?;
 
@@ -286,7 +286,7 @@ pub(super) fn cookies(view: &WebView, uri: &str) -> Result<Vec<Cookie>, EngineEr
         manager
             .GetCookies(&windows::core::HSTRING::from(uri), &done)
             .map_err(|e| EngineError::View(e.to_string()))?;
-        webview2_com::wait_with_pump(rx)
+        super::pump::wait_with_pump(rx)
             .map_err(|e| EngineError::View(e.to_string()))?
             .map_err(|e| EngineError::View(e.to_string()))
     }
@@ -341,7 +341,7 @@ pub(super) fn clear_browsing_data(view: &WebView) -> Result<(), EngineError> {
         profile
             .ClearBrowsingDataAll(&done)
             .map_err(|e| EngineError::View(e.to_string()))?;
-        webview2_com::wait_with_pump(rx)
+        super::pump::wait_with_pump(rx)
             .map_err(|e| EngineError::View(e.to_string()))?
             .map_err(|e| EngineError::View(e.to_string()))
     }

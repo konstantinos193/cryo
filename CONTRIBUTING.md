@@ -5,7 +5,9 @@
 - `main` is protected. Everything lands through pull requests — no direct
   pushes, no force pushes, no "just this once."
 - CI must be green: `cargo fmt`, `cargo clippy -D warnings`, `cargo build`,
-  `cargo test`. clippy is the parole officer on this project.
+  `cargo test`, and the live probes (`live_freeze_memory`,
+  `live_ram_budget` on Windows — real WebView2, real freeze/restore).
+  clippy is the parole officer on this project.
 - Commit messages say **why**, not what. The diff already covers the what.
 - Keep PRs small and scoped. One feature or fix per PR. A PR that does three
   things gets reviewed at one-third speed and blamed for all three.

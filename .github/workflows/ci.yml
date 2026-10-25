@@ -43,3 +43,18 @@ jobs:
         run: cargo build --locked
       - name: test
         run: cargo test --all
+
+  # The restore/freeze boundary is the product — an unverified live
+  # restore is a broken window. Runs only on Windows: the probes drive a
+  # real WebView2 and its message pump, and runners have the runtime.
+  live-probes:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: live freeze probe
+        run: cargo test live_freeze_memory -- --ignored --nocapture
+        env:
+          CRYO_FREEZE_CASE: heap
+      - name: live budget + restore probe
+        run: cargo test live_ram_budget -- --ignored --nocapture

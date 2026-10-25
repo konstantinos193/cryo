@@ -36,12 +36,17 @@ pub enum FakeCall {
 
 #[derive(Default)]
 pub struct FakeEngine {
+    memory: RefCell<Option<crate::engine::accounting::MemorySnapshot>>,
     spawned: RefCell<Vec<String>>,
     scripted: RefCell<Vec<bool>>,
     calls: Rc<RefCell<Vec<FakeCall>>>,
 }
 
 impl FakeEngine {
+    pub fn set_memory_snapshot(&self, snapshot: crate::engine::accounting::MemorySnapshot) {
+        *self.memory.borrow_mut() = Some(snapshot);
+    }
+
     /// Source of every spec spawned so far (`url:<addr>` or `none`), in
     /// order. A snapshot — interior mutability stays inside the fake.
     pub fn spawned(&self) -> Vec<String> {
@@ -59,6 +64,19 @@ impl FakeEngine {
 }
 
 impl Engine for FakeEngine {
+    fn measure_memory(
+        &self,
+        complete: crate::engine::accounting::MemoryCallback,
+    ) -> Result<(), EngineError> {
+        let snapshot = self
+            .memory
+            .borrow()
+            .clone()
+            .ok_or_else(|| EngineError::ReadStats("No memory snapshot configured".into()))?;
+        complete(snapshot);
+        Ok(())
+    }
+
     fn spawn(&self, spec: ViewSpec) -> Result<Box<dyn ContentView>, EngineError> {
         self.scripted.borrow_mut().push(spec.page_script.is_some());
         let initial_url = spec.url;
@@ -243,6 +261,37 @@ impl ContentView for FakeView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn memory_accounting_returns_configured_process_snapshot() {
+        use crate::engine::accounting::{
+            MemorySnapshot, MemoryStats, ProcessId, ProcessKind, ProcessMemory,
+        };
+        let engine = FakeEngine::default();
+        assert!(engine
+            .measure_memory(Box::new(|_| panic!("unexpected callback")))
+            .is_err());
+        let now = std::time::Instant::now();
+        engine.set_memory_snapshot(MemorySnapshot::new(
+            now,
+            now,
+            vec![ProcessMemory::new(
+                ProcessId(7),
+                ProcessKind::Renderer,
+                Ok(MemoryStats::new(123, 456)),
+            )],
+        ));
+        let (tx, rx) = std::sync::mpsc::channel();
+        engine
+            .measure_memory(Box::new(move |snapshot| tx.send(snapshot).unwrap()))
+            .unwrap();
+        let snapshot = rx.recv().unwrap();
+        assert_eq!(snapshot.private_bytes(ProcessKind::Renderer), Some(123));
+        assert_eq!(
+            snapshot.processes()[0].stats().unwrap().working_set_bytes(),
+            456
+        );
+    }
 
     #[test]
     fn spawn_records_source_and_view_records_calls() {

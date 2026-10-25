@@ -160,6 +160,14 @@ pub(crate) fn test_dir(tag: &str) -> std::path::PathBuf {
 }
 
 pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyhow::Result<()> {
+    let memory_budget =
+        match std::env::var("CRYO_MEMORY_BUDGET_MIB") {
+            Ok(value) => memory::ByteBudget::from_mib(value.parse().map_err(|_| {
+                anyhow::anyhow!("CRYO_MEMORY_BUDGET_MIB must be a positive integer")
+            })?)?,
+            Err(std::env::VarError::NotPresent) => memory::ByteBudget::default(),
+            Err(e) => return Err(e.into()),
+        };
     let mut event_loop = EventLoopBuilder::<AppEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
 
@@ -206,11 +214,24 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
     let builder = with_icons(builder)?;
     let window = Rc::new(builder.build(&event_loop)?);
 
+    #[cfg(not(feature = "servo-engine"))]
     let engine: Rc<dyn Engine> = Rc::new(WryEngine::new(
         window.window_handle()?.as_raw(),
         shell::pages::internal_page,
         incognito,
     ));
+    #[cfg(feature = "servo-engine")]
+    let engine: Rc<dyn Engine> = {
+        use raw_window_handle::HasDisplayHandle;
+        let wake = proxy.clone();
+        Rc::new(engine::servo_impl::ServoEngine::new(
+            window.window_handle()?.as_raw(),
+            window.display_handle()?.as_raw(),
+            shell::pages::internal_page,
+            move || app::post(&wake, AppEvent::EngineWake),
+            incognito,
+        ))
+    };
     // Update checks only make sense for installed release builds — a dev
     // binary would just offer to replace itself with a tagged release.
     #[cfg(all(windows, not(debug_assertions)))]
@@ -271,14 +292,21 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
         open_url,
         profile,
     )?;
+    app.set_memory_budget(memory_budget);
     // Views are spawned and navigating — reveal once, complete.
     window.set_visible(true);
+    let mut next_tick = std::time::Instant::now() + app::IDLE_TICK;
 
     event_loop.run_return(move |event, _target, control_flow| {
         // A heartbeat, not a poll: the loop wakes at least this often so
         // background tabs that have gone cold can be suspended — the
         // timer is the event loop's own, no second thread (AGENTS §9).
-        *control_flow = ControlFlow::WaitUntil(std::time::Instant::now() + app::IDLE_TICK);
+        let now = std::time::Instant::now();
+        if now >= next_tick {
+            app.resource_tick();
+            next_tick = now + app::IDLE_TICK;
+        }
+        *control_flow = ControlFlow::WaitUntil(next_tick);
         app.handle_event(event, control_flow);
     });
     drop(writers);

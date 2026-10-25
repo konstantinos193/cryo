@@ -20,6 +20,13 @@
     try { window.ipc.postMessage(JSON.stringify(message)); } catch (_) {}
   };
 
+  let edited = false;
+  document.addEventListener('input', (event) => {
+    if (edited || !event.isTrusted) return;
+    edited = true;
+    send({kind: 'edited'});
+  }, true);
+
   const autocomplete = (input) =>
     (input.autocomplete || '').toLowerCase().split(/\s+/).filter(Boolean);
 

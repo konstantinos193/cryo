@@ -7,6 +7,7 @@ use crate::tabs::SurfaceResources;
 
 #[derive(Default)]
 pub(super) struct TabResources {
+    pub automatic_freeze_blocked: bool,
     pub downloads: Vec<downloads::Entry>,
     pub password_prompt: Option<autofill::PasswordPrompt>,
     pub permission_prompt: Option<permissions::Prompt>,
@@ -14,6 +15,7 @@ pub(super) struct TabResources {
 
 impl SurfaceResources for TabResources {
     fn drop_surface(&mut self) {
+        self.automatic_freeze_blocked = false;
         self.password_prompt = None;
         self.permission_prompt = None;
         for row in &mut self.downloads {
@@ -60,7 +62,9 @@ mod tests {
             username_field: None,
             password_field: "password".into(),
         });
+        tab.resources_mut().automatic_freeze_blocked = true;
         tab.discard().unwrap();
+        assert!(!tab.resources().automatic_freeze_blocked);
         assert!(tab.resources().password_prompt.is_none());
         assert_eq!(
             tab.resources().downloads[0].state,

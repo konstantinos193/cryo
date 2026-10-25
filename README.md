@@ -24,20 +24,23 @@ cryo is a browser shell with one job: decide which tabs deserve to stay alive.
 It ships no HTML parser. The engine is plumbing (WebView2 on Windows, WebKitGTK
 on Linux, WKWebView on macOS), swappable behind traits, and the engineering goes
 into the policy layer instead: lifecycle, budgets, accounting. A tab that stops
-earning its RAM gets frozen. cryo takes a snapshot, destroys the webview and
-hands your memory back. Click the tab and it respawns where it left off, none
-the wiser. Discard is the same mercy killing without the keepsake.
+earning its RAM gets frozen. cryo takes a snapshot and destroys the webview.
+Click the tab and it reloads the saved URL with its zoom and mute settings.
+Discard drops the view without keeping that snapshot.
 
-Why not a tab-suspender extension? Extensions can't drop the webview — the
-renderer process keeps its memory either way. cryo owns the process, so a
-frozen tab's RAM is actually gone, not merely promised away.
+Destroying a webview releases its document, but does not guarantee that its
+renderer process exits. WebView2 can share renderers between views; memory
+reclamation can be delayed, and browser/GPU overhead remains. cryo measures
+process memory before and after freezing rather than treating a tab's reported
+process memory as guaranteed savings.
 
 ## Status
 
 The shell works and tabs freeze, discard and restore on Windows, Linux and
-macOS. Phase 2 (per-tab memory accounting and budgets) is the actual thesis of
-the project and it is next. Until then a tab freezes because you asked it to,
-not because a budget told it to.
+macOS. Windows also measures WebView2 process memory and automatically freezes
+eligible background tabs under a configurable private-memory budget. Shared
+renderers are not billed to individual tabs. Linux and macOS do not yet have
+measured-memory enforcement.
 
 What exists today:
 
@@ -163,14 +166,43 @@ CI gates: `cargo fmt`, `cargo clippy -D warnings`, `cargo build`, `cargo test`.
 `.devin/tools/keys.ps1` drives a running window with SendKeys for manual
 shortcut testing (`keys.ps1 -Keys "^t"` = Ctrl+T).
 
+## Memory budget (Windows)
+
+The default budget is 1024 MiB of WebView2 environment private committed memory,
+including browser/GPU process overhead. It excludes Cryo's host process and GPU
+device allocations. Set a positive integer before launch to change it:
+
+```powershell
+$env:CRYO_MEMORY_BUDGET_MIB = "768"
+cargo run
+```
+
+This is a soft budget, not an OS-enforced RAM ceiling. Every five seconds Cryo
+samples memory. Two over-budget samples start enforcement; it stops at 90% of
+the budget. Each decision freezes at most one least-recently-used eligible tab,
+then waits 15 seconds and remeasures. If less than 1 MiB was reclaimed, further
+freezing backs off for 60 seconds.
+
+Foreground tabs, loading pages, active/paused downloads, audio (including unknown
+audio state), pending prompts, and recently used/new/restored views are protected.
+A background tab must remain unfocused for two minutes before automatic freezing.
+Top-level user input and camera/microphone permission requests conservatively
+protect that view until it is manually frozen, discarded or closed. This does
+not detect every kind of unsaved application state, including embedded-frame
+editors. Non-HTTP(S) pages are excluded from automatic freezing.
+
+The budget can remain exceeded when all remaining tabs are protected or shared
+engine overhead cannot be reclaimed. Manual freeze and restore remain available;
+there is no longer a 24-live-view cap.
+
 ## Roadmap
 
 - [x] Phase 0: shell. Window, tabs, navigation, shortcuts, incognito.
 - [x] Phase 1: tab lifecycle. Freeze, discard, restore.
 - [x] The parts a browser needs anyway: bookmarks, vault, downloads, history,
   import/export, self-update.
-- [ ] Phase 2: per-tab memory accounting and budgets, so the freezing stops
-  being vibes-based.
+- [ ] Phase 2: finish per-tab attribution and cross-platform memory accounting.
+  Windows process accounting and configurable measured budgets are implemented.
 - [ ] Phase 3: memory dashboard (the real `Shift+Esc`).
 - [ ] Phase 4: a WebExtensions (MV3) surface.
 - [ ] Phase 5: evaluate Servo as a second engine backend. If it earns the slot.

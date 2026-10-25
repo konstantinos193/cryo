@@ -33,6 +33,7 @@ pub(super) enum PasswordPrompt {
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum PageCommand {
+    Edited {},
     Focus {
         username_field: Option<String>,
         password_field: String,
@@ -79,6 +80,12 @@ impl App {
             return Ok(());
         };
         match command {
+            PageCommand::Edited {} => {
+                if let Some(tab) = self.registry.get_mut(id) {
+                    tab.resources_mut().automatic_freeze_blocked = true;
+                }
+                Ok(())
+            }
             PageCommand::Focus {
                 username_field,
                 password_field,
@@ -285,6 +292,17 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edit_reports_are_bounded_and_ignore_programmatic_input() {
+        assert!(matches!(
+            serde_json::from_str::<PageCommand>(r#"{"kind":"edited"}"#),
+            Ok(PageCommand::Edited {})
+        ));
+        assert!(serde_json::from_str::<PageCommand>(r#"{"kind":"edited","clean":true}"#).is_err());
+        assert!(PAGE_SCRIPT.contains("edited || !event.isTrusted"));
+        assert!(PAGE_SCRIPT.contains("edited = true"));
+    }
 
     #[test]
     fn page_wire_rejects_unknown_fields() {

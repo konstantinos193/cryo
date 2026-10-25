@@ -21,6 +21,8 @@ mod chrome;
 mod downloads;
 mod dragout;
 mod events;
+#[cfg(all(test, target_os = "windows"))]
+mod freeze_probe;
 mod keys;
 mod library;
 mod permissions;
@@ -34,7 +36,7 @@ mod window;
 use std::rc::Rc;
 use std::time::Duration;
 
-use tao::event::{Event, StartCause, WindowEvent};
+use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopProxy};
 use tao::keyboard::ModifiersState;
 use tao::window::Window;
@@ -60,7 +62,7 @@ pub(crate) const DEFAULT_URL: &str = "about:blank";
 
 /// How often the event loop wakes to give cold background tabs a
 /// suspended renderer (`suspend_idle_views` does the deciding).
-pub(crate) const IDLE_TICK: Duration = Duration::from_secs(15);
+pub(crate) const IDLE_TICK: Duration = Duration::from_secs(5);
 
 /// The address to hand the engine for a tab's domain URL. `about:blank`
 /// is a never-painting document in WebView2 — the internal new-tab page
@@ -147,6 +149,10 @@ pub enum AppEvent {
     /// A store's background write failed — what was kept in memory did
     /// not reach the disk. Carries the store's own account of why.
     StoreFailed(String),
+    MemoryMeasured(u64, crate::engine::accounting::MemorySnapshot),
+    /// A backend that drives its own loop inside ours asked for a turn —
+    /// Servo's `EventLoopWaker` posts these; wry never does.
+    EngineWake,
 }
 
 /// The registry as the app holds it: every tab owns its engine surface.
@@ -155,6 +161,7 @@ type Tabs = TabRegistry<Box<dyn ContentView>, TabResources>;
 pub struct App {
     window: Rc<Window>,
     engine: Rc<dyn Engine>,
+    memory_budget: crate::memory::BudgetEnforcer,
     /// The clock freeze times are stamped through (AGENTS §6) — the
     /// composition root injects it so budget policy and tests control
     /// what "now" means.
@@ -299,7 +306,9 @@ impl App {
 
         let chrome = Self::spawn_chrome(&*engine, &proxy, chrome_rect)?;
 
+        let memory_budget = crate::memory::BudgetEnforcer::new(Default::default(), clock.now());
         Ok(Self {
+            memory_budget,
             window,
             engine,
             clock,
@@ -335,6 +344,9 @@ impl App {
         if self.exiting {
             return;
         }
+        // Every dispatch is also a turn for a backend with its own loop —
+        // cheap for wry (no-op), what keeps Servo's pages moving.
+        self.engine.spin_event_loop();
         match event {
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => self.request_exit(control_flow),
@@ -344,7 +356,6 @@ impl App {
                 _ => {}
             },
             Event::UserEvent(e) => self.dispatch(e, control_flow),
-            Event::NewEvents(StartCause::ResumeTimeReached { .. }) => self.suspend_idle_views(),
             _ => {}
         }
     }
@@ -370,6 +381,13 @@ impl App {
                     url if pages::is_internal_url(&url) => Ok(()),
                     url => self.spawn_tab(&url, true),
                 }
+            }
+            AppEvent::MemoryMeasured(sequence, snapshot) => {
+                self.on_memory_measured(sequence, snapshot)
+            }
+            AppEvent::EngineWake => {
+                self.engine.spin_event_loop();
+                Ok(())
             }
             AppEvent::FilesDropped(paths) => self.files_dropped(&paths),
             AppEvent::Imported(outcome) => self.on_imported(outcome),
