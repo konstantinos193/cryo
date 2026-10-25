@@ -25,7 +25,8 @@ pub(in crate::engine::wry_impl) fn measure(complete: MemoryCallback) -> Result<(
                 .collect();
             complete(MemorySnapshot::new(started_at, Instant::now(), processes));
         })
-        .map_err(|e| EngineError::ReadStats(e.to_string()))
+        .map_err(|e| EngineError::ReadStats(e.to_string()))?;
+    Ok(())
 }
 
 /// WebKit process names → our process kinds. Anything else in the engine
@@ -130,7 +131,10 @@ fn parse_smaps_rollup(roll: &str) -> Option<MemoryStats> {
             _ => {}
         }
     }
-    saw_private.then(|| MemoryStats::new(private, rss?))
+    if !saw_private {
+        return None;
+    }
+    Some(MemoryStats::new(private, rss?))
 }
 
 #[cfg(target_os = "linux")]
@@ -196,7 +200,7 @@ fn read_stats(id: ProcessId) -> std::io::Result<MemoryStats> {
         libc::proc_pid_rusage(
             id.0 as libc::pid_t,
             libc::RUSAGE_INFO_V4,
-            info.as_mut_ptr() as libc::rusage_info_t,
+            info.as_mut_ptr() as *mut libc::rusage_info_t,
         )
     };
     if rc != 0 {
