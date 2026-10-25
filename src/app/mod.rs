@@ -3,30 +3,34 @@
 //! else does state change hands.
 //!
 //! `impl App` is split by responsibility, one file per slice: `keys` maps
-//! input to commands, `surfaces` owns every view's birth and death (the
-//! `views`/`registry` invariant lives there), `actions` holds the user
-//! verbs and the chrome-command dispatch, `events` owns what the engine
-//! surfaces report back, `chrome` pushes state into the chrome document,
-//! `suggest` answers the omnibox, `update` runs the self-update flow,
-//! `account` tracks the Google session, `library` owns bookmarks and
-//! saved passwords, `transfer` runs the import/export flows. This file
-//! keeps the state itself, the event entry points and the window-layout
-//! plumbing.
+//! input to commands, `surfaces` owns every view's birth and death,
+//! `actions` holds the user verbs and the chrome-command dispatch,
+//! `events` owns what the engine surfaces report back, `chrome` pushes
+//! state into the chrome document, `suggest` answers the omnibox,
+//! `update` runs the self-update flow, `account` tracks the Google
+//! session, `library` owns bookmarks and saved passwords, `transfer`
+//! runs the import/export flows, and `budget` executes decisions from
+//! the memory context. This file keeps the state itself, the event
+//! entry points and the window-layout plumbing.
 
 mod account;
 mod actions;
+mod autofill;
+mod budget;
 mod chrome;
 mod downloads;
 mod dragout;
 mod events;
 mod keys;
 mod library;
+mod permissions;
+mod resources;
 mod suggest;
 mod surfaces;
 mod transfer;
 mod update;
+mod window;
 
-use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -36,15 +40,18 @@ use tao::keyboard::ModifiersState;
 use tao::window::Window;
 
 use crate::bookmarks::Keeper;
-use crate::engine::{Accelerator, ContentView, DownloadUpdate, Engine, LoadFailure, Rect};
+use crate::engine::{
+    Accelerator, ContentView, DownloadUpdate, Engine, LoadFailure, PageMessage, Rect,
+};
 use crate::persist::Recorder;
 use crate::shell;
 use crate::shell::chrome::{normalize_nav_input, ChromeCommand};
-use crate::shell::pages::NEW_TAB_URL;
+use crate::shell::pages::{self, NEW_TAB_URL};
 use crate::shell::search::SearchEngine;
-use crate::tabs::{Clock, TabId, TabRegistry};
+use crate::tabs::{Clock, TabId, TabRegistry, ViewKey};
 use crate::update::{Outcome, Update};
 use crate::vault::Vault;
+use resources::TabResources;
 
 /// Domain URL recorded for a fresh tab. The view actually loads
 /// `NEW_TAB_URL`; `about:blank` stays the tab's logical address so the
@@ -84,33 +91,44 @@ pub(crate) fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
+/// What one content surface reports about itself. Always travels inside
+/// `AppEvent::View` with the `ViewKey` the surface was spawned under —
+/// `dispatch` drops the report unless that key is still the tab's live
+/// one, so no handler below ever sees a dead surface's callback.
+pub enum ViewEvent {
+    OpenInNewTab(String),
+    Accelerator(Accelerator),
+    Permission(crate::engine::PermissionRequest),
+    TitleChanged(String),
+    /// The page's icon changed: PNG bytes, `None` when the document has
+    /// none. `None` still clears — a page without an icon drops it.
+    FaviconChanged(Option<Vec<u8>>),
+    Navigated(String),
+    /// A top-level navigation started or settled — the spinner's data
+    /// (see `LoadChangeHandler` for what counts).
+    LoadChanged(bool),
+    /// A page element entered/left DOM fullscreen (video fullscreen).
+    PageFullscreen(bool),
+    /// A navigation ended with no document, or the renderer died under one.
+    LoadFailed(LoadFailure),
+    /// A download started, progressed, or settled — the shelf.
+    Download(DownloadUpdate),
+    DownloadFolder(bool),
+    /// A trusted message from the main document.
+    PageMessage(PageMessage),
+}
+
 /// Events that reach the loop from view callbacks (`AppEvent`) — chrome
 /// IPC, title changes, navigations, keys the engine yielded to us.
 pub enum AppEvent {
     Chrome(ChromeCommand),
-    TitleChanged(TabId, String),
-    /// The page's icon changed: PNG bytes, `None` when the document has
-    /// none. `None` still clears — a page without an icon drops it.
-    FaviconChanged(TabId, Option<Vec<u8>>),
-    Navigated(TabId, String),
-    /// A view's top-level navigation started or settled — the spinner's
-    /// data (see `LoadChangeHandler` for what counts).
-    LoadChanged(TabId, bool),
+    /// A content surface reported something — see `ViewEvent`.
+    View(ViewKey, ViewEvent),
     Accelerator(Accelerator),
-    /// Page asked for a new window (target=_blank, ctrl/shift/middle-click,
-    /// window.open) — we open a tab instead.
-    OpenInNewTab(String),
     /// A second process handed its launch address over the instance pipe
     /// (external link while already running) — a new tab here, and the
     /// window it landed in gets raised.
     ExternalOpen(String),
-    /// A page element entered/left DOM fullscreen (video fullscreen).
-    PageFullscreen(TabId, bool),
-    /// A navigation ended with no document, or the renderer died under one.
-    LoadFailed(TabId, LoadFailure),
-    /// A view's download started, progressed, or settled — the shelf.
-    Download(TabId, DownloadUpdate),
-    DownloadFolder(TabId, bool),
     /// OS files landed on a view that reports drops (the chrome strip —
     /// a drag there opens each file in a tab).
     FilesDropped(Vec<std::path::PathBuf>),
@@ -126,7 +144,13 @@ pub enum AppEvent {
     /// A worker answered who the profile's Google session belongs to —
     /// `None` reads as signed out.
     GoogleSession(Option<crate::account::Session>),
+    /// A store's background write failed — what was kept in memory did
+    /// not reach the disk. Carries the store's own account of why.
+    StoreFailed(String),
 }
+
+/// The registry as the app holds it: every tab owns its engine surface.
+type Tabs = TabRegistry<Box<dyn ContentView>, TabResources>;
 
 pub struct App {
     window: Rc<Window>,
@@ -136,14 +160,9 @@ pub struct App {
     /// what "now" means.
     clock: Rc<dyn Clock>,
     proxy: EventLoopProxy<AppEvent>,
-    registry: TabRegistry,
-    /// Engine surfaces keyed by tab — a map parallel to `registry` by
-    /// necessity, not choice: a `Tab` can't hold a view without engine
-    /// types leaking into `tabs` (§3). The two stay in sync through one
-    /// rule, enforced only in `surfaces`: an entry exists exactly while
-    /// its tab is `Active` — `spawn_view_at` inserts, `drop_view`
-    /// removes for freeze, discard and close alike.
-    views: HashMap<TabId, Box<dyn ContentView>>,
+    /// Every tab, each owning its engine surface while it is live — one
+    /// collection, so no map beside it can drift out of step.
+    registry: Tabs,
     chrome: Box<dyn ContentView>,
     logical_size: (f64, f64),
     modifiers: ModifiersState,
@@ -172,6 +191,9 @@ pub struct App {
     /// Saved sign-ins, sealed at rest. Session-only in incognito, for
     /// the same reason.
     vault: Vault,
+    /// Explicit consent decisions, scoped to this window and web origin.
+    permission_grants: permissions::Grants,
+    permission_seq: u64,
     /// This window forgets everything when it closes. Imports refuse,
     /// and the library panel says why.
     incognito: bool,
@@ -185,15 +207,11 @@ pub struct App {
     /// `None` until the first look finishes — "not searched yet" and
     /// "none installed" read the same in a list and must not.
     import_sources: Option<Vec<crate::transfer::Profile>>,
-    /// The download shelf — see `downloads.rs`. Newest at the back.
-    downloads: Vec<downloads::Entry>,
+    /// Settled download records whose tabs have closed. Live transfers
+    /// belong to their tab resources; this archive cannot control a view.
+    download_archive: Vec<downloads::Entry>,
     /// Shelf key counter — chrome commands carry it back to us.
     download_seq: u64,
-    /// Tabs spawned only to host a retried download — the view must live
-    /// for the transfer's duration, so the tab closes itself when the
-    /// download settles. A set, not a map: it carries no tab data, only
-    /// which ids owe their existence to a retry.
-    retry_tabs: HashSet<TabId>,
     /// Downloaded, checksum-verified installer waiting for a restart.
     /// Surfaced as the ⋮ badge and the "Restart to update" menu item.
     pending_update: Option<Update>,
@@ -271,14 +289,12 @@ impl App {
             Some(u) if u != DEFAULT_URL => (u.clone(), u),
             _ => (DEFAULT_URL.to_string(), NEW_TAB_URL.to_string()),
         };
-        let first = registry.create(domain);
+        let first = registry.create_with(domain, |key| {
+            Self::spawn_content_view(&*engine, &proxy, content_rect, key, &load, true)
+        })?;
         if let Some(tab) = registry.get_mut(first) {
             tab.set_title("New tab".to_string());
         }
-        let first_view =
-            Self::spawn_content_view(&*engine, &proxy, content_rect, first, &load, true)?;
-        let mut views = HashMap::new();
-        views.insert(first, first_view);
         registry.set_active(first)?;
 
         let chrome = Self::spawn_chrome(&*engine, &proxy, chrome_rect)?;
@@ -289,7 +305,6 @@ impl App {
             clock,
             proxy,
             registry,
-            views,
             chrome,
             logical_size,
             modifiers: ModifiersState::empty(),
@@ -300,12 +315,13 @@ impl App {
             recorder: profile.recorder,
             bookmarks: profile.bookmarks,
             vault: profile.vault,
+            permission_grants: permissions::Grants::default(),
+            permission_seq: 0,
             incognito: profile.incognito,
             library_pane: None,
             import_sources: None,
-            downloads: Vec::new(),
+            download_archive: Vec::new(),
             download_seq: 0,
-            retry_tabs: HashSet::new(),
             pending_update: None,
             update_prompt: false,
             google: None,
@@ -344,32 +360,67 @@ impl App {
         let result = match event {
             AppEvent::Accelerator(acc) => self.on_accelerator(acc, control_flow),
             AppEvent::Chrome(cmd) => self.on_chrome(cmd, control_flow),
-            AppEvent::TitleChanged(id, title) => self.on_title_changed(id, title),
-            AppEvent::Navigated(id, url) => self.on_navigated(id, url),
-            AppEvent::FaviconChanged(id, png) => self.on_favicon_changed(id, png),
-            AppEvent::LoadChanged(id, loading) => self.on_load_changed(id, loading),
-            AppEvent::OpenInNewTab(url) => self.spawn_tab(&url, true),
+            AppEvent::View(key, event) => self.on_view_event(key, event, control_flow),
             AppEvent::ExternalOpen(url) => {
                 // The user clicked a link expecting to watch it land —
                 // the window may be minimized or behind other windows.
                 self.window.set_minimized(false);
                 self.window.set_focus();
-                self.spawn_tab(&normalize_nav_input(&url, &self.search_engine), true)
+                match normalize_nav_input(&url, &self.search_engine) {
+                    url if pages::is_internal_url(&url) => Ok(()),
+                    url => self.spawn_tab(&url, true),
+                }
             }
-            AppEvent::PageFullscreen(id, on) => self.page_fullscreen(id, on),
-            AppEvent::LoadFailed(id, failure) => self.show_error(id, failure),
-            AppEvent::Download(id, update) => self.download_update(id, update, control_flow),
-            AppEvent::DownloadFolder(id, choose) => self.download_folder_setting(id, choose),
             AppEvent::FilesDropped(paths) => self.files_dropped(&paths),
             AppEvent::Imported(outcome) => self.on_imported(outcome),
             AppEvent::ImportSources(sources) => self.on_import_sources(sources),
             AppEvent::UpdateChecked(outcome) => self.on_update(outcome, control_flow),
             AppEvent::GoogleSession(session) => self.on_google_session(session),
+            AppEvent::StoreFailed(failure) => {
+                crate::report!("store write failed: {failure}");
+                self.notice(
+                    false,
+                    "Changes have not been saved",
+                    vec![
+                        failure,
+                        "Your changes remain in memory. cryo will retry the disk write.".into(),
+                    ],
+                )
+            }
         };
-        #[cfg(debug_assertions)]
-        self.assert_views_consistent();
         if let Err(e) = result {
             crate::report!("{e:?}");
+        }
+    }
+
+    /// The one gate every surface report passes: a key that is no longer
+    /// its tab's live surface — frozen, discarded, closed, or restored
+    /// since under a newer generation — is a dead view talking, and its
+    /// report is dropped before any handler can write it into the tab.
+    fn on_view_event(
+        &mut self,
+        key: ViewKey,
+        event: ViewEvent,
+        control_flow: &mut ControlFlow,
+    ) -> anyhow::Result<()> {
+        if self.registry.live(key).is_none() {
+            return Ok(());
+        }
+        let id = key.tab();
+        match event {
+            ViewEvent::Permission(request) => self.on_permission(key, request),
+            ViewEvent::OpenInNewTab(url) if pages::is_internal_url(&url) => Ok(()),
+            ViewEvent::OpenInNewTab(url) => self.spawn_tab(&url, true),
+            ViewEvent::Accelerator(acc) => self.on_accelerator(acc, control_flow),
+            ViewEvent::TitleChanged(title) => self.on_title_changed(id, title),
+            ViewEvent::Navigated(url) => self.on_navigated(id, url),
+            ViewEvent::FaviconChanged(png) => self.on_favicon_changed(id, png),
+            ViewEvent::LoadChanged(loading) => self.on_load_changed(id, loading),
+            ViewEvent::PageFullscreen(on) => self.page_fullscreen(id, on),
+            ViewEvent::LoadFailed(failure) => self.show_error(id, failure),
+            ViewEvent::Download(update) => self.download_update(key, update, control_flow),
+            ViewEvent::DownloadFolder(choose) => self.download_folder_setting(id, choose),
+            ViewEvent::PageMessage(message) => self.on_page_message(id, message),
         }
     }
 
@@ -405,9 +456,12 @@ impl App {
 
     /// The engine surface of the selected tab, if one is live.
     pub(super) fn active_view(&self) -> Option<&dyn ContentView> {
-        self.registry
-            .active_id()
-            .and_then(|id| self.views.get(&id).map(|v| &**v))
+        self.registry.active_id().and_then(|id| self.view_of(id))
+    }
+
+    /// `id`'s live engine surface — `None` while frozen or discarded.
+    pub(super) fn view_of(&self, id: TabId) -> Option<&dyn ContentView> {
+        self.registry.get(id).and_then(|t| t.view()).map(|v| &**v)
     }
 
     fn resize(&mut self, width_px: u32, height_px: u32) {
@@ -421,8 +475,8 @@ impl App {
         }
         // A DOM-fullscreen view keeps covering the whole window on resize.
         let active = self.registry.active_id();
-        for (id, view) in &self.views {
-            let rect = if self.page_fullscreen && Some(*id) == active {
+        for (tab, view) in self.registry.views() {
+            let rect = if self.page_fullscreen && Some(tab.id()) == active {
                 Rect {
                     x: 0.0,
                     y: 0.0,

@@ -19,6 +19,9 @@ impl App {
         control_flow: &mut ControlFlow,
     ) -> anyhow::Result<()> {
         match cmd {
+            ChromeCommand::PermissionAnswer { token, allow } => {
+                self.answer_permission_prompt(token, allow)
+            }
             ChromeCommand::Ready { engine } => {
                 self.note_search_engine(engine);
                 // First paint of a window — the one moment the account
@@ -90,9 +93,15 @@ impl App {
             ChromeCommand::PasswordReveal { origin, username } => {
                 self.reveal_password(&origin, &username)
             }
+            ChromeCommand::PasswordCopy { origin, username } => {
+                self.copy_password(&origin, &username)
+            }
             ChromeCommand::PasswordRemove { origin, username } => {
                 self.remove_password(&origin, &username)
             }
+            ChromeCommand::PasswordFill { username } => self.fill_password(&username),
+            ChromeCommand::PasswordSave {} => self.save_password(),
+            ChromeCommand::PasswordPromptClose {} => self.close_password_prompt(),
             ChromeCommand::ImportFile {} => self.import_file(),
             ChromeCommand::ImportProfile { index } => self.import_profile(index),
             ChromeCommand::Export { what } => self.export(&what),
@@ -142,7 +151,7 @@ impl App {
         }
         // Frozen, discarded, and reopened tabs have no surface — clicking
         // them is what "restore" means.
-        if !self.views.contains_key(&id) {
+        if self.view_of(id).is_none() {
             self.restore_view(id)?;
         }
         self.registry.set_active(id)?;
@@ -154,7 +163,7 @@ impl App {
         if let Some(tab) = self.registry.get_mut(id) {
             tab.note_focused();
         }
-        if let Some(view) = self.views.get(&id) {
+        if let Some(view) = self.view_of(id) {
             let (_, content_rect) = shell::layout(self.logical_size.0, self.logical_size.1);
             // Show before hiding: the incoming view becomes visible while
             // the outgoing one is still painted, so no frame ever shows
@@ -171,7 +180,7 @@ impl App {
             view.focus()?;
             self.chrome_focused = false;
         }
-        if let Some(p) = prev.and_then(|p| self.views.get(&p)) {
+        if let Some(p) = prev.and_then(|p| self.view_of(p)) {
             p.set_visible(false)?;
         }
         self.sync_chrome()
@@ -182,20 +191,23 @@ impl App {
         id: TabId,
         control_flow: &mut ControlFlow,
     ) -> anyhow::Result<()> {
-        match self.registry.close(id)? {
-            // Reveal the neighbour first, then destroy the dead view —
-            // dropping it while it's still the only painted surface
-            // leaves a one-frame hole where the window shows through.
-            Some(next) => {
-                self.activate(next)?;
-                self.drop_view(id);
-                self.sync_chrome()
-            }
-            None => {
-                self.request_exit(control_flow);
-                Ok(())
-            }
+        let key = self.registry.get(id).and_then(|t| t.view_key());
+        self.archive_tab_downloads(id);
+        let closed = self.registry.close(id)?;
+        let Some(next) = closed.next else {
+            // The last tab: the window goes with it, surface and all.
+            self.request_exit(control_flow);
+            return Ok(());
+        };
+        // Reveal the neighbour first, then destroy the dead view —
+        // dropping it while it's still the only painted surface leaves a
+        // one-frame hole where the window shows through.
+        let shown = self.activate(next);
+        if let (Some(key), Some(view)) = (key, closed.view) {
+            self.drop_view(key, view);
         }
+        shown?;
+        self.sync_chrome()
     }
 
     pub(super) fn cycle(&mut self, offset: isize) -> anyhow::Result<()> {
@@ -210,7 +222,7 @@ impl App {
         let Some(id) = self.registry.active_id() else {
             return Ok(());
         };
-        if let Some(view) = self.views.get(&id) {
+        if let Some(view) = self.view_of(id) {
             view.load_url(content_url_for(url))?;
             // Hand keyboard focus to the page — a committed navigation in a
             // real browser moves focus out of the address bar.
@@ -284,11 +296,8 @@ impl App {
         let Some(id) = self.registry.active_id() else {
             return Ok(());
         };
-        let dup = self.registry.duplicate(id)?;
-        let url = self.registry.get(dup).map(|t| t.url().to_string());
-        let Some(url) = url else { return Ok(()) };
-        let load = content_url_for(&url).to_string();
-        self.spawn_view_for(dup, &load)
+        let dup = self.duplicate_tab(id)?;
+        self.activate(dup)
     }
 
     pub(super) fn mute_active(&mut self) -> anyhow::Result<()> {

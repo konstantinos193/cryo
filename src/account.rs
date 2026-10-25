@@ -120,11 +120,7 @@ pub fn is_google_url(url: &str) -> bool {
 /// query or a `/u/N` path segment both count as the page having chosen.
 /// `None` leaves the navigation alone.
 pub fn with_authuser(url: &str, index: usize) -> Option<String> {
-    if index == 0
-        || !is_google_url(url)
-        || url.contains("authuser=")
-        || url.contains("/u/")
-    {
+    if index == 0 || !is_google_url(url) || url.contains("authuser=") || url.contains("/u/") {
         return None;
     }
     let (head, frag) = url.split_once('#').unwrap_or((url, ""));

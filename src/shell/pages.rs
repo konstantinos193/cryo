@@ -24,7 +24,7 @@ pub(crate) fn download_folder_request(url: &str) -> Option<bool> {
 
 /// A URL that belongs to the shell, not to any web destination.
 pub fn is_internal_url(url: &str) -> bool {
-    url.starts_with(INTERNAL_ORIGIN)
+    url::Url::parse(url).is_ok_and(|u| u.origin().ascii_serialization() == INTERNAL_ORIGIN)
 }
 
 /// Engine-facing resolver for the `cryo` scheme. wry hands us the request
@@ -32,6 +32,8 @@ pub fn is_internal_url(url: &str) -> bool {
 pub fn internal_page(path: &str) -> Option<&'static str> {
     match path {
         "/chrome" => Some(chrome::CHROME_HTML),
+        "/chrome/chrome.css" => Some(chrome::CHROME_STYLE),
+        "/chrome/app.js" => Some(chrome::CHROME_SCRIPT),
         "/newtab" => Some(NEW_TAB_HTML),
         "/settings" => Some(SETTINGS_HTML),
         "/icon.svg" => Some(include_str!("../../assets/icon.svg")),
@@ -332,7 +334,7 @@ pub const SETTINGS_HTML: &str = r##"<!doctype html>
 
   <h2>Permissions</h2>
   <table>
-    <tr><td class="k">Microphone / camera</td><td>Granted automatically — WebView2 has no prompt UI. Everything else is denied.</td></tr>
+    <tr><td class="k">Microphone / camera</td><td>Blocked until you approve the requesting secure site's prompt. Your choice lasts for this window only.</td></tr>
     <tr><td class="k">Extensions</td><td>Not supported — WebView2 cannot run Chrome extensions.</td></tr>
   </table>
 
@@ -447,6 +449,26 @@ pub const SETTINGS_HTML: &str = r##"<!doctype html>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chrome_document_assets_resolve_as_one_ordered_script() {
+        let html = internal_page("/chrome").unwrap();
+        assert!(html.contains("href=\"/chrome/chrome.css\""));
+        assert!(html.contains("src=\"/chrome/app.js\""));
+        assert_eq!(html.matches("<script").count(), 1);
+        assert!(internal_page("/chrome/chrome.css").is_some());
+        let script = internal_page("/chrome/app.js").unwrap();
+        assert!(script.find("const ipc").unwrap() < script.find("window.__cryo_update =").unwrap());
+        for name in [
+            "paintBookmarks",
+            "paintPasswords",
+            "paintHistory",
+            "paintImport",
+            "paintExport",
+        ] {
+            assert!(script.contains(&format!("const {name} =")));
+        }
+    }
 
     #[test]
     fn download_folder_requests_require_exact_settings_routes() {

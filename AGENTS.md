@@ -96,9 +96,9 @@ value objects, aggregates, domain services. That's it.
   (single-instance handoff), `update` (self-update), `account` (Google
   session detection — HTTP and foreign-wire parsing are session
   plumbing, not window UI, so it is not `shell`). `memory` is the
-  planned budgets context — it does not exist yet, but when it does a
-  `Budget` lives there and `tabs` *asks* memory rather than computing
-  budgets itself. Each context owns its vocabulary and its types. New
+  resource-policy context: it owns live-view budget selection and idle
+  eligibility; app adapters gather observations and execute its decisions.
+  Future byte `Budget` types live there as well. Each context owns its vocabulary and its types. New
   top-level modules need a PR justification — and a line in this list.
 - **Entities vs value objects — know which you're writing.**
   - *Entity*: has identity, changes over time → `Tab` (keyed by `TabId`),

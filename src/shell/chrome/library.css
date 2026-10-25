@@ -1,0 +1,331 @@
+  #permission-pop {
+    display: none; position: absolute; top: 50px; right: 20px; z-index: 100;
+    width: 340px; padding: 20px; border: 1px solid var(--line);
+    border-radius: 12px; background: var(--bg1); color: var(--tx);
+    box-shadow: 0 12px 40px #0008;
+  }
+  #permission-pop.open { display: block; }
+  #permission-pop p { overflow-wrap: anywhere; }
+  #permission-pop button { margin-right: 10px; padding: 8px; cursor: pointer; }
+  /* The library panel. Fills the window while it is open — the app has
+     stretched this view over everything by then — and dims what is
+     behind it so the page does not read as interactive. */
+  #lib {
+    display: none; position: fixed; inset: 0; z-index: 20;
+    background: rgba(5, 7, 10, .66); backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    align-items: center; justify-content: center;
+  }
+  #lib.open { display: flex; }
+  #lib .panel {
+    display: flex; flex-direction: column;
+    width: min(1040px, calc(100vw - 48px)); height: min(740px, calc(100vh - 64px));
+    background: #12151c; border: 1px solid rgba(255, 255, 255, .09);
+    border-radius: 20px;
+    box-shadow: 0 32px 90px rgba(0, 0, 0, .7), 0 0 0 1px rgba(0, 0, 0, .3);
+    overflow: hidden;
+  }
+  #lib header {
+    display: flex; align-items: center; gap: 18px;
+    min-height: 62px; padding: 10px 18px; border-bottom: 1px solid var(--line-soft);
+    background: linear-gradient(180deg, rgba(255,255,255,.03), transparent);
+  }
+  #lib .brand {
+    display: flex; align-items: center; gap: 10px; min-width: 160px;
+    color: #f3f7fb; font-size: 14px; font-weight: 650; letter-spacing: .01em;
+  }
+  #lib .brand-mark {
+    display: grid; place-items: center; width: 30px; height: 30px;
+    border: 1px solid rgba(143, 220, 240, .35); border-radius: 9px;
+    background: linear-gradient(145deg, #1b4356, #14202a); color: var(--ice);
+    box-shadow: 0 0 12px rgba(143, 220, 240, .12);
+  }
+  #lib nav {
+    display: flex; align-items: center; gap: 2px; padding: 3px;
+    background: var(--bg0); border: 1px solid var(--line-soft); border-radius: 11px;
+  }
+  #lib .tab-btn {
+    border: 0; border-radius: 8px; padding: 7px 13px;
+    background: transparent; color: var(--tx2); font: inherit; cursor: pointer;
+    transition: color .12s ease, background .12s ease;
+  }
+  #lib .tab-btn:hover { color: var(--tx); }
+  #lib .tab-btn.on {
+    background: var(--bg3); color: #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.06);
+  }
+  #lib .close {
+    display: grid; place-items: center; margin-left: auto; width: 32px; height: 32px;
+    border: 0; border-radius: 9px; background: transparent; color: var(--tx2);
+    font: inherit; font-size: 18px; line-height: 1; cursor: pointer;
+    transition: background .12s ease;
+  }
+  #lib .close:hover { background: var(--bg3); color: #fff; }
+  #lib .body { flex: 1; min-height: 0; padding: 18px 20px 22px; overflow-y: auto; }
+  #lib .body.bookmarks-body { padding: 0; overflow: hidden; }
+  #lib .search {
+    width: 100%; height: 30px; margin: 2px 0 10px;
+    background: var(--bg0); border: 1px solid var(--line); border-radius: 9px;
+    color: var(--tx); padding: 0 11px; font: inherit; outline: none;
+    transition: border-color .12s ease, box-shadow .12s ease;
+    -webkit-user-select: text; user-select: text;
+  }
+  #lib .search:focus {
+    border-color: var(--ice-deep);
+    box-shadow: 0 0 0 3px rgba(143, 220, 240, .12);
+  }
+  .lrow {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 8px; border-radius: 9px;
+    transition: background .1s ease;
+  }
+  .lrow + .lrow { margin-top: 1px; }
+  .lrow:hover { background: rgba(255, 255, 255, .04); }
+  .lrow .main { flex: 1 1 auto; min-width: 0; }
+  .lrow .t, .lrow .u {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .lrow .u { color: var(--tx3); font-size: 11px; }
+  .lrow .fold {
+    flex: 0 0 auto; color: #7fb6c9; font-size: 11px; max-width: 160px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .lrow .dots {
+    flex: 0 0 auto; color: var(--tx2); font-family: ui-monospace, Consolas, monospace;
+    -webkit-user-select: text; user-select: text;
+  }
+  .lbtn {
+    flex: 0 0 auto; border: 1px solid var(--line); border-radius: 8px;
+    padding: 5px 11px; background: transparent; color: var(--tx);
+    font: inherit; cursor: pointer; transition: background .12s ease, border-color .12s ease;
+  }
+  .lbtn:hover { background: var(--bg3); border-color: #3a4250; color: #fff; }
+  .lbtn.warn { color: #e3a9a9; border-color: rgba(224, 123, 123, .3); }
+  .lbtn.warn:hover { background: rgba(224, 123, 123, .12); border-color: rgba(224, 123, 123, .45); }
+  .lhead {
+    margin: 18px 4px 7px; color: var(--tx3); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .09em;
+  }
+  .lhead:first-child { margin-top: 4px; }
+  .lnote { margin: 8px 4px; color: var(--tx3); line-height: 1.55; }
+  .lnote.warn { color: #e3a9a9; }
+  .lempty { padding: 18px 4px; color: var(--tx3); }
+  /* Bookmarks are a retrieval surface, not a settings table. Folder
+     scope stays visible on the left while results scroll on the right. */
+  .bookmark-shell { display: flex; height: 100%; min-height: 0; }
+  .bookmark-folders {
+    width: 210px; flex: 0 0 auto; padding: 24px 12px 18px;
+    overflow-y: auto; border-right: 1px solid var(--line-soft); background: #0e1116;
+  }
+  .bookmark-folders h3 {
+    margin: 0 10px 12px; color: var(--tx3); font-size: 10px; font-weight: 700;
+    letter-spacing: .12em; text-transform: uppercase;
+  }
+  .folder-btn {
+    display: flex; align-items: center; gap: 9px; width: 100%; min-width: 0;
+    padding: 8px 10px; border: 0; border-radius: 8px; background: transparent;
+    color: var(--tx2); font: inherit; text-align: left; cursor: pointer;
+    transition: background .12s ease, color .12s ease;
+  }
+  .folder-btn:hover { background: rgba(255, 255, 255, .05); color: var(--tx); }
+  .folder-btn.on {
+    background: rgba(143, 220, 240, .1); color: var(--ice);
+    box-shadow: inset 2px 0 0 var(--ice-deep);
+  }
+  .folder-btn svg { width: 15px; height: 15px; flex: 0 0 auto; }
+  .folder-btn .folder-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .folder-btn .folder-count {
+    margin-left: auto; color: var(--tx3); font-size: 10px; font-variant-numeric: tabular-nums;
+  }
+  .folder-btn.on .folder-count { color: #83b9c4; }
+  .bookmark-main { display: flex; flex: 1; min-width: 0; flex-direction: column; }
+  .bookmark-top { padding: 25px 28px 17px; border-bottom: 1px solid var(--line-soft); }
+  .bookmark-titlebar { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 17px; }
+  .bookmark-titlebar h2 { color: #f2f5f8; font-size: 20px; line-height: 1.2; font-weight: 650; letter-spacing: -.01em; }
+  .bookmark-subtitle { margin-top: 4px; color: var(--tx3); font-size: 11px; }
+  .bookmark-import { margin-left: auto; }
+  .bookmark-search-row { display: flex; align-items: center; gap: 10px; }
+  .bookmark-search-wrap { position: relative; flex: 1; }
+  .bookmark-search-wrap svg {
+    position: absolute; left: 12px; top: 50%; width: 15px; height: 15px;
+    color: var(--tx3); transform: translateY(-50%); pointer-events: none;
+  }
+  #lib .bookmark-search {
+    width: 100%; height: 38px; padding: 0 38px 0 36px;
+    border: 1px solid var(--line); border-radius: 11px; outline: none;
+    background: var(--bg0); color: var(--tx); font: inherit;
+    transition: border-color .12s ease, box-shadow .12s ease;
+    -webkit-user-select: text; user-select: text;
+  }
+  #lib .bookmark-search:focus {
+    border-color: var(--ice-deep);
+    box-shadow: 0 0 0 3px rgba(143, 220, 240, .12);
+  }
+  .search-clear {
+    display: none; position: absolute; right: 7px; top: 6px; width: 26px; height: 26px;
+    border: 0; border-radius: 7px; background: transparent; color: var(--tx3); cursor: pointer;
+  }
+  .search-clear.show { display: block; }
+  .search-clear:hover { background: var(--bg3); color: #fff; }
+  /* The custom dropdown — a real <select>'s popup renders natively and
+     can't carry the theme, so sort (and settings' engine pick) are
+     button + listbox built here. */
+  .xdrop { position: relative; flex: 0 0 auto; }
+  .xdrop.open { z-index: 10; }
+  .xdrop-btn {
+    display: flex; align-items: center; gap: 8px; height: 38px;
+    padding: 0 12px; border: 1px solid var(--line); border-radius: 11px;
+    background: var(--bg0); color: var(--tx2); font: inherit; cursor: pointer;
+    transition: border-color .12s ease, color .12s ease;
+  }
+  .xdrop-btn:hover { border-color: #3a4250; color: var(--tx); }
+  .xdrop.open .xdrop-btn {
+    border-color: var(--ice-deep);
+    box-shadow: 0 0 0 3px rgba(143, 220, 240, .12); color: var(--tx);
+  }
+  .xdrop-btn svg {
+    width: 12px; height: 12px; color: var(--tx3);
+    transition: transform .15s ease;
+  }
+  .xdrop.open .xdrop-btn svg { transform: rotate(180deg); }
+  .xdrop-pop {
+    display: none; position: absolute; top: calc(100% + 6px); right: 0; z-index: 5;
+    min-width: 100%; padding: 5px;
+    background: var(--pop-bg); border: 1px solid rgba(255, 255, 255, .09);
+    border-radius: 11px; box-shadow: var(--shadow);
+    backdrop-filter: blur(18px) saturate(1.3);
+    -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  }
+  .xdrop.open .xdrop-pop { display: block; }
+  .xdrop-item {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    padding: 8px 10px; border: 0; border-radius: 7px; background: transparent;
+    color: var(--tx2); font: inherit; text-align: left; cursor: pointer;
+    white-space: nowrap; transition: background .1s ease, color .1s ease;
+  }
+  .xdrop-item:hover, .xdrop-item.sel { background: rgba(255, 255, 255, .06); color: var(--tx); }
+  .xdrop-item.on { color: var(--ice); }
+  .xdrop-item.on::before { content: '✓'; font-size: 10px; }
+  .xdrop-item:not(.on)::before { content: ''; width: 10px; }
+  .bookmark-results { flex: 1; min-height: 0; padding: 12px 18px 18px; overflow-y: auto; }
+  .bookmark-summary { padding: 2px 10px 9px; color: var(--tx3); font-size: 10px; }
+  .bookmark-card {
+    display: flex; align-items: center; gap: 12px; min-height: 58px; padding: 8px 10px;
+    border: 1px solid transparent; border-radius: 11px; cursor: pointer; outline: none;
+    transition: background .12s ease, border-color .12s ease;
+  }
+  .bookmark-card:hover, .bookmark-card:focus { background: rgba(255,255,255,.04); border-color: var(--line); }
+  .site-mark {
+    display: grid; place-items: center; width: 34px; height: 34px; flex: 0 0 auto;
+    border: 1px solid rgba(255,255,255,.08); border-radius: 10px;
+    color: #e8f4f7; font-size: 13px; font-weight: 700; text-transform: uppercase;
+  }
+  .site-fav { width: 20px; height: 20px; border-radius: 5px; }
+  .bookmark-copy { flex: 1; min-width: 0; }
+  .bookmark-name { overflow: hidden; color: var(--tx); font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  .bookmark-meta { display: flex; align-items: center; gap: 7px; margin-top: 3px; min-width: 0; color: var(--tx3); font-size: 10px; }
+  .bookmark-host { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bookmark-folder-pill {
+    max-width: 190px; padding: 1px 6px; overflow: hidden; border-radius: 5px;
+    background: var(--bg3); color: var(--tx2); text-overflow: ellipsis; white-space: nowrap;
+  }
+  .bookmark-actions { display: flex; align-items: center; gap: 3px; opacity: 0; transition: opacity .12s ease; }
+  .bookmark-card:hover .bookmark-actions, .bookmark-card:focus-within .bookmark-actions { opacity: 1; }
+  .icon-btn {
+    display: grid; place-items: center; width: 30px; height: 30px; border: 0;
+    border-radius: 8px; background: transparent; color: var(--tx3); cursor: pointer;
+    transition: background .12s ease, color .12s ease;
+  }
+  .icon-btn:hover { background: var(--bg3); color: var(--tx); }
+  .icon-btn.danger:hover { background: rgba(224, 123, 123, .14); color: #f1a5aa; }
+  .icon-btn svg { width: 15px; height: 15px; pointer-events: none; }
+  .delete-check { display: flex; align-items: center; gap: 5px; color: #d7a2a5; font-size: 10px; }
+  .delete-check button { padding: 5px 8px; border: 0; border-radius: 7px; font: inherit; cursor: pointer; }
+  .delete-check .yes { background: rgba(224, 123, 123, .3); color: #fff; }
+  .delete-check .no { background: var(--bg3); color: var(--tx); }
+  .bookmark-empty { display: grid; place-items: center; height: 100%; min-height: 220px; text-align: center; }
+  .bookmark-empty-mark {
+    display: grid; place-items: center; width: 48px; height: 48px; margin: 0 auto 12px;
+    border-radius: 14px; background: var(--bg2); border: 1px solid var(--line-soft);
+    color: #6f98a3; font-size: 22px;
+  }
+  .bookmark-empty h3 { color: #d8dde4; font-size: 13px; }
+  .bookmark-empty p { max-width: 330px; margin-top: 5px; color: var(--tx3); font-size: 11px; line-height: 1.5; }
+  @media (max-width: 720px) {
+    #lib .panel { width: calc(100vw - 20px); height: calc(100vh - 20px); }
+    #lib .brand { min-width: auto; }
+    #lib .brand span:last-child { display: none; }
+    #lib header { gap: 8px; padding-inline: 10px; }
+    #lib .tab-btn { padding-inline: 8px; }
+    .bookmark-folders { width: 54px; padding-inline: 7px; }
+    .bookmark-folders h3, .folder-name, .folder-count { display: none; }
+    .folder-btn { justify-content: center; padding-inline: 8px; }
+    .bookmark-top { padding: 18px 16px 14px; }
+  }
+  /* Password suggestions and save offers are browser chrome, never page
+     content. The ice edge and key mark make that boundary recognizable. */
+  #password-pop {
+    display: none; position: fixed; top: 84px; right: 14px; z-index: 28;
+    width: min(370px, calc(100vw - 28px)); overflow: hidden;
+    background: linear-gradient(145deg, rgba(29, 37, 47, .97), rgba(17, 21, 28, .97));
+    border: 1px solid rgba(143, 220, 240, .2); border-radius: 16px;
+    box-shadow: 0 22px 65px rgba(0, 0, 0, .62), 0 0 0 1px rgba(0, 0, 0, .2);
+    backdrop-filter: blur(22px) saturate(1.35);
+    -webkit-backdrop-filter: blur(22px) saturate(1.35);
+    transform-origin: top right; animation: password-in .15s ease-out;
+  }
+  #password-pop.open { display: block; }
+  @keyframes password-in { from { opacity: 0; transform: translateY(-5px) scale(.98); } }
+  .pw-head { display: flex; gap: 12px; padding: 16px 16px 12px; }
+  .pw-mark {
+    display: grid; place-items: center; width: 38px; height: 38px; flex: 0 0 auto;
+    border-radius: 12px; background: linear-gradient(145deg, #1d6073, #123b49);
+    color: #dff8ff; box-shadow: inset 0 1px 0 rgba(255,255,255,.13);
+  }
+  .pw-mark svg { width: 20px; height: 20px; }
+  .pw-copy { min-width: 0; flex: 1; }
+  .pw-title { color: #f2f7f9; font-size: 13px; font-weight: 650; }
+  .pw-site { margin-top: 2px; overflow: hidden; color: var(--tx3); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+  .pw-close {
+    width: 27px; height: 27px; border: 0; border-radius: 8px;
+    background: transparent; color: var(--tx3); font-size: 17px; cursor: pointer;
+  }
+  .pw-close:hover { background: rgba(255,255,255,.06); color: var(--tx); }
+  .pw-accounts { padding: 0 8px 9px; }
+  .pw-account {
+    display: flex; align-items: center; gap: 11px; width: 100%; padding: 10px;
+    border: 0; border-radius: 11px; background: transparent; color: var(--tx);
+    font: inherit; text-align: left; cursor: pointer;
+  }
+  .pw-account:hover, .pw-account:focus { outline: 0; background: rgba(143,220,240,.09); }
+  .pw-userdot {
+    display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 auto;
+    border-radius: 9px; background: var(--bg3); color: var(--ice); font-weight: 700;
+  }
+  .pw-account-copy { min-width: 0; flex: 1; }
+  .pw-account-name { overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  .pw-account-meta { margin-top: 1px; color: var(--tx3); font-size: 10px; }
+  .pw-arrow { color: #55717a; font-size: 16px; }
+  .pw-summary { padding: 0 16px 15px; color: var(--tx2); font-size: 11px; line-height: 1.55; }
+  .pw-summary strong { color: var(--tx); font-weight: 600; }
+  .pw-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 11px 14px; border-top: 1px solid var(--line-soft); background: rgba(0,0,0,.13); }
+  .pw-actions button { padding: 7px 13px; border-radius: 9px; font: inherit; font-weight: 600; cursor: pointer; }
+  .pw-later { border: 1px solid var(--line); background: transparent; color: var(--tx2); }
+  .pw-later:hover { color: var(--tx); border-color: #3d4654; }
+  .pw-primary { border: 1px solid #397f92; background: #246579; color: #f3fcff; }
+  .pw-primary:hover { background: #2b7489; }
+  /* What an import or export did. Sits bottom-right, out of the way of
+     the panel's own content, and times itself out. */
+  #toast {
+    display: none; position: fixed; right: 14px; bottom: 14px; z-index: 30;
+    max-width: 380px; padding: 11px 14px;
+    background: var(--pop-bg); border: 1px solid rgba(255, 255, 255, .09);
+    border-left: 3px solid var(--ok); border-radius: 11px;
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(18px) saturate(1.3);
+    -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  }
+  #toast.open { display: block; }
+  #toast.bad { border-left-color: var(--bad); }
+  #toast .tt { font-weight: 600; }
+  #toast .tl { color: var(--tx2); font-size: 11px; margin-top: 2px; }

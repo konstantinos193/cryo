@@ -1,6 +1,6 @@
 [package]
 name = "cryo"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 description = "A memory-obsessed browser shell written in Rust. Tabs freeze. Budgets hold."
 license = "MIT"
@@ -20,6 +20,7 @@ tao = "0.37"
 thiserror = "2"
 ureq = "3.5"
 wry = "0.57"
+url = "2"
 # Scrubs plaintext out of dropped heap — the vault's Secret and Draft.
 zeroize = "1"
 

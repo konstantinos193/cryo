@@ -19,9 +19,19 @@ pub struct Rect {
 /// plumbing never names shell pages.
 pub type PageResolver = fn(&str) -> Option<&'static str>;
 
+/// A surface's immutable authority over internal documents.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ViewAccess {
+    #[default]
+    Web,
+    Content,
+    Chrome,
+}
+
 /// View → app messages. Transport is engine-defined (on wry: a POST to
 /// `/cmd` on the internal protocol — see `wry_impl`), so Send + Sync.
 pub type IpcHandler = Box<dyn Fn(String) + Send + Sync>;
+pub type PageMessageHandler = Box<dyn Fn(PageMessage)>;
 pub type TitleHandler = Box<dyn Fn(String)>;
 /// The document's icon changed — PNG bytes of the new one, `None` when
 /// the page has none (which clears whatever icon it had before).
@@ -60,14 +70,28 @@ pub type DropHandler = Box<dyn Fn(DropEvent)>;
 /// spinner's data; sub-frame navigations don't count. Called on the
 /// event loop thread.
 pub type LoadChangeHandler = Box<dyn Fn(bool)>;
-/// A page asked for a capability — the app decides. Called on the engine's
-/// thread, so Send + Sync. Views spawned without one get the engine's
-/// default answer, which on WebView2 is a silent deny.
-pub type PermissionHandler = Box<dyn Fn(PermissionKind) -> PermissionDecision + Send + Sync>;
+/// A deferred request on the view thread. The app answers its id through
+/// `ContentView::answer_permission`; views without a callback deny requests.
+pub type PermissionHandler = Box<dyn Fn(PermissionRequest)>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PermissionId(pub u64);
+
+pub struct PermissionRequest {
+    pub id: PermissionId,
+    pub origin: String,
+    pub kind: PermissionKind,
+}
+
+/// A document-to-host message with the engine-observed source URL.
+pub struct PageMessage {
+    pub source: String,
+    pub body: String,
+}
 
 /// A capability a page requested through a browser API, in our own
 /// vocabulary. Backends map their platform permission kinds onto these.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum PermissionKind {
     Microphone,
@@ -79,9 +103,7 @@ pub enum PermissionKind {
     Other,
 }
 
-/// The app's answer to a permission request. There is no "ask later":
-/// engines that can't prompt treat indecision as deny anyway, so the
-/// handler must pick.
+/// The app's explicit answer to a deferred permission request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PermissionDecision {
     Allow,
@@ -121,6 +143,7 @@ pub struct Accelerator {
 /// loop thread.
 #[derive(Default)]
 pub struct ViewSpec {
+    pub access: ViewAccess,
     pub url: Option<String>,
     pub bounds: Rect,
     pub visible: bool,
@@ -133,6 +156,11 @@ pub struct ViewSpec {
     /// engine's default, which is white on WebView2.
     pub background: Option<(u8, u8, u8, u8)>,
     pub on_ipc: Option<IpcHandler>,
+    /// Script injected before a content document loads. Backends run it
+    /// in the main frame only, keeping embedded third-party frames out.
+    pub page_script: Option<&'static str>,
+    /// Messages from `window.ipc.postMessage` in a content document.
+    pub on_page_message: Option<PageMessageHandler>,
     pub on_title_change: Option<TitleHandler>,
     pub on_favicon: Option<FaviconHandler>,
     pub on_navigate: Option<NavigateHandler>,
@@ -176,6 +204,13 @@ impl ViewSpec {
 
 /// A live web surface. All methods are called on the event loop thread.
 pub trait ContentView {
+    fn answer_permission(
+        &self,
+        _id: PermissionId,
+        _decision: PermissionDecision,
+    ) -> Result<(), EngineError> {
+        Ok(())
+    }
     fn load_url(&self, url: &str) -> Result<(), EngineError>;
     fn reload(&self) -> Result<(), EngineError>;
     /// Reload bypassing the HTTP cache (Ctrl+F5).

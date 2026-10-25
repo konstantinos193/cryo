@@ -203,6 +203,14 @@ impl App {
         acc: Accelerator,
         control_flow: &mut ControlFlow,
     ) -> anyhow::Result<()> {
+        if self.password_prompt().is_some()
+            && acc.key == AcceleratorKey::Escape
+            && !acc.ctrl
+            && !acc.alt
+            && !acc.shift
+        {
+            return self.close_password_prompt();
+        }
         match key_command(acc) {
             Some((cmd, _)) => self.run_key_command(cmd, control_flow),
             None => Ok(()),
@@ -269,11 +277,17 @@ impl App {
     /// One accelerator callback per view. Keys the browser owns are
     /// reported to the event loop and swallowed (`steal`); everything else
     /// returns `false` so the page and the engine see it normally.
-    pub(super) fn accelerator_forwarder(proxy: &EventLoopProxy<AppEvent>) -> AcceleratorHandler {
+    pub(super) fn accelerator_forwarder(
+        proxy: &EventLoopProxy<AppEvent>,
+        view: Option<crate::tabs::ViewKey>,
+    ) -> AcceleratorHandler {
         let proxy = proxy.clone();
         Box::new(move |acc| match key_command(acc) {
             Some((_, steal)) => {
-                post(&proxy, AppEvent::Accelerator(acc));
+                let event = view.map_or(AppEvent::Accelerator(acc), |key| {
+                    AppEvent::View(key, super::ViewEvent::Accelerator(acc))
+                });
+                post(&proxy, event);
                 steal
             }
             None => false,

@@ -9,7 +9,7 @@ use tao::event_loop::ControlFlow;
 
 use crate::engine::{DownloadId, DownloadState, DownloadUpdate};
 use crate::shell::chrome::{ChromeCommand, ChromeDownload};
-use crate::tabs::TabId;
+use crate::tabs::{SurfaceResources, TabId, ViewKey};
 
 use super::dragout;
 use super::App;
@@ -17,12 +17,14 @@ use super::App;
 /// Finished rows accumulate without bound otherwise — cap the shelf.
 const SHELF_CAP: usize = 50;
 
-/// One row on the shelf. The engine identifies a download by (tab,
-/// view-local id); the wire key is an app counter so the chrome never
-/// carries the pair.
+/// One row on the shelf. The engine identifies a download by (surface,
+/// view-local id) — the surface incarnation, not just the tab: a
+/// restored tab's new view numbers its downloads from scratch, and must
+/// not land on the old view's rows. The wire key is an app counter so the
+/// chrome never carries the pair.
 pub(super) struct Entry {
     pub key: u64,
-    pub tab: TabId,
+    pub view: ViewKey,
     pub engine_id: DownloadId,
     pub name: String,
     pub path: String,
@@ -74,6 +76,27 @@ pub(super) fn file_url(path: &Path) -> String {
 }
 
 impl App {
+    fn download_entries(&self) -> impl Iterator<Item = &Entry> {
+        self.download_archive.iter().chain(
+            self.registry
+                .iter()
+                .flat_map(|tab| tab.resources().downloads.iter()),
+        )
+    }
+
+    pub(super) fn archive_tab_downloads(&mut self, id: TabId) {
+        if let Some(tab) = self.registry.get_mut(id) {
+            tab.resources_mut().drop_surface();
+            let rows = std::mem::take(&mut tab.resources_mut().downloads);
+            self.download_archive.extend(rows);
+        }
+        if self.download_archive.len() > SHELF_CAP {
+            self.download_archive.sort_by_key(|e| e.key);
+            self.download_archive
+                .drain(..self.download_archive.len() - SHELF_CAP);
+        }
+    }
+
     pub(super) fn download_folder_setting(&self, id: TabId, choose: bool) -> anyhow::Result<()> {
         if self
             .registry
@@ -82,7 +105,7 @@ impl App {
         {
             return Ok(());
         }
-        let Some(view) = self.views.get(&id) else {
+        let Some(view) = self.view_of(id) else {
             return Ok(());
         };
         let result = (|| -> Result<_, crate::engine::EngineError> {
@@ -119,15 +142,18 @@ impl App {
     /// repaint chrome.
     pub(super) fn download_update(
         &mut self,
-        tab: TabId,
+        view: ViewKey,
         u: DownloadUpdate,
         control_flow: &mut ControlFlow,
     ) -> anyhow::Result<()> {
         let terminal = !matches!(u.state, DownloadState::InProgress | DownloadState::Paused);
-        let inserted = match self
-            .downloads
+        let Some(tab) = self.registry.get_mut(view.tab()) else {
+            return Ok(());
+        };
+        let rows = &mut tab.resources_mut().downloads;
+        let inserted = match rows
             .iter_mut()
-            .find(|e| e.tab == tab && e.engine_id == u.id)
+            .find(|e| e.view == view && e.engine_id == u.id)
         {
             Some(e) => {
                 e.received = u.received;
@@ -138,9 +164,9 @@ impl App {
             }
             None => {
                 self.download_seq += 1;
-                self.downloads.push(Entry {
+                rows.push(Entry {
                     key: self.download_seq,
-                    tab,
+                    view,
                     engine_id: u.id,
                     name: u.name,
                     path: u.path,
@@ -149,9 +175,9 @@ impl App {
                     total: u.total,
                     state: u.state,
                 });
-                if self.downloads.len() > SHELF_CAP {
-                    let drop = self.downloads.len() - SHELF_CAP;
-                    self.downloads.drain(..drop);
+                if rows.len() > SHELF_CAP {
+                    let drop = rows.len() - SHELF_CAP;
+                    rows.drain(..drop);
                 }
                 true
             }
@@ -161,7 +187,14 @@ impl App {
         // transfer settles the tab is litter: close it like Chrome's
         // invisible retry would. Kept if it's the last tab standing —
         // closing then would exit the window mid-action.
-        if terminal && self.retry_tabs.remove(&tab) && self.registry.len() > 1 {
+        let tab = view.tab();
+        if terminal
+            && self
+                .registry
+                .get_mut(tab)
+                .is_some_and(|t| t.release_retry())
+            && self.registry.len() > 1
+        {
             return self.close_tab(tab, control_flow);
         }
         // A new row changes more than the shelf — the ⬇ button appears —
@@ -183,16 +216,13 @@ impl App {
         Ok(())
     }
 
-    /// `id`'s view is gone — anything it was downloading died with it.
-    /// The surface teardown paths call this before the view drops.
-    pub(super) fn drop_downloads_of(&mut self, tab: TabId) {
-        self.retry_tabs.remove(&tab);
-        for e in &mut self.downloads {
-            if e.tab == tab && matches!(e.state, DownloadState::InProgress | DownloadState::Paused)
-            {
-                e.state = DownloadState::Interrupted;
-            }
-        }
+    /// The live surface that owns row `e`'s transfer — `None` once that
+    /// incarnation is gone, even if its tab has a newer one.
+    fn owning_view(&self, e: &Entry) -> Option<&dyn crate::engine::ContentView> {
+        self.registry
+            .live(e.view)
+            .and_then(|t| t.view())
+            .map(|v| &**v)
     }
 
     /// The shelf's command family — `on_chrome` hands the whole
@@ -225,8 +255,8 @@ impl App {
     /// row whose view already left has nothing to cancel; the shelf
     /// entry already shows its terminal state.
     pub(super) fn cancel_download(&mut self, key: u64) -> anyhow::Result<()> {
-        if let Some(e) = self.downloads.iter().find(|e| e.key == key) {
-            if let Some(view) = self.views.get(&e.tab) {
+        if let Some(e) = self.download_entries().find(|e| e.key == key) {
+            if let Some(view) = self.owning_view(e) {
                 view.cancel_download(e.engine_id)?;
             }
         }
@@ -236,8 +266,8 @@ impl App {
     /// The ⏸ on a live row — the transfer holds, resumable, until ▶
     /// or ✕. Same reach-back path as cancel.
     pub(super) fn pause_download(&mut self, key: u64) -> anyhow::Result<()> {
-        if let Some(e) = self.downloads.iter().find(|e| e.key == key) {
-            if let Some(view) = self.views.get(&e.tab) {
+        if let Some(e) = self.download_entries().find(|e| e.key == key) {
+            if let Some(view) = self.owning_view(e) {
                 view.pause_download(e.engine_id)?;
             }
         }
@@ -246,8 +276,8 @@ impl App {
 
     /// The ▶ on a paused row.
     pub(super) fn resume_download(&mut self, key: u64) -> anyhow::Result<()> {
-        if let Some(e) = self.downloads.iter().find(|e| e.key == key) {
-            if let Some(view) = self.views.get(&e.tab) {
+        if let Some(e) = self.download_entries().find(|e| e.key == key) {
+            if let Some(view) = self.owning_view(e) {
                 view.resume_download(e.engine_id)?;
             }
         }
@@ -257,8 +287,7 @@ impl App {
     /// Click on a finished row — the file opens with its default app.
     pub(super) fn open_download(&self, key: u64) {
         if let Some(e) = self
-            .downloads
-            .iter()
+            .download_entries()
             .find(|e| e.key == key && e.state == DownloadState::Done)
         {
             open_path(&e.path);
@@ -270,8 +299,7 @@ impl App {
     /// the strip opens it (the `FilesDropped` path).
     pub(super) fn drag_download(&self, key: u64) {
         if let Some(e) = self
-            .downloads
-            .iter()
+            .download_entries()
             .find(|e| e.key == key && e.state == DownloadState::Done)
         {
             dragout::drag_file(Path::new(&e.path));
@@ -282,7 +310,7 @@ impl App {
     /// recorded URI, which restarts the download; the tab closes itself
     /// when the transfer settles (see `download_update`).
     pub(super) fn retry_download(&mut self, key: u64) -> anyhow::Result<()> {
-        let Some(e) = self.downloads.iter().find(|e| e.key == key) else {
+        let Some(e) = self.download_entries().find(|e| e.key == key) else {
             return Ok(());
         };
         if e.uri.is_empty() {
@@ -290,19 +318,18 @@ impl App {
         }
         let uri = e.uri.clone();
         let name = e.name.clone();
-        let id = self.registry.create(uri.clone());
+        let id = self.open_tab(uri.clone(), &uri)?;
         if let Some(tab) = self.registry.get_mut(id) {
             tab.set_title(name);
+            tab.host_retry();
         }
-        self.spawn_view_at(id, &uri)?;
-        self.retry_tabs.insert(id);
         self.sync_chrome()
     }
 
     /// The 📁 on a finished row — Explorer selects the file. Errors go
     /// to the reporting seam: the row stays put either way.
     pub(super) fn reveal_download(&self, key: u64) {
-        let Some(e) = self.downloads.iter().find(|e| e.key == key) else {
+        let Some(e) = self.download_entries().find(|e| e.key == key) else {
             return;
         };
         #[cfg(target_os = "windows")]
@@ -319,16 +346,21 @@ impl App {
     /// "Clear finished" drops every settled row; live ones (including
     /// paused — still resumable) stay.
     pub(super) fn clear_finished_downloads(&mut self) -> anyhow::Result<()> {
-        self.downloads
-            .retain(|e| matches!(e.state, DownloadState::InProgress | DownloadState::Paused));
+        self.download_archive.clear();
+        for tab in self.registry.iter_mut() {
+            tab.resources_mut()
+                .downloads
+                .retain(|e| matches!(e.state, DownloadState::InProgress | DownloadState::Paused));
+        }
         self.sync_chrome()
     }
 
     /// Newest first — the order the popover paints.
     pub(super) fn download_rows(&self) -> Vec<ChromeDownload> {
-        self.downloads
-            .iter()
-            .rev()
+        let mut rows: Vec<_> = self.download_entries().collect();
+        rows.sort_by_key(|e| std::cmp::Reverse(e.key));
+        rows.into_iter()
+            .take(SHELF_CAP)
             .map(|e| ChromeDownload {
                 key: e.key,
                 name: e.name.clone(),

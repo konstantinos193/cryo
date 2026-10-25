@@ -14,19 +14,24 @@ mod downloads;
 mod events;
 #[cfg(target_os = "windows")]
 mod ops;
+#[cfg(target_os = "windows")]
+mod permission_profile;
+#[cfg(target_os = "windows")]
+mod permissions;
 mod protocol;
 mod view;
 
 use std::rc::Rc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use raw_window_handle::{RawWindowHandle, WindowHandle};
 use wry::dpi::{LogicalPosition, LogicalSize, Position, Size};
 #[cfg(target_os = "windows")]
 use wry::WebViewBuilderExtWindows;
-use wry::{
-    NewWindowResponse, PermissionKind as WryPermissionKind, PermissionResponse, Rect as WryRect,
-    WebViewBuilder,
-};
+use wry::{NewWindowResponse, Rect as WryRect, WebViewBuilder};
 
 #[cfg(target_os = "windows")]
 use delay::Delayer;
@@ -34,8 +39,7 @@ use protocol::INTERNAL_SCHEME;
 use view::{Handlers, WryView};
 
 use crate::engine::{
-    ContentView, DropEvent, Engine, EngineError, PageResolver, PermissionDecision, PermissionKind,
-    Rect, ViewSpec,
+    ContentView, DropEvent, Engine, EngineError, PageMessage, PageResolver, Rect, ViewSpec,
 };
 
 pub struct WryEngine {
@@ -63,19 +67,6 @@ impl WryEngine {
             #[cfg(target_os = "windows")]
             delayer: Delayer::new(),
         }
-    }
-}
-
-/// wry's permission kinds → our vocabulary. Everything wry doesn't name
-/// (autoplay, sensors, fonts, ...) collapses to `Other`.
-fn permission_kind(kind: WryPermissionKind) -> PermissionKind {
-    match kind {
-        WryPermissionKind::Microphone => PermissionKind::Microphone,
-        WryPermissionKind::Camera => PermissionKind::Camera,
-        WryPermissionKind::Geolocation => PermissionKind::Geolocation,
-        WryPermissionKind::Notifications => PermissionKind::Notifications,
-        WryPermissionKind::ClipboardRead => PermissionKind::ClipboardRead,
-        _ => PermissionKind::Other,
     }
 }
 
@@ -129,6 +120,12 @@ fn browser_args() -> String {
 
 impl Engine for WryEngine {
     fn spawn(&self, spec: ViewSpec) -> Result<Box<dyn ContentView>, EngineError> {
+        let access = spec.access;
+        let internal = Arc::new(AtomicBool::new(
+            spec.url.as_deref().is_some_and(protocol::internal_url),
+        ));
+        let protocol_internal = internal.clone();
+        let profile_ready = Arc::new(AtomicBool::new(!cfg!(target_os = "windows")));
         let resolve_page = self.resolve_page;
         let on_ipc = spec.on_ipc;
         let builder = WebViewBuilder::new()
@@ -142,7 +139,7 @@ impl Engine for WryEngine {
             // The scheme exists for chrome IPC as much as for pages —
             // see `protocol::respond` for why it must be a real URL.
             .with_custom_protocol(INTERNAL_SCHEME.into(), move |_id, request| {
-                protocol::respond(&request, &on_ipc, resolve_page)
+                protocol::respond(&request, &on_ipc, resolve_page, access, &protocol_internal)
             });
 
         if self.incognito {
@@ -151,8 +148,21 @@ impl Engine for WryEngine {
         if let Some(background) = spec.background {
             builder = builder.with_background_color(background);
         }
-        if let Some(url) = spec.url {
-            builder = builder.with_url(&url);
+        if let Some(script) = spec.page_script {
+            builder = builder.with_initialization_script_for_main_only(script, true);
+        }
+        if let Some(on_message) = spec.on_page_message {
+            builder = builder.with_ipc_handler(move |request| {
+                on_message(PageMessage {
+                    source: request.uri().to_string(),
+                    body: request.into_body(),
+                });
+            });
+        }
+        let initial_url = spec.url;
+        #[cfg(not(target_os = "windows"))]
+        if let Some(url) = &initial_url {
+            builder = builder.with_url(url);
         }
         if let Some(on_title) = spec.on_title_change {
             builder = builder.with_document_title_changed_handler(on_title);
@@ -161,10 +171,33 @@ impl Engine for WryEngine {
         // reports through it (a navigation that became a download re-reports
         // the address the view still shows).
         let on_navigate: Option<Rc<dyn Fn(String) -> bool>> = spec.on_navigate.map(Rc::from);
-        if let Some(on_nav) = &on_navigate {
-            let on_nav = on_nav.clone();
-            builder = builder.with_navigation_handler(move |uri| on_nav(uri));
-        }
+        let on_nav = on_navigate.clone();
+        let navigation_internal = internal.clone();
+        let navigation_ready = profile_ready.clone();
+        builder = builder.with_navigation_handler(move |uri| {
+            let is_internal = protocol::internal_url(&uri);
+            if !is_internal && uri != "about:blank" && !navigation_ready.load(Ordering::Acquire) {
+                return false;
+            }
+            let path = url::Url::parse(&uri).ok().map(|u| u.path().to_string());
+            if access == crate::engine::ViewAccess::Chrome
+                && (!is_internal || path.as_deref() != Some("/chrome"))
+            {
+                return false;
+            }
+            if is_internal
+                && !path.as_deref().is_some_and(|p| {
+                    protocol::allowed(access, navigation_internal.load(Ordering::Acquire), p)
+                })
+            {
+                return false;
+            }
+            let accepted = on_nav.as_ref().is_none_or(|cb| cb(uri));
+            if accepted && !is_internal {
+                navigation_internal.store(false, Ordering::Release);
+            }
+            accepted
+        });
         if let Some(on_new_window) = spec.on_new_window {
             builder = builder.with_new_window_req_handler(move |url, _features| {
                 on_new_window(url);
@@ -172,13 +205,9 @@ impl Engine for WryEngine {
             });
             builder = builder.with_initialization_script(AUX_CLICK_JS);
         }
-        if let Some(on_permission) = spec.on_permission {
-            builder = builder.with_permission_handler(move |kind| {
-                match on_permission(permission_kind(kind)) {
-                    PermissionDecision::Allow => PermissionResponse::Allow,
-                    PermissionDecision::Deny => PermissionResponse::Deny,
-                }
-            });
+        #[cfg(not(target_os = "windows"))]
+        {
+            builder = builder.with_permission_handler(|_| wry::PermissionResponse::Deny);
         }
         if let Some(on_drop) = spec.on_drop {
             builder = builder.with_drag_drop_handler(move |event| {
@@ -205,9 +234,13 @@ impl Engine for WryEngine {
         let view = builder
             .build_as_child(&parent)
             .map_err(|e| EngineError::Spawn(e.to_string()))?;
-        WryView::new(
+        let view = WryView::new(
             view,
+            internal,
+            profile_ready,
             Handlers {
+                #[cfg(target_os = "windows")]
+                on_permission: spec.on_permission,
                 #[cfg(target_os = "windows")]
                 on_accelerator: spec.on_accelerator,
                 #[cfg(target_os = "windows")]
@@ -225,8 +258,12 @@ impl Engine for WryEngine {
                 #[cfg(target_os = "windows")]
                 delayer: self.delayer.clone(),
             },
-        )
-        .map(|v| Box::new(v) as Box<dyn ContentView>)
+        )?;
+        #[cfg(target_os = "windows")]
+        if let Some(url) = initial_url {
+            view.load_url(&url)?;
+        }
+        Ok(Box::new(view) as Box<dyn ContentView>)
     }
 }
 

@@ -1,7 +1,7 @@
 //! cryo — a memory-obsessed browser shell.
 //!
 //! `run()` builds the window, engine and app, then hands the thread to the
-//! tao event loop and never returns.
+//! tao event loop. After it returns, disk workers drain before process exit.
 
 /// The one reporting seam: a message with no user-facing surface goes
 /// through `crate::report!`, so the `cryo: ` prefix and the sink exist
@@ -19,6 +19,7 @@ pub mod app;
 pub mod bookmarks;
 pub mod engine;
 pub mod instance;
+mod memory;
 pub mod persist;
 pub mod shell;
 pub mod tabs;
@@ -31,6 +32,7 @@ use std::rc::Rc;
 use raw_window_handle::HasWindowHandle;
 use tao::dpi::LogicalSize;
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
+use tao::platform::run_return::EventLoopExtRunReturn;
 use tao::window::WindowBuilder;
 
 use crate::app::{App, AppEvent};
@@ -158,7 +160,7 @@ pub(crate) fn test_dir(tag: &str) -> std::path::PathBuf {
 }
 
 pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyhow::Result<()> {
-    let event_loop = EventLoopBuilder::<AppEvent>::with_user_event().build();
+    let mut event_loop = EventLoopBuilder::<AppEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
 
     // Who are we, before a window is paid for? The first normal window
@@ -219,7 +221,7 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
     // bookmarks as JSON, the vault sealed by DPAPI against this Windows
     // account. The composition root is the only place that names a path
     // or picks a protector (AGENTS §5).
-    let profile = if incognito {
+    let mut profile = if incognito {
         app::Profile::session_only()
     } else {
         app::Profile {
@@ -236,6 +238,26 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
             incognito: false,
         }
     };
+    let mut writers = Vec::new();
+    if !incognito {
+        if let Some(recorder) = &mut profile.recorder {
+            let proxy = proxy.clone();
+            writers
+                .push(recorder.background(move |e| app::post(&proxy, AppEvent::StoreFailed(e)))?);
+        }
+        let bookmark_proxy = proxy.clone();
+        writers.push(
+            profile
+                .bookmarks
+                .background(move |e| app::post(&bookmark_proxy, AppEvent::StoreFailed(e)))?,
+        );
+        let vault_proxy = proxy.clone();
+        writers.push(
+            profile
+                .vault
+                .background(move |e| app::post(&vault_proxy, AppEvent::StoreFailed(e)))?,
+        );
+    }
     let mut app = App::new(
         window,
         engine,
@@ -245,13 +267,15 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
         profile,
     )?;
 
-    event_loop.run(move |event, _target, control_flow| {
+    event_loop.run_return(move |event, _target, control_flow| {
         // A heartbeat, not a poll: the loop wakes at least this often so
         // background tabs that have gone cold can be suspended — the
         // timer is the event loop's own, no second thread (AGENTS §9).
         *control_flow = ControlFlow::WaitUntil(std::time::Instant::now() + app::IDLE_TICK);
         app.handle_event(event, control_flow);
     });
+    drop(writers);
+    Ok(())
 }
 
 /// The vault's protector, chosen here at the composition root (AGENTS

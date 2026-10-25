@@ -1,38 +1,23 @@
 //! Engine surfaces: spawning the chrome and content views, and the
-//! freeze/discard/restore lifecycle that maps `Tab` states onto live
-//! `ContentView`s in `self.views`.
+//! freeze/discard/restore lifecycle. A live tab owns its `ContentView`
+//! inside the registry; every surface is spawned under the `ViewKey` its
+//! callbacks report with, so a dropped surface's reports die at the gate
+//! in `App::on_view_event`.
 
 use std::sync::Mutex;
-use std::time::Duration;
 
 use tao::event_loop::EventLoopProxy;
-use tao::window::Fullscreen;
 
-use crate::engine::{
-    ContentView, DownloadState, DropEvent, Engine, LoadFailure, PermissionDecision, PermissionKind,
-    Rect, ViewSpec,
-};
+use crate::engine::{ContentView, DropEvent, Engine, LoadFailure, Rect, ViewSpec};
 use crate::shell::chrome::ChromeCommand;
-use crate::shell::pages::{CHROME_URL, NEW_TAB_URL};
+use crate::shell::pages::{self, CHROME_URL, NEW_TAB_URL};
 use crate::shell::{self, error};
-use crate::tabs::{TabId, TabSnapshot, TabState};
+use crate::tabs::{TabId, TabSnapshot, ViewKey};
 
-use super::{content_url_for, post, App, AppEvent, DEFAULT_URL};
-
-/// The view budget, counted in live surfaces: the Phase 2 byte budgets'
-/// stand-in. A live WebView2 is the only heavyweight the app holds —
-/// past this many, spawning a view freezes the coldest background tab
-/// to pay for the new one. Uncapped views are the "eat until something
-/// dies" behavior the shell exists to refuse.
-const MAX_VIEWS: usize = 24;
+use super::{content_url_for, post, App, AppEvent, ViewEvent, DEFAULT_URL};
 
 /// Hard bound on strip entries, live or frozen — see `tab_limit_notice`.
 const MAX_TABS: usize = 200;
-
-/// A background tab hidden this long earns a suspended renderer — the
-/// freeze machinery's lighter cousin applied by the clock rather than
-/// the view count.
-const SUSPEND_AFTER: Duration = Duration::from_secs(60);
 
 impl App {
     /// The chrome strip view: transparent so the content shows through
@@ -49,11 +34,12 @@ impl App {
         let ipc_proxy = Mutex::new(proxy.clone());
         let drop_proxy = proxy.clone();
         let chrome = engine.spawn(ViewSpec {
+            access: crate::engine::ViewAccess::Chrome,
             bounds,
             visible: true,
             transparent: true,
             background: Some(shell::CHROME_BACKGROUND),
-            on_accelerator: Some(Self::accelerator_forwarder(proxy)),
+            on_accelerator: Some(Self::accelerator_forwarder(proxy, None)),
             // File drops on the strip are ours, not the document's: a
             // file landing anywhere on it (a shelf row dragged back, or
             // one dragged in from Explorer) opens in a new tab.
@@ -68,135 +54,125 @@ impl App {
                     post(&proxy, AppEvent::Chrome(cmd));
                 }
             })),
+            // The strip is the one surface that may load the chrome
+            // document — and the only one with a command channel.
             ..ViewSpec::url(CHROME_URL)
         })?;
         Ok(chrome)
     }
 
+    /// Spawn a content surface whose every report carries `key` — the
+    /// incarnation it belongs to, so the app can tell a dead surface's
+    /// late callbacks from the live one's.
     pub(super) fn spawn_content_view(
         engine: &dyn Engine,
         proxy: &EventLoopProxy<AppEvent>,
         content_rect: Rect,
-        id: TabId,
+        key: ViewKey,
         url: &str,
         visible: bool,
     ) -> anyhow::Result<Box<dyn ContentView>> {
-        let title_proxy = proxy.clone();
-        let nav_proxy = proxy.clone();
-        let fav_proxy = proxy.clone();
+        let report = |proxy: &EventLoopProxy<AppEvent>| {
+            let proxy = proxy.clone();
+            move |event: ViewEvent| post(&proxy, AppEvent::View(key, event))
+        };
+        let page = report(proxy);
+        let title = report(proxy);
+        let nav = report(proxy);
+        let favicon = report(proxy);
+        let fullscreen = report(proxy);
+        let download = report(proxy);
+        let load = report(proxy);
+        let fail = report(proxy);
+        let permission = report(proxy);
         let nw_proxy = proxy.clone();
-        let fs_proxy = proxy.clone();
-        let fail_proxy = proxy.clone();
-        let dl_proxy = proxy.clone();
-        let load_proxy = proxy.clone();
         let view = engine.spawn(ViewSpec {
+            access: crate::engine::ViewAccess::Content,
             bounds: content_rect,
             visible,
             background: Some(shell::CONTENT_BACKGROUND),
-            on_title_change: Some(Box::new(move |t| {
-                post(&title_proxy, AppEvent::TitleChanged(id, t));
-            })),
+            page_script: Some(super::autofill::PAGE_SCRIPT),
+            // New-tab, settings and error pages — never the chrome
+            // document, and no `/cmd`: content views carry no `on_ipc`.
+            on_page_message: Some(Box::new(move |m| page(ViewEvent::PageMessage(m)))),
+            on_title_change: Some(Box::new(move |t| title(ViewEvent::TitleChanged(t)))),
             on_navigate: Some(Box::new(move |uri| {
-                if let Some(choose) = crate::shell::pages::download_folder_request(&uri) {
-                    post(&nav_proxy, AppEvent::DownloadFolder(id, choose));
+                if let Some(choose) = pages::download_folder_request(&uri) {
+                    nav(ViewEvent::DownloadFolder(choose));
                     return false;
                 }
-                post(&nav_proxy, AppEvent::Navigated(id, uri.clone()));
+                nav(ViewEvent::Navigated(uri));
                 true
             })),
-            on_favicon: Some(Box::new(move |png| {
-                post(&fav_proxy, AppEvent::FaviconChanged(id, png));
-            })),
-            on_accelerator: Some(Self::accelerator_forwarder(proxy)),
+            on_favicon: Some(Box::new(move |png| favicon(ViewEvent::FaviconChanged(png)))),
+            on_accelerator: Some(Self::accelerator_forwarder(proxy, Some(key))),
             on_new_window: Some(Box::new(move |url| {
-                post(&nw_proxy, AppEvent::OpenInNewTab(url));
+                post(&nw_proxy, AppEvent::View(key, ViewEvent::OpenInNewTab(url)));
             })),
             on_fullscreen: Some(Box::new(move |on| {
-                post(&fs_proxy, AppEvent::PageFullscreen(id, on));
+                fullscreen(ViewEvent::PageFullscreen(on))
             })),
             on_load_failure: Some(Box::new(move |failure| {
-                post(&fail_proxy, AppEvent::LoadFailed(id, failure));
+                fail(ViewEvent::LoadFailed(failure))
             })),
             on_download: Some(Box::new(move |update| {
-                post(&dl_proxy, AppEvent::Download(id, update));
+                download(ViewEvent::Download(update))
             })),
             on_load_change: Some(Box::new(move |loading| {
-                post(&load_proxy, AppEvent::LoadChanged(id, loading));
+                load(ViewEvent::LoadChanged(loading))
             })),
-            // Pages may take the mic and camera — without a handler the
-            // engine's default is a silent deny, which is why calls appear
-            // to connect but transmit nothing. Everything else is denied.
-            on_permission: Some(Box::new(|kind| match kind {
-                PermissionKind::Microphone | PermissionKind::Camera => PermissionDecision::Allow,
-                _ => PermissionDecision::Deny,
+            // The engine defers the request until trusted chrome collects
+            // consent for this origin and this surface incarnation.
+            on_permission: Some(Box::new(move |request| {
+                permission(ViewEvent::Permission(request))
             })),
             ..ViewSpec::url(url)
         })?;
         Ok(view)
     }
 
-    /// Spawn `id`'s engine surface at the content rect, keeping the
-    /// registry entry and the view in step. Always spawned hidden —
-    /// `activate` owns the switch. A view created visible paints the
-    /// engine's white default for a frame before its background colour
-    /// applies; one that is shown only once it exists never does.
-    pub(super) fn spawn_view_at(&mut self, id: TabId, url: &str) -> anyhow::Result<()> {
+    /// Open a tab at `domain` around a fresh surface loading `load`.
+    /// Always spawned hidden — `activate` owns the switch. A view created
+    /// visible paints the engine's white default for a frame before its
+    /// background colour applies; one shown only once it exists never
+    /// does.
+    pub(super) fn open_tab(&mut self, domain: String, load: &str) -> anyhow::Result<TabId> {
         let (_, content_rect) = shell::layout(self.logical_size.0, self.logical_size.1);
-        let view =
-            Self::spawn_content_view(&*self.engine, &self.proxy, content_rect, id, url, false)?;
-        self.views.insert(id, view);
-        // A fresh surface is born hidden — cold until activated says
-        // otherwise (the next line, for foreground spawns).
-        if let Some(tab) = self.registry.get_mut(id) {
-            tab.note_unfocused(self.clock.now());
-        }
-        self.enforce_view_budget(id)
+        let id = self.registry.create_with(domain, |key| {
+            Self::spawn_content_view(&*self.engine, &self.proxy, content_rect, key, load, false)
+        })?;
+        self.adopt_view(id)?;
+        Ok(id)
     }
 
-    /// Hold `views` to `MAX_VIEWS` by freezing the coldest background
-    /// tab. `keep` is the view just paid for — the budget spends other
-    /// tabs first; it is only frozen when it is the *only* live
-    /// background surface, which cannot leave the strip unpaintable
-    /// (the active tab's view is never a candidate).
-    fn enforce_view_budget(&mut self, keep: TabId) -> anyhow::Result<()> {
-        while self.views.len() > MAX_VIEWS {
-            let Some(coldest) = self.coldest_live_tab(keep) else {
-                return Ok(());
-            };
-            self.freeze_view(coldest)?;
-        }
-        Ok(())
+    /// Clone `id`'s address into a fresh tab right after it, around its
+    /// own surface. The new tab comes up hidden, like `open_tab`'s.
+    pub(super) fn duplicate_tab(&mut self, id: TabId) -> anyhow::Result<TabId> {
+        let (_, content_rect) = shell::layout(self.logical_size.0, self.logical_size.1);
+        let dup = self.registry.duplicate_with(id, |key, url| {
+            let load = content_url_for(url);
+            Self::spawn_content_view(&*self.engine, &self.proxy, content_rect, key, load, false)
+        })?;
+        self.adopt_view(dup)?;
+        Ok(dup)
     }
 
-    /// The live-viewed tab that has been out of the foreground longest —
-    /// never `keep`, never the active one. Frozen and discarded tabs
-    /// aren't candidates: they hold no view to give back.
-    fn coldest_live_tab(&self, keep: TabId) -> Option<TabId> {
-        let active = self.registry.active_id();
-        let now = self.clock.now();
-        self.views
-            .keys()
-            .copied()
-            .filter(|id| *id != keep && Some(*id) != active)
-            .min_by_key(|id| {
-                self.registry
-                    .get(*id)
-                    .and_then(|t| t.unfocused_since())
-                    .unwrap_or(now)
-            })
-    }
-
-    /// Destroy `id`'s surface and the shelf entries hanging off it.
-    /// Every removal — freeze, discard, close — funnels here, so
-    /// `views` has exactly one deleter keeping it in step with
-    /// `registry`.
-    pub(super) fn drop_view(&mut self, id: TabId) {
-        self.drop_downloads_of(id);
-        drop(self.views.remove(&id));
+    /// Destroy a surface the registry just handed back, and everything
+    /// hanging off that incarnation: its shelf entries and any capability
+    /// request it still had open. Freeze, discard and close all funnel
+    /// here.
+    pub(super) fn drop_view(&mut self, key: ViewKey, view: Box<dyn ContentView>) {
+        debug_assert!(
+            self.registry.live(key).is_none(),
+            "dropped surface is no longer owned by a live tab"
+        );
+        drop(view);
     }
 
     /// Give a view-less tab — frozen, discarded, or one coming back from
-    /// the closed stack — a fresh surface, then flip it back to live.
+    /// the closed stack — a fresh surface under a new generation. If the
+    /// spawn fails the tab stays as it was, so the next activation can
+    /// retry.
     pub(super) fn restore_view(&mut self, id: TabId) -> anyhow::Result<()> {
         let Some(tab) = self.registry.get(id) else {
             return Ok(());
@@ -204,26 +180,28 @@ impl App {
         let snap = tab.snapshot();
         let url = snap.map(|s| s.url.as_str()).unwrap_or_else(|| tab.url());
         let load = content_url_for(url).to_string();
+        // Snapshot extras exist only for frozen tabs; discarded starts clean.
         let zoom = snap.map(|s| s.zoom).unwrap_or(1.0);
         let muted = snap.map(|s| s.muted).unwrap_or(false);
-        self.spawn_view_at(id, &load)?;
-        // Snapshot extras exist only for frozen tabs; discarded starts clean.
-        if let Some(view) = self.views.get(&id) {
+        let (_, content_rect) = shell::layout(self.logical_size.0, self.logical_size.1);
+        self.registry.restore_with(id, |key| {
+            let view = Self::spawn_content_view(
+                &*self.engine,
+                &self.proxy,
+                content_rect,
+                key,
+                &load,
+                false,
+            )?;
             if zoom != 1.0 {
                 view.set_zoom_factor(zoom)?;
             }
             if muted {
                 view.set_muted(true)?;
             }
-        }
-        // The surface exists — the domain may flip back to live. If spawn
-        // had failed above we'd have bailed, leaving the tab frozen.
-        if let Some(tab) = self.registry.get_mut(id) {
-            if tab.state() != TabState::Active {
-                tab.restore()?;
-            }
-        }
-        Ok(())
+            anyhow::Ok(view)
+        })?;
+        self.adopt_view(id)
     }
 
     /// Freeze `id`: snapshot its surface state, destroy the view, leave a
@@ -240,25 +218,23 @@ impl App {
 
     /// Freeze `id`'s surface without touching focus or chrome — the core
     /// `freeze_tab` and the view budget both spend. Only a live surface
-    /// has anything worth snapshotting — a view missing here means the
-    /// tab is already frozen or discarded.
-    fn freeze_view(&mut self, id: TabId) -> anyhow::Result<()> {
-        let Some(view) = self.views.get(&id) else {
-            return Ok(());
-        };
-        let zoom = view.zoom_factor().unwrap_or(1.0);
-        let muted = view.muted().unwrap_or(false);
+    /// has anything worth snapshotting — a tab without one is already
+    /// frozen or discarded.
+    pub(super) fn freeze_view(&mut self, id: TabId) -> anyhow::Result<()> {
         let Some(tab) = self.registry.get_mut(id) else {
             return Ok(());
         };
-        let frozen_at = self.clock.now();
-        tab.freeze(TabSnapshot {
+        let (Some(view), Some(key)) = (tab.view(), tab.view_key()) else {
+            return Ok(());
+        };
+        let snapshot = TabSnapshot {
             url: tab.url().to_string(),
-            frozen_at,
-            zoom,
-            muted,
-        })?;
-        self.drop_view(id);
+            frozen_at: self.clock.now(),
+            zoom: view.zoom_factor().unwrap_or(1.0),
+            muted: view.muted().unwrap_or(false),
+        };
+        let view = tab.freeze(snapshot)?;
+        self.drop_view(key, view);
         Ok(())
     }
 
@@ -272,8 +248,10 @@ impl App {
         let Some(tab) = self.registry.get_mut(id) else {
             return Ok(());
         };
-        tab.discard()?;
-        self.drop_view(id);
+        let key = tab.view_key();
+        if let (Some(key), Some(view)) = (key, tab.discard()?) {
+            self.drop_view(key, view);
+        }
         self.sync_chrome()
     }
 
@@ -304,116 +282,12 @@ impl App {
     /// internal URLs are never recorded, the error page cannot become a
     /// tab's address and send the next failure back to itself.
     pub(super) fn show_error(&mut self, id: TabId, failure: LoadFailure) -> anyhow::Result<()> {
-        let Some(view) = self.views.get(&id) else {
+        let Some(tab) = self.registry.get(id) else {
             return Ok(());
         };
-        let attempted = self
-            .registry
-            .get(id)
-            .map(|tab| tab.url().to_string())
-            .unwrap_or_default();
-        view.load_url(&error::error_url(failure, &attempted))?;
-        Ok(())
-    }
-
-    /// DOM fullscreen (YouTube etc.): the page element fills the *view*,
-    /// and the view only covers the area under the chrome strip — so we
-    /// hide chrome and stretch the view over the whole window. Chrome
-    /// restores on exit.
-    pub(super) fn page_fullscreen(&mut self, id: TabId, on: bool) -> anyhow::Result<()> {
-        if self.registry.active_id() != Some(id) {
-            return Ok(());
+        if let Some(view) = tab.view() {
+            view.load_url(&error::error_url(failure, tab.url()))?;
         }
-        if on {
-            self.dismiss_overlays()?;
-        }
-        self.page_fullscreen = on;
-        // Video fullscreen in a real browser is OS fullscreen — the window
-        // goes borderless over the taskbar too, not just over the strip.
-        self.window.set_fullscreen(if on {
-            Some(Fullscreen::Borderless(None))
-        } else {
-            None
-        });
-        self.chrome.set_visible(!on)?;
-        if let Some(view) = self.views.get(&id) {
-            let (w, h) = self.logical_size;
-            let rect = if on {
-                Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    w,
-                    h,
-                }
-            } else {
-                shell::layout(w, h).1
-            };
-            view.set_bounds(rect)?;
-        }
-        Ok(())
-    }
-
-    /// The event loop's heartbeat asks: which hidden tabs have earned a
-    /// suspended renderer? Suspension is the gentle half of freezing —
-    /// the surface lives on, but its script, timers and working set
-    /// sleep. Skipped for anything still earning its keep: the active
-    /// tab, a loading tab (settle events must land), a tab mid-download
-    /// or serving a retry, and anything playing audio — suspending that
-    /// would mute it.
-    pub(super) fn suspend_idle_views(&mut self) {
-        let now = self.clock.now();
-        let active = self.registry.active_id();
-        for (id, view) in &self.views {
-            if Some(*id) == active || self.retry_tabs.contains(id) {
-                continue;
-            }
-            let Some(tab) = self.registry.get(*id) else {
-                continue;
-            };
-            let cold_enough = tab
-                .unfocused_since()
-                .is_some_and(|t| now.duration_since(t) >= SUSPEND_AFTER);
-            if !cold_enough || tab.is_loading() {
-                continue;
-            }
-            if self.downloads.iter().any(|e| {
-                e.tab == *id && matches!(e.state, DownloadState::InProgress | DownloadState::Paused)
-            }) {
-                continue;
-            }
-            // Unknown counts as playing: a runtime that can't answer is
-            // not evidence the tab is silent.
-            if view.playing_audio().unwrap_or(true) {
-                continue;
-            }
-            // Already asleep, or a runtime too old to say — either way
-            // there is nothing to spend another suspend on.
-            if view.is_suspended().unwrap_or(false) {
-                continue;
-            }
-            if let Err(e) = view.suspend() {
-                crate::report!("suspend tab {id}: {e:?}");
-            }
-        }
-    }
-
-    /// One window per process: a "new window" key spawns a sibling cryo
-    /// process. `--incognito` puts every view of that process on an
-    /// InPrivate profile — incognito is a property of the window, not a
-    /// tab, same as Chrome. A bare arg hands the child an address to open.
-    pub(super) fn spawn_window(incognito: bool, url: Option<&str>) -> anyhow::Result<()> {
-        let exe = std::env::current_exe()?;
-        let mut cmd = std::process::Command::new(exe);
-        // A spawned window keeps its address: the flag stops the child
-        // from handing it to us over the single-instance pipe.
-        cmd.arg("--new-window");
-        if incognito {
-            cmd.arg("--incognito");
-        }
-        if let Some(url) = url {
-            cmd.arg(url);
-        }
-        cmd.spawn()?;
         Ok(())
     }
 
@@ -421,11 +295,11 @@ impl App {
         if let Some(notice) = self.tab_limit_notice() {
             return notice;
         }
-        let id = self.registry.create(DEFAULT_URL.to_string());
+        let id = self.open_tab(DEFAULT_URL.to_string(), NEW_TAB_URL)?;
         if let Some(tab) = self.registry.get_mut(id) {
             tab.set_title("New tab".to_string());
         }
-        self.spawn_view_for(id, NEW_TAB_URL)?;
+        self.activate(id)?;
         // A fresh tab means "type an address" — hand focus to the bar
         // like every browser does, not to the new-tab page.
         self.focus_address_bar()
@@ -447,8 +321,7 @@ impl App {
         if let Some(notice) = self.tab_limit_notice() {
             return notice;
         }
-        let id = self.registry.create(url.to_string());
-        self.spawn_view_at(id, url)?;
+        let id = self.open_tab(url.to_string(), url)?;
         if foreground {
             self.activate(id)
         } else {
@@ -471,34 +344,5 @@ impl App {
                 "cryo keeps at most {MAX_TABS} tabs — close or freeze some first."
             )],
         ))
-    }
-
-    /// Spawn the engine surface for `id`, register it, activate it.
-    pub(super) fn spawn_view_for(&mut self, id: TabId, url: &str) -> anyhow::Result<()> {
-        self.spawn_view_at(id, url)?;
-        self.activate(id)
-    }
-    /// The `views`/`registry` invariant in types' place: a surface exists
-    /// exactly while its tab is `Active`. `dispatch` runs this after every
-    /// event in debug builds — a mutation path that forgets a side panics
-    /// here, near the cause, instead of leaking the one resource this app
-    /// exists to free.
-    #[cfg(debug_assertions)]
-    pub(super) fn assert_views_consistent(&self) {
-        for id in self.views.keys() {
-            debug_assert!(
-                self.registry
-                    .get(*id)
-                    .is_some_and(|t| t.state() == TabState::Active),
-                "view {id} exists but its tab is not active"
-            );
-        }
-        for tab in self.registry.iter() {
-            debug_assert!(
-                tab.state() != TabState::Active || self.views.contains_key(&tab.id()),
-                "active tab {} has no view",
-                tab.id()
-            );
-        }
     }
 }

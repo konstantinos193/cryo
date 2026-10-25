@@ -49,11 +49,13 @@ impl App {
     /// the document can't see them, so it's synced through `__cryo_overlay`
     /// before the bounds come back down.
     pub(super) fn dismiss_overlays(&mut self) -> anyhow::Result<()> {
+        self.cancel_permission_prompt()?;
         if !self.overlay_open {
             return Ok(());
         }
         self.chrome
             .eval("window.__cryo_overlay && window.__cryo_overlay(false)")?;
+        self.take_password_prompt();
         // The library panel is one of those overlays — once it is shut
         // there is nothing to push to it.
         self.forget_library();

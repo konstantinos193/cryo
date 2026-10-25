@@ -279,6 +279,20 @@ impl App {
     /// secret then goes to the chrome view only, which no website can
     /// reach.
     pub(super) fn reveal_password(&mut self, origin: &str, username: &str) -> anyhow::Result<()> {
+        self.send_secret(origin, username, false)
+    }
+
+    /// Copy one saved password to the clipboard without showing it —
+    /// the same confirm gate as a reveal: a clipboard is a disclosure
+    /// too, so the OS dialog still asks first.
+    pub(super) fn copy_password(&mut self, origin: &str, username: &str) -> anyhow::Result<()> {
+        self.send_secret(origin, username, true)
+    }
+
+    /// The one door a secret leaves the vault through. `copy` picks
+    /// what the document does with it — clipboard or screen — and what
+    /// the confirm dialog asks.
+    fn send_secret(&mut self, origin: &str, username: &str, copy: bool) -> anyhow::Result<()> {
         let Some(secret) = self
             .vault
             .credentials()
@@ -292,16 +306,25 @@ impl App {
         } else {
             format!("{username} at {origin}")
         };
-        if !confirm(
-            "Show password",
-            &format!("Show the saved password for {who} on screen?"),
-        ) {
+        let (title, question) = if copy {
+            (
+                "Copy password",
+                format!("Copy the saved password for {who} to the clipboard?"),
+            )
+        } else {
+            (
+                "Show password",
+                format!("Show the saved password for {who} on screen?"),
+            )
+        };
+        if !confirm(title, &question) {
             return Ok(());
         }
         let reply = SecretReply {
             origin: origin.to_string(),
             username: username.to_string(),
             secret,
+            copy,
         };
         let json = serde_json::to_string(&reply)?;
         self.chrome.eval(&format!("window.__cryo_secret({json})"))?;

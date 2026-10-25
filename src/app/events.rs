@@ -2,14 +2,14 @@
 //! icons, navigations and the loading signal. `dispatch` stays a flat
 //! table of one-liners; the policy those events need lives here.
 //!
-//! One rule runs through all of them: a view already dropped can still
-//! have events in flight from before the drop, and those must not write
-//! into a frozen tab — every handler checks `TabState::Active` before
-//! touching the domain.
+//! A view already dropped can still have events in flight from before the
+//! drop. None reach these handlers: `App::on_view_event` lets a report
+//! through only while the `ViewKey` it carries is its tab's live surface,
+//! so every handler here may treat `id` as live.
 
 use crate::shell::chrome::favicon_data_url;
 use crate::shell::pages;
-use crate::tabs::{TabId, TabState};
+use crate::tabs::TabId;
 
 use super::{App, DEFAULT_URL};
 
@@ -33,6 +33,10 @@ impl App {
     /// A view committed a top-level navigation: record the visit, move
     /// the tab's address, and let it count as a session-change hint.
     pub(super) fn on_navigated(&mut self, id: TabId, url: String) -> anyhow::Result<()> {
+        if self.registry.active_id() == Some(id) {
+            self.cancel_permission_prompt()?;
+            self.close_password_prompt()?;
+        }
         // Internal pages are shell surfaces, not tab destinations —
         // never record them as a tab's address.
         if pages::is_internal_url(&url) {
@@ -48,7 +52,7 @@ impl App {
             // The rewritten load reports back here carrying the param —
             // `with_authuser` then leaves it alone, so this runs once.
             if let Some(rewritten) = crate::account::with_authuser(&url, self.active_account) {
-                if let Some(view) = self.views.get(&id) {
+                if let Some(view) = self.view_of(id) {
                     return view.load_url(&rewritten).map_err(anyhow::Error::from);
                 }
             }
@@ -63,16 +67,11 @@ impl App {
         // A retry tab reporting somewhere other than its own
         // download URI (or the blank it never left) means the
         // user took the tab over — it stops being disposable.
-        if self.retry_tabs.contains(&id)
-            && url != DEFAULT_URL
-            && self.registry.get(id).is_some_and(|t| t.url() != url)
-        {
-            self.retry_tabs.remove(&id);
-        }
         if let Some(tab) = self.registry.get_mut(id) {
-            if tab.state() == TabState::Active {
-                tab.navigate(url);
+            if tab.is_retry_host() && url != DEFAULT_URL && tab.url() != url {
+                tab.release_retry();
             }
+            tab.navigate(url);
         }
         if self.registry.active_id() == Some(id) {
             self.sync_chrome()
@@ -93,9 +92,7 @@ impl App {
         let url = self.registry.get(id).map(|t| t.url().to_string());
         let icon = png.as_deref().map(favicon_data_url);
         if let Some(tab) = self.registry.get_mut(id) {
-            if tab.state() == TabState::Active {
-                tab.set_favicon(png);
-            }
+            tab.set_favicon(png);
         }
         // The icon outlives the tab — the omnibox paints it beside the
         // remembered visit. Internal pages don't reach history, so

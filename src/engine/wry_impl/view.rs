@@ -6,9 +6,8 @@
 use std::cell::{Cell, RefCell};
 #[cfg(target_os = "windows")]
 use std::rc::Rc;
-#[cfg(target_os = "windows")]
 use std::sync::atomic::AtomicBool;
-#[cfg(target_os = "windows")]
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 #[cfg(target_os = "windows")]
@@ -41,6 +40,8 @@ use super::{downloads, events, ops};
 /// the shared worker the download-abort grace re-check runs on.
 pub(super) struct Handlers {
     #[cfg(target_os = "windows")]
+    pub on_permission: Option<crate::engine::PermissionHandler>,
+    #[cfg(target_os = "windows")]
     pub on_accelerator: Option<AcceleratorHandler>,
     #[cfg(target_os = "windows")]
     pub on_load_failure: Option<LoadFailureHandler>,
@@ -59,7 +60,12 @@ pub(super) struct Handlers {
 }
 
 pub(super) struct WryView {
+    #[cfg(target_os = "windows")]
+    permissions: super::permissions::Permissions,
+    #[cfg(target_os = "windows")]
+    profile_consent: super::permission_profile::ProfileConsent,
     view: WebView,
+    internal: Arc<AtomicBool>,
     /// Keep the COM callbacks alive; unregistration dies with the view.
     #[cfg(target_os = "windows")]
     _accel_handler: Option<ICoreWebView2AcceleratorKeyPressedEventHandler>,
@@ -84,10 +90,16 @@ pub(super) struct WryView {
 }
 
 impl WryView {
-    pub(super) fn new(view: WebView, handlers: Handlers) -> Result<Self, EngineError> {
+    pub(super) fn new(
+        view: WebView,
+        internal: Arc<AtomicBool>,
+        _profile_ready: Arc<AtomicBool>,
+        handlers: Handlers,
+    ) -> Result<Self, EngineError> {
         #[cfg(target_os = "windows")]
         {
             let Handlers {
+                on_permission,
                 on_accelerator,
                 on_load_failure,
                 on_fullscreen,
@@ -97,6 +109,9 @@ impl WryView {
                 on_load_change,
                 delayer,
             } = handlers;
+            let permissions = super::permissions::Permissions::attach(&view, on_permission)?;
+            let profile_consent =
+                super::permission_profile::ProfileConsent::reset(&view, _profile_ready)?;
             let _accel_handler = on_accelerator
                 .map(|cb| events::attach_accelerator(&view, cb))
                 .transpose()?;
@@ -175,7 +190,10 @@ impl WryView {
                 .transpose()?
                 .flatten();
             Ok(Self {
+                permissions,
+                profile_consent,
                 view,
+                internal,
                 _accel_handler,
                 _download_handler,
                 downloads,
@@ -190,13 +208,48 @@ impl WryView {
         #[cfg(not(target_os = "windows"))]
         {
             let _ = handlers;
-            Ok(Self { view })
+            Ok(Self { view, internal })
         }
     }
 }
 
+#[cfg(target_os = "windows")]
+impl Drop for WryView {
+    fn drop(&mut self) {
+        // Clone handles before cancelling: StateChanged may synchronously
+        // remove its own entry from the view's collection.
+        let operations: Vec<_> = self
+            .downloads
+            .borrow()
+            .values()
+            .map(|d| d.op.clone())
+            .collect();
+        for operation in operations {
+            if let Err(error) = unsafe { operation.Cancel() } {
+                crate::report!("cancelling download during surface teardown: {error}");
+            }
+        }
+        self.downloads.borrow_mut().clear();
+    }
+}
+
 impl ContentView for WryView {
+    #[cfg(target_os = "windows")]
+    fn answer_permission(
+        &self,
+        id: crate::engine::PermissionId,
+        decision: crate::engine::PermissionDecision,
+    ) -> Result<(), EngineError> {
+        self.permissions.answer(id, decision)
+    }
     fn load_url(&self, url: &str) -> Result<(), EngineError> {
+        self.internal
+            .store(super::protocol::internal_url(url), Ordering::Release);
+        #[cfg(target_os = "windows")]
+        {
+            self.profile_consent.navigate(&self.view, url)
+        }
+        #[cfg(not(target_os = "windows"))]
         self.view
             .load_url(url)
             .map_err(|e| EngineError::Navigate(e.to_string()))

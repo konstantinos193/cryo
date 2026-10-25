@@ -8,6 +8,10 @@ use crate::engine::{ContentView, Cookie, DownloadId, Engine, EngineError, Rect, 
 
 #[derive(Clone, Debug)]
 pub enum FakeCall {
+    Permission(
+        crate::engine::PermissionId,
+        crate::engine::PermissionDecision,
+    ),
     LoadUrl(String),
     Reload,
     HardReload,
@@ -33,6 +37,7 @@ pub enum FakeCall {
 #[derive(Default)]
 pub struct FakeEngine {
     spawned: RefCell<Vec<String>>,
+    scripted: RefCell<Vec<bool>>,
     calls: Rc<RefCell<Vec<FakeCall>>>,
 }
 
@@ -47,18 +52,24 @@ impl FakeEngine {
     pub fn calls(&self) -> Vec<FakeCall> {
         self.calls.borrow().clone()
     }
+
+    pub fn scripted(&self) -> Vec<bool> {
+        self.scripted.borrow().clone()
+    }
 }
 
 impl Engine for FakeEngine {
     fn spawn(&self, spec: ViewSpec) -> Result<Box<dyn ContentView>, EngineError> {
-        let label = match spec.url {
+        self.scripted.borrow_mut().push(spec.page_script.is_some());
+        let initial_url = spec.url;
+        let label = match &initial_url {
             Some(u) => format!("url:{u}"),
             None => "none".to_string(),
         };
         self.spawned.borrow_mut().push(label);
         Ok(Box::new(FakeView {
             calls: self.calls.clone(),
-            url: RefCell::new(None),
+            url: RefCell::new(initial_url),
             muted: RefCell::new(false),
             zoom: RefCell::new(1.0),
         }))
@@ -73,6 +84,16 @@ struct FakeView {
 }
 
 impl ContentView for FakeView {
+    fn answer_permission(
+        &self,
+        id: crate::engine::PermissionId,
+        decision: crate::engine::PermissionDecision,
+    ) -> Result<(), EngineError> {
+        self.calls
+            .borrow_mut()
+            .push(FakeCall::Permission(id, decision));
+        Ok(())
+    }
     fn load_url(&self, url: &str) -> Result<(), EngineError> {
         *self.url.borrow_mut() = Some(url.to_string());
         self.calls.borrow_mut().push(FakeCall::LoadUrl(url.into()));
@@ -228,11 +249,20 @@ mod tests {
         let engine = FakeEngine::default();
         let view = engine.spawn(ViewSpec::url("about:blank")).unwrap();
         assert_eq!(engine.spawned().as_slice(), ["url:about:blank"]);
+        assert_eq!(engine.scripted().as_slice(), [false]);
 
         view.load_url("https://example.com").unwrap();
         view.set_visible(true).unwrap();
         view.eval("1+1").unwrap();
         assert_eq!(view.url().as_deref(), Some("https://example.com"));
         assert_eq!(engine.calls().len(), 3);
+
+        engine
+            .spawn(ViewSpec {
+                page_script: Some("void 0"),
+                ..ViewSpec::url("https://example.test")
+            })
+            .unwrap();
+        assert_eq!(engine.scripted().as_slice(), [false, true]);
     }
 }
