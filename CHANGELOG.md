@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.2
+
+### Fixed
+
+- No behavior change — deterministic coverage only. New tests pin the
+  exact-budget band (pressure persists between 90% and 100%), candidate-order
+  tiebreak for equal-age tabs, and the retained reclaim baseline after a failed
+  sample. Idle-sleep tests cover the 59-second boundary and the no-repeat
+  suspension gate.
+- Adds the memory-policy and tab-lifecycle verification checklists.
+
 ## 0.8.1
 
 ### Fixed

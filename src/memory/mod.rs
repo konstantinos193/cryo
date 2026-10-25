@@ -63,6 +63,14 @@ mod tests {
             unfocused_since: Some(now - SUSPEND_AFTER),
         };
         assert!(state.should_suspend(now));
+        // 59 seconds idle is not yet sleepable; an already-sleeping
+        // view is not asked again.
+        state.unfocused_since = Some(now - SUSPEND_AFTER + Duration::from_secs(1));
+        assert!(!state.should_suspend(now));
+        state.unfocused_since = Some(now - SUSPEND_AFTER);
+        state.suspended = true;
+        assert!(!state.should_suspend(now));
+        state.suspended = false;
         state.playing_audio = true;
         assert!(!state.should_suspend(now));
         state.playing_audio = false;

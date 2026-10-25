@@ -342,6 +342,81 @@ mod tests {
         assert!(!p.pressure);
     }
 
+    /// At exactly the budget a sample is not over, so the over-streak
+    /// resets — but existing pressure inside the 90–100% band persists
+    /// and an exact-budget sample still freezes.
+    #[test]
+    fn exactly_at_budget_resets_the_streak_without_lifting_pressure() {
+        let now = Instant::now();
+        let mut p = BudgetEnforcer::new(ByteBudget::from_mib(100).unwrap(), now);
+        for i in 0..2u32 {
+            let now = now + SAMPLE_INTERVAL * i;
+            assert_eq!(
+                sample(&mut p, now, Some(100), vec![candidate(now, 300, false)]),
+                None
+            );
+        }
+        let mut p = BudgetEnforcer::new(ByteBudget::from_mib(100).unwrap(), now);
+        sample(&mut p, now, Some(110), vec![]);
+        let later = now + SAMPLE_INTERVAL;
+        assert!(sample(&mut p, later, Some(110), vec![candidate(later, 300, false)]).is_some());
+        let settled = later + FREEZE_SETTLE;
+        assert!(sample(
+            &mut p,
+            settled,
+            Some(100),
+            vec![candidate(settled, 400, false)]
+        )
+        .is_some());
+        assert!(p.pressure);
+    }
+
+    /// Equal-age candidates are decided by candidate order — the
+    /// registry's order — not by whichever id sorts first.
+    #[test]
+    fn equal_age_candidates_freeze_in_candidate_order() {
+        let now = Instant::now();
+        let mut p = BudgetEnforcer::new(ByteBudget::from_mib(100).unwrap(), now);
+        sample(&mut p, now, Some(110), vec![]);
+        let later = now + SAMPLE_INTERVAL;
+        let pair = |a: u64, b: u64| {
+            vec![
+                Candidate {
+                    id: TabId::from_raw(a),
+                    ..candidate(later, 300, false)
+                },
+                Candidate {
+                    id: TabId::from_raw(b),
+                    ..candidate(later, 300, false)
+                },
+            ]
+        };
+        assert_eq!(
+            sample(&mut p, later, Some(110), pair(2, 1)),
+            Some(TabId::from_raw(2))
+        );
+    }
+
+    /// A failed follow-up sample resets pressure but keeps the
+    /// pre-freeze baseline: the next complete sample still answers
+    /// whether freezing that tab reclaimed anything.
+    #[test]
+    fn a_failed_sample_after_freeze_keeps_the_reclaim_baseline() {
+        let now = Instant::now();
+        let mut p = BudgetEnforcer::new(ByteBudget::from_mib(100).unwrap(), now);
+        sample(&mut p, now, Some(110), vec![]);
+        let later = now + SAMPLE_INTERVAL;
+        assert!(sample(&mut p, later, Some(110), vec![candidate(later, 300, false)]).is_some());
+        assert!(p.begin_sample(later + FREEZE_SETTLE).is_some());
+        p.sample_failed();
+        assert!(!p.pressure);
+        let recovered = later + FREEZE_SETTLE + SAMPLE_INTERVAL;
+        // 105 is still over budget but 5 MiB under the pre-freeze
+        // baseline — a real reclaim, not an empty delta.
+        assert!(sample(&mut p, recovered, Some(105), vec![]).is_none());
+        assert_eq!(p.no_reclaim, 0);
+    }
+
     /// Shared renderers make one empty delta normal — the frozen tab's
     /// sibling still holds the process — so the next eligible tab freezes
     /// on the settle cadence, not after a backoff.
