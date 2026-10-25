@@ -193,9 +193,14 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
     // The window itself paints the content colour: whatever shows through
     // between one view hiding and the next painting is then the same dark
     // the pages use, not the system's white.
+    // Hidden until the views exist: WebView2 controllers take a beat to
+    // come up, and watching them appear one after another reads as
+    // flicker — showing the window after `App::new` means the first
+    // frame the user sees is already the finished layout.
     let builder = WindowBuilder::new()
         .with_title(title)
         .with_inner_size(LogicalSize::new(1280.0, 800.0))
+        .with_visible(false)
         .with_background_color(shell::CONTENT_BACKGROUND);
     #[cfg(windows)]
     let builder = with_icons(builder)?;
@@ -259,13 +264,15 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
         );
     }
     let mut app = App::new(
-        window,
+        window.clone(),
         engine,
         Rc::new(tabs::SystemClock),
         proxy,
         open_url,
         profile,
     )?;
+    // Views are spawned and navigating — reveal once, complete.
+    window.set_visible(true);
 
     event_loop.run_return(move |event, _target, control_flow| {
         // A heartbeat, not a poll: the loop wakes at least this often so

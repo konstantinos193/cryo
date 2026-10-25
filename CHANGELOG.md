@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.1
+
+### Fixed
+
+- Faster startup on Windows: all views share one WebView2 environment instead of each spawning its own browser process.
+- The window stays hidden until its views exist, so the first frame is the finished layout rather than views appearing one by one.
+
 ## 0.7.0
 
 ### Added

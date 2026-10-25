@@ -1,6 +1,6 @@
 [package]
 name = "cryo"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 description = "A memory-obsessed browser shell written in Rust. Tabs freeze. Budgets hold."
 license = "MIT"
@@ -38,6 +38,7 @@ windows-core = "0.62.2"
 webview2-com = "0.39"
 windows = { version = "0.62", features = [
     "Win32_Foundation",
+    "Win32_Globalization",
     "Win32_Security",
     "Win32_Security_Cryptography",
     "Win32_Storage_FileSystem",

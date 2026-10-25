@@ -21,6 +21,8 @@ mod permissions;
 mod protocol;
 mod view;
 
+#[cfg(target_os = "windows")]
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -28,6 +30,8 @@ use std::sync::{
 };
 
 use raw_window_handle::{RawWindowHandle, WindowHandle};
+#[cfg(target_os = "windows")]
+use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Environment;
 use wry::dpi::{LogicalPosition, LogicalSize, Position, Size};
 #[cfg(target_os = "windows")]
 use wry::WebViewBuilderExtWindows;
@@ -56,6 +60,13 @@ pub struct WryEngine {
     /// DownloadStarting race; see `events::navigation_completed`).
     #[cfg(target_os = "windows")]
     delayer: Delayer,
+    /// One WebView2 environment for every view. Without it wry creates
+    /// one per spawn — each paying the browser-process spin-up, which is
+    /// the bulk of the startup delay. Lazy: created on the first spawn so
+    /// engine construction stays infallible. Incognito is a controller
+    /// option, not an environment one, so all views can share it.
+    #[cfg(target_os = "windows")]
+    environment: RefCell<Option<ICoreWebView2Environment>>,
 }
 
 impl WryEngine {
@@ -66,7 +77,22 @@ impl WryEngine {
             incognito,
             #[cfg(target_os = "windows")]
             delayer: Delayer::new(),
+            #[cfg(target_os = "windows")]
+            environment: RefCell::new(None),
         }
+    }
+
+    /// The shared environment, created once — the same options wry
+    /// would apply per-view (browser args, OS UI language), so passing
+    /// it to `with_environment` changes nothing but who pays the cost.
+    #[cfg(target_os = "windows")]
+    fn environment(&self) -> Result<ICoreWebView2Environment, EngineError> {
+        if let Some(env) = &*self.environment.borrow() {
+            return Ok(env.clone());
+        }
+        let env = create_environment()?;
+        *self.environment.borrow_mut() = Some(env.clone());
+        Ok(env)
     }
 }
 
@@ -118,6 +144,59 @@ fn browser_args() -> String {
     args
 }
 
+/// Build the one `ICoreWebView2Environment` every view shares — the same
+/// call wry makes inside `build_as_child`, hoisted here so it runs once.
+/// Null executable folder and user-data folder mean WebView2's defaults,
+/// which is what a wry view with no custom context already gets.
+#[cfg(target_os = "windows")]
+fn create_environment() -> Result<ICoreWebView2Environment, EngineError> {
+    use std::sync::mpsc::channel;
+    use webview2_com::{
+        wait_with_pump, CoreWebView2EnvironmentOptions,
+        CreateCoreWebView2EnvironmentCompletedHandler,
+        Microsoft::Web::WebView2::Win32::{
+            CreateCoreWebView2EnvironmentWithOptions, ICoreWebView2EnvironmentOptions,
+        },
+    };
+    use windows::core::{Error as WinError, PCWSTR};
+    use windows::Win32::Foundation::{E_POINTER, E_UNEXPECTED};
+    use windows::Win32::Globalization::{
+        GetUserDefaultUILanguage, LCIDToLocaleName, LOCALE_ALLOW_NEUTRAL_NAMES, MAX_LOCALE_NAME,
+    };
+
+    let options = CoreWebView2EnvironmentOptions::default();
+    unsafe {
+        options.set_additional_browser_arguments(browser_args());
+        let lcid = GetUserDefaultUILanguage();
+        let mut lang = [0u16; MAX_LOCALE_NAME as usize];
+        LCIDToLocaleName(lcid as u32, Some(&mut lang), LOCALE_ALLOW_NEUTRAL_NAMES);
+        options.set_language(String::from_utf16_lossy(&lang));
+    }
+
+    let (tx, rx) = channel();
+    let handler = CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(
+        move |error_code, environment| {
+            let result = (|| {
+                error_code?;
+                environment.ok_or_else(|| WinError::from(E_POINTER))
+            })();
+            tx.send(result).map_err(|_| WinError::from(E_UNEXPECTED))
+        },
+    ));
+    unsafe {
+        CreateCoreWebView2EnvironmentWithOptions(
+            PCWSTR::null(),
+            PCWSTR::null(),
+            &ICoreWebView2EnvironmentOptions::from(options),
+            &handler,
+        )
+    }
+    .map_err(|e| EngineError::Spawn(e.to_string()))?;
+    wait_with_pump(rx)
+        .map_err(|e| EngineError::Spawn(e.to_string()))?
+        .map_err(|e| EngineError::Spawn(e.to_string()))
+}
+
 impl Engine for WryEngine {
     fn spawn(&self, spec: ViewSpec) -> Result<Box<dyn ContentView>, EngineError> {
         let access = spec.access;
@@ -133,8 +212,11 @@ impl Engine for WryEngine {
             .with_visible(spec.visible)
             .with_transparent(spec.transparent)
             .with_devtools(cfg!(debug_assertions));
+        // The shared environment already carries the browser args —
+        // `with_additional_browser_args` only feeds wry's per-view
+        // environment creation, which sharing replaces.
         #[cfg(target_os = "windows")]
-        let builder = builder.with_additional_browser_args(browser_args());
+        let builder = builder.with_environment(self.environment()?);
         let mut builder = builder
             // The scheme exists for chrome IPC as much as for pages —
             // see `protocol::respond` for why it must be a real URL.
