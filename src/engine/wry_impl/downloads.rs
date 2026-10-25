@@ -271,3 +271,56 @@ pub(super) fn resume(active: &ActiveDownloads, id: DownloadId) -> Result<(), Eng
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn flight(paths: &[PathBuf]) -> RefCell<HashSet<PathBuf>> {
+        RefCell::new(paths.iter().cloned().collect())
+    }
+
+    #[test]
+    fn a_free_name_lands_untouched() {
+        let suggested = PathBuf::from("e:/definitely/not/here/report.pdf");
+        assert_eq!(unique_path(&suggested, &flight(&[])), suggested);
+    }
+
+    #[test]
+    fn a_claimed_name_steps_aside() {
+        let dir = PathBuf::from("e:/definitely/not/here");
+        let first = dir.join("report.pdf");
+        let taken = flight(&[first]);
+        assert_eq!(
+            unique_path(&dir.join("report.pdf"), &taken),
+            dir.join("report (1).pdf")
+        );
+    }
+
+    #[test]
+    fn claimed_names_keep_counting_past_the_gaps_that_are_full() {
+        let dir = PathBuf::from("e:/definitely/not/here");
+        let taken = flight(&[dir.join("a.zip"), dir.join("a (1).zip")]);
+        assert_eq!(
+            unique_path(&dir.join("a.zip"), &taken),
+            dir.join("a (2).zip")
+        );
+    }
+
+    #[test]
+    fn a_name_without_extension_still_deduplicates() {
+        let dir = PathBuf::from("e:/definitely/not/here");
+        let taken = flight(&[dir.join("data")]);
+        assert_eq!(unique_path(&dir.join("data"), &taken), dir.join("data (1)"));
+    }
+
+    #[test]
+    fn a_file_on_disk_is_taken_even_when_no_download_claimed_it() {
+        let dir = std::env::temp_dir().join("cryo-unique-path-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("real.txt");
+        std::fs::write(&file, b"x").unwrap();
+        assert_eq!(unique_path(&file, &flight(&[])), dir.join("real (1).txt"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

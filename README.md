@@ -37,10 +37,12 @@ process memory as guaranteed savings.
 ## Status
 
 The shell works and tabs freeze, discard and restore on Windows, Linux and
-macOS. Windows also measures WebView2 process memory and automatically freezes
-eligible background tabs under a configurable private-memory budget. Shared
-renderers are not billed to individual tabs. Linux and macOS do not yet have
-measured-memory enforcement.
+macOS. Process memory is measured and eligible background tabs freeze
+automatically under a configurable private-memory budget — WebView2's
+environment on Windows, the WebKit child-process tree on Linux and macOS.
+Shared renderers are not billed to individual tabs. The enforcement loop is
+live-verified on Windows; the Unix accounting adapters are implemented but
+not yet exercised against real WebKit processes.
 
 What exists today:
 
@@ -166,11 +168,13 @@ CI gates: `cargo fmt`, `cargo clippy -D warnings`, `cargo build`, `cargo test`.
 `.devin/tools/keys.ps1` drives a running window with SendKeys for manual
 shortcut testing (`keys.ps1 -Keys "^t"` = Ctrl+T).
 
-## Memory budget (Windows)
+## Memory budget
 
-The default budget is 1024 MiB of WebView2 environment private committed memory,
-including browser/GPU process overhead. It excludes Cryo's host process and GPU
-device allocations. Set a positive integer before launch to change it:
+The default budget is 1024 MiB of engine private committed memory — the
+WebView2 environment on Windows, the WebKit child-process tree on Linux and
+macOS — including browser/GPU process overhead. It excludes Cryo's host
+process and GPU device allocations. Set a positive integer before launch to
+change it:
 
 ```powershell
 $env:CRYO_MEMORY_BUDGET_MIB = "768"
@@ -201,8 +205,9 @@ there is no longer a 24-live-view cap.
 - [x] Phase 1: tab lifecycle. Freeze, discard, restore.
 - [x] The parts a browser needs anyway: bookmarks, vault, downloads, history,
   import/export, self-update.
-- [ ] Phase 2: finish per-tab attribution and cross-platform memory accounting.
-  Windows process accounting and configurable measured budgets are implemented.
+- [ ] Phase 2: finish per-tab attribution and verify the Unix memory
+  accounting adapters. Measured budgets are implemented on all three
+  platforms and live-verified on Windows.
 - [ ] Phase 3: memory dashboard (the real `Shift+Esc`).
 - [ ] Phase 4: a WebExtensions (MV3) surface.
 - [ ] Phase 5: evaluate Servo as a second engine backend. If it earns the slot.

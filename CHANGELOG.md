@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.8.1
+
+### Fixed
+
+- Non-Windows views no longer claim success on unsupported operations: mute,
+  browsing-data clearing and download pause now report an error instead of
+  silently doing nothing.
+- Download filename deduplication is covered by tests, including files that
+  already exist on disk.
+- Web error statuses map onto the right failure kinds (offline, DNS, timeout,
+  connection, certificate, redirect); cancels and auth challenges produce no
+  error page, unknown codes report Unknown.
+
 ## 0.8.0
 
 ### Added

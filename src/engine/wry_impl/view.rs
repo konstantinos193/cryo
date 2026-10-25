@@ -378,7 +378,7 @@ impl ContentView for WryView {
         }
         #[cfg(not(target_os = "windows"))]
         {
-            Ok(false)
+            Err(EngineError::View("mute unsupported".into()))
         }
     }
 
@@ -390,7 +390,7 @@ impl ContentView for WryView {
         #[cfg(not(target_os = "windows"))]
         {
             let _ = muted;
-            Ok(())
+            Err(EngineError::View("mute unsupported".into()))
         }
     }
 
@@ -454,7 +454,9 @@ impl ContentView for WryView {
         }
         #[cfg(not(target_os = "windows"))]
         {
-            Ok(())
+            Err(EngineError::View(
+                "browsing-data clearing unsupported".into(),
+            ))
         }
     }
 
@@ -492,7 +494,7 @@ impl ContentView for WryView {
         #[cfg(not(target_os = "windows"))]
         {
             let _ = id;
-            Ok(())
+            Err(EngineError::View("download pause unsupported".into()))
         }
     }
 
