@@ -76,12 +76,41 @@ test('installed extensions list with version, manifest version and folder', () =
   assert.match(f.text(), /extensions\\tab-tidier/);
 });
 
-test('the pane says unpacked-only and that loading waits for a new tab', () => {
+test('the pane says loading waits for a new tab and not to edit the copy', () => {
   const f = fixture(supported(INSTALLED));
-  assert.match(f.text(), /Unpacked folders only/);
-  assert.match(f.text(), /not a \.crx or a Web Store link/);
   assert.match(f.text(), /tabs opened after it is added/i);
   assert.match(f.text(), /editing or moving that copy/i);
+});
+
+test('the store field sends what was typed and says a signature is checked', () => {
+  const f = fixture(supported(INSTALLED));
+  assert.match(f.text(), /Add from the Chrome Web Store/);
+  assert.match(f.text(), /signature is checked against the key its id comes from/i);
+  const field = f.libBody.querySelector('input');
+  field.value = '  https://chromewebstore.google.com/detail/metamask/nkbihfbeogaeaoehlefnkodbefgpgknn  ';
+  f.click('Fetch');
+  assert.deepEqual(f.commands, [{
+    cmd: 'extension_install',
+    input: 'https://chromewebstore.google.com/detail/metamask/nkbihfbeogaeaoehlefnkodbefgpgknn',
+  }]);
+  // Cleared, so a second Fetch cannot resend the first address.
+  assert.equal(field.value, '');
+});
+
+test('Enter in the store field fetches, and an empty field sends nothing', () => {
+  const f = fixture(supported(INSTALLED));
+  const field = f.libBody.querySelector('input');
+  const enter = () => field.dispatchEvent(new f.window.KeyboardEvent(
+    'keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  field.value = '   ';
+  enter();
+  f.click('Fetch');
+  assert.deepEqual(f.commands, []);
+  field.value = 'nkbihfbeogaeaoehlefnkodbefgpgknn';
+  enter();
+  assert.deepEqual(f.commands, [
+    { cmd: 'extension_install', input: 'nkbihfbeogaeaoehlefnkodbefgpgknn' },
+  ]);
 });
 
 test('removing sends the slug, never a path', () => {
@@ -102,7 +131,8 @@ test('nothing installed invites a folder instead of looking broken', () => {
   assert.match(f.text(), /1 extension|0 extensions/);
   assert.match(f.text(), /Nothing installed/);
   assert.match(f.text(), /manifest\.json/);
-  assert.deepEqual(f.buttons(), ['Add unpacked folder']);
+  // Both ways in are offered even with nothing installed.
+  assert.deepEqual(f.buttons(), ['Add unpacked folder', 'Fetch']);
 });
 
 test('an unsupported platform says so and offers no add button', () => {

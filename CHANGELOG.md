@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Install Chrome extensions from the Web Store. `Ctrl+Shift+O` →
+  **Extensions** takes a store page address or an extension id, and cryo
+  fetches the `.crx` from Google's own endpoint, because WebView2 carries no
+  endpoint for "Add to Chrome" at all.
+- CRX3 verification. The package's signature is checked over the whole
+  archive, and — the part that matters — only against a key whose SHA-256
+  produces the extension id being installed. A signature from any other key,
+  however valid, is refused. RSA goes through Windows CNG rather than a new
+  crypto dependency, and the archive is only reachable by going through the
+  check.
+- A localized extension is named properly. `__MSG_appName__` is resolved from
+  the extension's own `_locales/<default_locale>/messages.json`, so MetaMask
+  lists as MetaMask rather than as "Localized extension".
+
+### Fixed
+
+- A failed "Add to Chrome" said "This site cannot be found", which was true of
+  the placeholder address the engine was sent to and no use to anyone. The
+  error page now names the real reason, points at the Extensions pane, and
+  offers no Try again, because retrying a placeholder can only fail again.
+
+### Known limits
+
+- Still Windows only, and incognito windows still load nothing.
+- An extension reaches a tab when that tab's view is built, so it starts
+  working in tabs opened after the install.
+- cryo verifies that a package is signed by the key its id comes from. It does
+  not review what the extension then does, any more than Chrome does.
+
 ## 0.12.0
 
 ### Added

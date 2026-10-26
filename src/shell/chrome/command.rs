@@ -162,6 +162,12 @@ pub enum ChromeCommand {
     ExtensionRemove {
         slug: String,
     },
+    /// Fetch one from the Chrome Web Store. `input` is whatever was typed —
+    /// a store address or an id — and the app is what decides whether it
+    /// names an extension at all.
+    ExtensionInstall {
+        input: String,
+    },
     /// A history row clicked — where it lands follows the modifiers,
     /// same rule as `BookmarkOpen`. The URL travels instead of an id:
     /// history's key is the remembered text itself.

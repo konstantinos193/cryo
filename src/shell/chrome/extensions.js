@@ -21,13 +21,37 @@
       return;
     }
 
-    // Said once, up front, because both are surprising and neither is a
-    // bug: cryo cannot install from the Chrome Web Store, and loading
-    // happens when a tab's view is built.
+    // Said once, up front, because it is the surprising part and not a bug:
+    // loading happens when a tab's view is built.
     libBody.appendChild(node('div', 'lnote',
-      'Unpacked folders only — a folder with a manifest.json in it, not a .crx or a Web Store link. ' +
-      'An extension starts working in tabs opened after it is added, and cryo copies the folder in: ' +
-      'editing or moving that copy makes WebView2 drop the extension.'));
+      'An extension starts working in tabs opened after it is added. A folder you add is copied in, ' +
+      'and editing or moving that copy makes WebView2 drop the extension.'));
+
+    // The store's own "Add to Chrome" cannot reach cryo — WebView2 carries no
+    // endpoint for it — so the address goes in here instead and cryo fetches
+    // the package itself.
+    const store = node('div', 'lrow');
+    const storeMain = node('div', 'main');
+    storeMain.appendChild(node('div', 't', 'Add from the Chrome Web Store'));
+    storeMain.appendChild(node('div', 'u',
+      "Paste the store page address, or the extension id out of it. The package's signature is " +
+      'checked against the key its id comes from before anything is installed.'));
+    const field = node('input', 'search');
+    field.type = 'text';
+    field.spellcheck = false;
+    field.placeholder = 'https://chromewebstore.google.com/detail/…  or an extension id';
+    field.setAttribute('aria-label', 'Chrome Web Store address or extension id');
+    const submit = () => {
+      const input = field.value.trim();
+      if (!input) return;
+      ipc({cmd: 'extension_install', input});
+      field.value = '';
+    };
+    field.onkeydown = (e) => { if (e.key === 'Enter') submit(); };
+    storeMain.appendChild(field);
+    store.appendChild(storeMain);
+    store.appendChild(button('Fetch', '', submit));
+    libBody.appendChild(store);
 
     if (!rows.length) {
       libBody.appendChild(node('div', 'lempty',

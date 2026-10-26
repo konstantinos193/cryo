@@ -77,6 +77,94 @@ impl App {
         }
     }
 
+    /// Fetch an extension from the Chrome Web Store, by store address or id.
+    ///
+    /// The store's own "Add to Chrome" cannot reach us — WebView2 has no
+    /// endpoint for it and the error page explains that — so this is the way
+    /// in. The fetch runs on a worker; the event loop is never held for a
+    /// network round trip (AGENTS §9).
+    pub(super) fn install_from_store(&mut self, input: &str) -> anyhow::Result<()> {
+        if self.extensions.is_none() {
+            return self.notice(
+                false,
+                "Extensions are not available here",
+                vec![extensions_unsupported_reason(self.incognito)],
+            );
+        }
+        let request = match crate::extensions::web_store::parse_input(input) {
+            Ok(request) => request,
+            Err(_) => {
+                return self.notice(
+                    false,
+                    "That is not a Chrome Web Store extension",
+                    vec![
+                        "Paste the store page address, or the 32-letter extension id out of it."
+                            .to_string(),
+                    ],
+                );
+            }
+        };
+        self.notice(
+            true,
+            "Fetching the extension",
+            vec![
+                request.id.to_string(),
+                "cryo checks the package's signature against the key its id is derived from before installing anything.".to_string(),
+            ],
+        )?;
+        let proxy = self.proxy.clone();
+        crate::extensions::web_store::spawn_fetch(request, move |result| {
+            super::post(
+                &proxy,
+                super::AppEvent::StoreExtension(result.map(Box::new).map_err(Box::new)),
+            );
+        });
+        Ok(())
+    }
+
+    /// A worker finished fetching and verifying a package. Everything that
+    /// could be checked away from the event loop already has been: what is
+    /// left is writing the folder out.
+    pub(super) fn on_store_extension(
+        &mut self,
+        result: Result<
+            Box<crate::extensions::crx::VerifiedCrx>,
+            Box<crate::extensions::ExtensionError>,
+        >,
+    ) -> anyhow::Result<()> {
+        let package = match result {
+            Ok(package) => package,
+            Err(e) => {
+                return self.notice(
+                    false,
+                    "That extension was not installed",
+                    vec![e.to_string()],
+                );
+            }
+        };
+        let Some(catalogue) = &self.extensions else {
+            return Ok(());
+        };
+        match catalogue.install_package(&package) {
+            Ok(installed) => {
+                self.notice(
+                    true,
+                    "Extension installed",
+                    vec![
+                        format!("{} {}", installed.name(), installed.version()),
+                        "Signature verified. It loads into tabs opened from now on.".to_string(),
+                    ],
+                )?;
+                self.push_library()
+            }
+            Err(e) => self.notice(
+                false,
+                "That extension was not installed",
+                vec![e.to_string()],
+            ),
+        }
+    }
+
     /// Remove an installed extension. The slug is resolved against the
     /// catalogue's own listing, so a handle from the document can only ever
     /// name something that is actually installed.

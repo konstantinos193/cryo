@@ -147,6 +147,11 @@ pub enum AppEvent {
     /// A background update check finished — started at launch and by the
     /// menu's "Check for updates".
     UpdateChecked(Outcome),
+    /// A worker finished fetching and verifying a Chrome Web Store package.
+    /// Boxed: the error is the larger side and every event would pay for it.
+    StoreExtension(
+        Result<Box<crate::extensions::crx::VerifiedCrx>, Box<crate::extensions::ExtensionError>>,
+    ),
     /// A worker answered who the profile's Google session belongs to —
     /// `None` reads as signed out.
     GoogleSession(Option<crate::account::Session>),
@@ -445,6 +450,7 @@ impl App {
             AppEvent::Imported(outcome) => self.on_imported(outcome),
             AppEvent::ImportSources(sources) => self.on_import_sources(sources),
             AppEvent::UpdateChecked(outcome) => self.on_update(outcome, control_flow),
+            AppEvent::StoreExtension(result) => self.on_store_extension(result),
             AppEvent::GoogleSession(session) => self.on_google_session(session),
             AppEvent::StoreFailed(failure) => {
                 crate::report!("store write failed: {failure}");

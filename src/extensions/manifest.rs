@@ -31,13 +31,23 @@ pub struct ManifestFile {
 }
 
 impl ManifestFile {
-    /// What to show for this extension. A localized manifest writes
-    /// `__MSG_name__` and keeps the real string in `_locales`; rather than
-    /// half-resolving that, the raw placeholder is replaced with something
-    /// honest the user can act on.
-    pub fn display_name(&self) -> String {
+    /// What to show for this extension.
+    ///
+    /// A localized manifest writes `__MSG_appName__` and keeps the real
+    /// string in `_locales/<default_locale>/messages.json`. Most extensions
+    /// worth installing are localized — MetaMask among them — so a label
+    /// reading "Localized extension" next to every one of them would be
+    /// useless. The message file is read from the extension's own folder;
+    /// if it is missing or says nothing, the honest label is still there.
+    pub fn display_name(&self, dir: &Path) -> String {
         let name = self.name.trim();
-        if name.starts_with("__MSG_") && name.ends_with("__") {
+        if let Some(key) = name
+            .strip_prefix("__MSG_")
+            .and_then(|rest| rest.strip_suffix("__"))
+        {
+            if let Some(resolved) = self.message(dir, key) {
+                return resolved;
+            }
             return match &self.default_locale {
                 Some(locale) => format!("Localized extension ({locale})"),
                 None => "Localized extension".to_string(),
@@ -48,6 +58,38 @@ impl ManifestFile {
         } else {
             name.to_string()
         }
+    }
+
+    /// One message out of the default locale's `messages.json`. Chrome
+    /// matches these keys without regard to case, so this does too.
+    ///
+    /// The file belongs to the extension, so it is untrusted input: a
+    /// missing file, bad JSON or a message that is not a string all return
+    /// `None` rather than failing the install, and the result is trimmed and
+    /// length-capped so a manifest cannot push a wall of text into the pane.
+    fn message(&self, dir: &Path, key: &str) -> Option<String> {
+        let locale = self.default_locale.as_deref()?;
+        // The locale names a directory, so it may not travel out of one.
+        if locale.is_empty()
+            || !locale
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        {
+            return None;
+        }
+        let path = dir.join("_locales").join(locale).join("messages.json");
+        let bytes = std::fs::read(path).ok()?;
+        let messages: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        let wanted = key.to_lowercase();
+        let (_, entry) = messages
+            .as_object()?
+            .iter()
+            .find(|(name, _)| name.to_lowercase() == wanted)?;
+        let message = entry.get("message")?.as_str()?.trim();
+        if message.is_empty() {
+            return None;
+        }
+        Some(message.chars().take(120).collect())
     }
 }
 
@@ -101,7 +143,7 @@ mod tests {
             }"#,
         );
         let file = read(&dir).expect("unknown keys are not an error");
-        assert_eq!(file.display_name(), "Tab Tidier");
+        assert_eq!(file.display_name(&dir), "Tab Tidier");
         assert_eq!(file.version, "2.0");
         assert_eq!(file.manifest_version, 3);
         let _ = std::fs::remove_dir_all(&dir);
@@ -137,27 +179,129 @@ mod tests {
     }
 
     #[test]
-    fn a_localized_name_is_labelled_instead_of_shown_as_its_placeholder() {
+    fn a_localized_name_comes_out_of_the_locale_file() {
+        // What MetaMask actually ships: the manifest names a message and the
+        // real name lives in _locales.
+        let dir = written(
+            "locale",
+            r#"{"name":"__MSG_appName__","version":"1","manifest_version":3,"default_locale":"en"}"#,
+        );
+        let locale = dir.join("_locales").join("en");
+        std::fs::create_dir_all(&locale).unwrap();
+        std::fs::write(
+            locale.join("messages.json"),
+            r#"{"appName":{"message":"MetaMask","description":"The name"}}"#,
+        )
+        .unwrap();
+        let file = read(&dir).expect("reads");
+        assert_eq!(file.display_name(&dir), "MetaMask");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn message_keys_match_without_regard_to_case() {
+        let dir = written(
+            "case",
+            r#"{"name":"__MSG_APPNAME__","version":"1","manifest_version":3,"default_locale":"en"}"#,
+        );
+        let locale = dir.join("_locales").join("en");
+        std::fs::create_dir_all(&locale).unwrap();
+        std::fs::write(
+            locale.join("messages.json"),
+            r#"{"appName":{"message":"Tidier"}}"#,
+        )
+        .unwrap();
+        assert_eq!(read(&dir).unwrap().display_name(&dir), "Tidier");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unresolvable_localized_name_falls_back_to_an_honest_label() {
+        let dir = std::env::temp_dir().join("cryo-manifest-nolocale");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // No _locales directory at all.
         let localized = ManifestFile {
             name: "__MSG_extName__".into(),
             version: "1".into(),
             manifest_version: 3,
             default_locale: Some("en".into()),
         };
-        assert_eq!(localized.display_name(), "Localized extension (en)");
+        assert_eq!(localized.display_name(&dir), "Localized extension (en)");
         let no_locale = ManifestFile {
             name: "__MSG_extName__".into(),
             version: "1".into(),
             manifest_version: 3,
             default_locale: None,
         };
-        assert_eq!(no_locale.display_name(), "Localized extension");
+        assert_eq!(no_locale.display_name(&dir), "Localized extension");
         let blank = ManifestFile {
             name: "   ".into(),
             version: "1".into(),
             manifest_version: 3,
             default_locale: None,
         };
-        assert_eq!(blank.display_name(), "Unnamed extension");
+        assert_eq!(blank.display_name(&dir), "Unnamed extension");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_locale_that_would_leave_the_folder_is_not_read() {
+        let dir = std::env::temp_dir().join("cryo-manifest-badlocale");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for locale in ["../../../etc", "..", "en/../..", ""] {
+            let file = ManifestFile {
+                name: "__MSG_extName__".into(),
+                version: "1".into(),
+                manifest_version: 3,
+                default_locale: Some(locale.into()),
+            };
+            assert!(file.message(&dir, "extName").is_none(), "{locale:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_message_file_that_is_not_usable_is_ignored_rather_than_fatal() {
+        for body in [
+            "{",
+            r#"{"appName":{"description":"no message key"}}"#,
+            r#"{"appName":{"message":42}}"#,
+            r#"{"appName":{"message":"   "}}"#,
+            r#"[]"#,
+        ] {
+            let dir = written(
+                "badmsg",
+                r#"{"name":"__MSG_appName__","version":"1","manifest_version":3,"default_locale":"en"}"#,
+            );
+            let locale = dir.join("_locales").join("en");
+            std::fs::create_dir_all(&locale).unwrap();
+            std::fs::write(locale.join("messages.json"), body).unwrap();
+            assert_eq!(
+                read(&dir).unwrap().display_name(&dir),
+                "Localized extension (en)",
+                "{body}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn a_very_long_name_is_capped_before_it_reaches_the_pane() {
+        let dir = written(
+            "long",
+            r#"{"name":"__MSG_appName__","version":"1","manifest_version":3,"default_locale":"en"}"#,
+        );
+        let locale = dir.join("_locales").join("en");
+        std::fs::create_dir_all(&locale).unwrap();
+        let long = "x".repeat(500);
+        std::fs::write(
+            locale.join("messages.json"),
+            format!(r#"{{"appName":{{"message":"{long}"}}}}"#),
+        )
+        .unwrap();
+        assert_eq!(read(&dir).unwrap().display_name(&dir).chars().count(), 120);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

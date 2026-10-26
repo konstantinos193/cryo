@@ -12,6 +12,7 @@
 //! extension whose files change under it, so an install copies once and then
 //! leaves the copy alone.
 
+pub mod crx;
 mod manifest;
 pub mod web_store;
 
@@ -40,6 +41,10 @@ pub enum ExtensionError {
     Unknown(String),
     #[error("{0:?} is not a Chrome extension id")]
     Id(String),
+    #[error("the downloaded package is not a usable CRX: {0}")]
+    Crx(String),
+    #[error("the extension could not be fetched from the Chrome Web Store: {0}")]
+    Fetch(String),
 }
 
 /// One installed extension. A value object: equal by contents, replaced
@@ -62,7 +67,7 @@ impl Extension {
         let file = manifest::read(dir)?;
         Ok(Self {
             slug,
-            name: file.display_name(),
+            name: file.display_name(dir),
             version: file.version,
             manifest_version: file.manifest_version,
             dir: dir.to_path_buf(),
@@ -143,10 +148,10 @@ impl Catalogue {
     /// change under it.
     pub fn install(&self, source: &Path) -> Result<Extension, ExtensionError> {
         let file = manifest::read(source)?;
-        let slug = slugify(&file.display_name());
+        let slug = slugify(&file.display_name(source));
         let target = self.root.join(&slug);
         if target.exists() {
-            return Err(ExtensionError::AlreadyInstalled(file.display_name()));
+            return Err(ExtensionError::AlreadyInstalled(file.display_name(source)));
         }
         std::fs::create_dir_all(&self.root).map_err(|e| ExtensionError::Install(e.to_string()))?;
         copy_tree(source, &target).map_err(|e| {
@@ -156,6 +161,32 @@ impl Catalogue {
             ExtensionError::Install(e.to_string())
         })?;
         Extension::hydrate(&target, slug)
+    }
+
+    /// Unpack a verified package. The id names the folder, not the manifest
+    /// name: a store package's identity is its signing key, and using the
+    /// name it declares would let two packages fight over one directory.
+    ///
+    /// Extraction refuses any entry whose path is not contained in the target
+    /// — the `zip` crate's `enclosed_name` is what answers that — so an
+    /// archive cannot write outside the extensions directory.
+    pub fn install_package(&self, package: &crx::VerifiedCrx) -> Result<Extension, ExtensionError> {
+        let slug = package.id().get().to_string();
+        let target = self.root.join(&slug);
+        if target.exists() {
+            return Err(ExtensionError::AlreadyInstalled(slug));
+        }
+        std::fs::create_dir_all(&self.root).map_err(|e| ExtensionError::Install(e.to_string()))?;
+        let unpacked = unpack(package.archive(), &target).inspect_err(|_| {
+            let _ = std::fs::remove_dir_all(&target);
+        });
+        unpacked?;
+        // Hydration is still the only door in: an archive that unpacked but
+        // holds no readable manifest is not an extension, and the half-made
+        // folder goes rather than listing as broken.
+        Extension::hydrate(&target, slug).inspect_err(|_| {
+            let _ = std::fs::remove_dir_all(&target);
+        })
     }
 
     /// Remove an installed extension by its slug. The slug is resolved
@@ -190,6 +221,43 @@ fn slugify(name: &str) -> String {
     } else {
         slug
     }
+}
+
+/// Write a ZIP archive's contents into `target`.
+///
+/// Every entry's path must be *contained* in the target. `enclosed_name`
+/// returns `None` for an absolute path, a `..` component, or anything else
+/// that would escape, and such an entry fails the whole install rather than
+/// being skipped quietly: an archive that tried it is not one to trust the
+/// rest of.
+fn unpack(archive: &[u8], target: &std::path::Path) -> Result<(), ExtensionError> {
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(archive))
+        .map_err(|e| ExtensionError::Install(format!("the package is not readable: {e}")))?;
+    for index in 0..zip.len() {
+        let mut entry = zip
+            .by_index(index)
+            .map_err(|e| ExtensionError::Install(e.to_string()))?;
+        let Some(relative) = entry.enclosed_name() else {
+            return Err(ExtensionError::Install(format!(
+                "the package holds an entry that would write outside it: {}",
+                entry
+                    .name()
+                    .unwrap_or(std::borrow::Cow::Borrowed("an unnamed entry"))
+            )));
+        };
+        let path = target.join(relative);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&path).map_err(|e| ExtensionError::Install(e.to_string()))?;
+            continue;
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| ExtensionError::Install(e.to_string()))?;
+        }
+        let mut file =
+            std::fs::File::create(&path).map_err(|e| ExtensionError::Install(e.to_string()))?;
+        std::io::copy(&mut entry, &mut file).map_err(|e| ExtensionError::Install(e.to_string()))?;
+    }
+    Ok(())
 }
 
 /// Recursive directory copy. Symlinks are not followed — an unpacked

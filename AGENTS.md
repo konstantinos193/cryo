@@ -95,8 +95,9 @@ value objects, aggregates, domain services. That's it.
   by default; `servo_impl` behind `--features servo-engine`), `shell`
   (window/UI), `persist` (history recorder), `bookmarks`, `vault`
   (passwords), `transfer` (foreign-file import/export), `extensions`
-  (the installed unpacked-extension catalogue — it owns what is installed
-  and what a manifest says, never the loading, which is `engine`'s),
+  (the extension catalogue and the Chrome Web Store — it owns what is
+  installed, what a manifest says and CRX3 verification, never the
+  loading, which is `engine`'s),
   `instance` (single-instance handoff), `update` (self-update), `account` (Google
   session detection — HTTP and foreign-wire parsing are session
   plumbing, not window UI, so it is not `shell`). `memory` is the
