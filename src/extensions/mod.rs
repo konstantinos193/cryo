@@ -13,6 +13,7 @@
 //! leaves the copy alone.
 
 mod manifest;
+pub mod web_store;
 
 use std::path::{Path, PathBuf};
 
@@ -37,6 +38,8 @@ pub enum ExtensionError {
     Remove(String),
     #[error("{0} is not an installed extension")]
     Unknown(String),
+    #[error("{0:?} is not a Chrome extension id")]
+    Id(String),
 }
 
 /// One installed extension. A value object: equal by contents, replaced

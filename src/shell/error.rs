@@ -26,6 +26,21 @@ pub fn error_url(failure: LoadFailure, attempted: &str) -> String {
     url
 }
 
+/// URL for a Chrome Web Store install that could not happen. The caller
+/// decides a failed address was one of those — `extensions::web_store` owns
+/// that judgement — because the engine only ever reports "host not found",
+/// which is true of the placeholder address and no use to anyone reading it.
+pub fn web_store_url(attempted: &str) -> String {
+    format!(
+        "{INTERNAL_ORIGIN}{ERROR_PATH}?kind={WEB_STORE_KIND}&url={}",
+        encode(attempted)
+    )
+}
+
+/// Not a `LoadFailure`: the engine cannot tell this apart from any other
+/// name that does not resolve, so the kind is chosen above it.
+const WEB_STORE_KIND: &str = "web-store";
+
 /// Stable name for a failure, shared by the URL and the page's copy table.
 /// Renaming one without the other silently falls back to the generic page.
 fn slug(failure: LoadFailure) -> &'static str {
@@ -140,7 +155,9 @@ pub const ERROR_HTML: &str = r##"<!doctype html>
     "render-process-gone": ["This tab crashed",
       "The page renderer stopped and cryo shut it down. Reloading usually brings it back."],
     "unknown": ["Something went wrong",
-      "The page did not load, and the engine did not say why."]
+      "The page did not load, and the engine did not say why."],
+    "web-store": ["cryo cannot install from the Chrome Web Store",
+      "The store asked the engine for a packaged extension, and this engine carries no endpoint to ask — the address it was sent to is a placeholder that can never resolve, so retrying will not help. Unzip the extension and add its folder in Ctrl+Shift+O → Extensions."]
   };
   var HTTP = {
     "400": "The server rejected the request as malformed.",
@@ -187,9 +204,14 @@ pub const ERROR_HTML: &str = r##"<!doctype html>
     var targetEl = document.getElementById("target");
     targetEl.textContent = target;
     targetEl.hidden = false;
-    var retry = document.getElementById("retry");
-    retry.hidden = false;
-    retry.addEventListener("click", function () { location.replace(target); });
+    // No retry for a Web Store install: the address is a placeholder, so the
+    // button could only ever fail again. Offering it would be a lie with a
+    // pointer on it.
+    if (kind !== "web-store") {
+      var retry = document.getElementById("retry");
+      retry.hidden = false;
+      retry.addEventListener("click", function () { location.replace(target); });
+    }
   }
 </script>
 </body>
@@ -235,6 +257,22 @@ mod tests {
     #[test]
     fn other_failures_carry_no_status_code() {
         assert!(!error_url(LoadFailure::Offline, "https://example.com").contains("code="));
+    }
+
+    #[test]
+    fn the_web_store_page_has_copy_and_offers_no_retry() {
+        let url = web_store_url(
+            "https://permanently-removed.invalid/?prod=chromiumcrx&x=id%3Dnkbihfbeogaeaoehlefnkodbefgpgknn",
+        );
+        assert!(url.contains("kind=web-store"));
+        // No code, and the attempted address is still carried for display.
+        assert!(!url.contains("code="));
+        assert!(url.contains("url=https%3A%2F%2Fpermanently-removed.invalid"));
+        // The copy table must hold the kind, or the page silently falls back
+        // to the generic one.
+        assert!(ERROR_HTML.contains("\"web-store\": ["));
+        // Retrying a placeholder address can only fail again.
+        assert!(ERROR_HTML.contains("kind !== \"web-store\""));
     }
 
     #[test]

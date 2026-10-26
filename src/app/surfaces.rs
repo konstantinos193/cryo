@@ -286,7 +286,13 @@ impl App {
             return Ok(());
         };
         if let Some(view) = tab.view() {
-            view.load_url(&error::error_url(failure, tab.url()))?;
+            // A Web Store install fails as an unresolvable host, which is
+            // true and tells the reader nothing. Name what actually happened.
+            let url = match crate::extensions::web_store::install_request(tab.url()) {
+                Some(_) => error::web_store_url(tab.url()),
+                None => error::error_url(failure, tab.url()),
+            };
+            view.load_url(&url)?;
         }
         Ok(())
     }
