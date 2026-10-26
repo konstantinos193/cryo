@@ -13,6 +13,14 @@ AppVerName=cryo {#AppVersion}
 AppPublisher=konstantinos193
 AppPublisherURL=https://github.com/konstantinos193/cryo
 AppSupportURL=https://github.com/konstantinos193/cryo/issues
+AppCopyright=MIT License
+; Version info on cryo-setup.exe itself — unsigned files with no
+; VERSIONINFO get a harder SmartScreen look.
+VersionInfoCompany=konstantinos193
+VersionInfoDescription=cryo browser installer
+VersionInfoProductName=cryo
+VersionInfoVersion={#AppVersion}
+UninstallDisplayName=cryo
 DefaultDirName={localappdata}\Programs\cryo
 PrivilegesRequired=lowest
 ; Minimal wizard: destination dir picker, tasks, ready — no welcome
