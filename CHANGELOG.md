@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.0
 
 ### Added
 
@@ -20,6 +20,17 @@
   rather than running the tests. Chrome tests are now named
   `tests/*.test.cjs` — the pattern `node --test` discovers — and the script
   passes that glob explicitly.
+
+### Documentation
+
+- The install section says what Windows SmartScreen is actually reporting on
+  an unsigned installer, and how to check the download against the `sha256`
+  every release already publishes in `latest.json` — the same hash the
+  self-updater verifies. Signing itself still needs a certificate.
+- What a per-tab memory figure is allowed to mean is decided and recorded:
+  sole-owner attribution plus one separately reported shared pool, no
+  division and no estimates. The memory dashboard has to print something per
+  row, so the rule exists before the surface does.
 
 ## 0.10.0
 
