@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- CI runs the chrome-script tests. They were only ever run by hand, so the
+  tab-strip pointer regression they cover was ungated.
+
+### Fixed
+
+- `npm test` ran nothing. `node --test tests/` resolves `tests` as a module
+  instead of scanning the directory, so the script shipped in 0.10.0 failed
+  rather than running the tests. Chrome tests are now named
+  `tests/*.test.cjs` — the pattern `node --test` discovers — and the script
+  passes that glob explicitly.
+
 ## 0.10.0
 
 ### Added

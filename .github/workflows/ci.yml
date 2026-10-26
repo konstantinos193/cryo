@@ -44,6 +44,22 @@ jobs:
       - name: test
         run: cargo test --all
 
+  # The chrome render script is JavaScript inside the Rust tree, so cargo
+  # never sees it. tests/*.test.cjs drive it under jsdom and cover the
+  # pointer-activation regression from v0.9.0 — ungated, it rots.
+  chrome:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+      - name: install
+        run: npm ci
+      - name: test
+        run: npm test
+
   # The restore/freeze boundary is the product — an unverified live
   # restore is a broken window. Runs only on Windows: the probes drive a
   # real WebView2 and its message pump, and runners have the runtime.

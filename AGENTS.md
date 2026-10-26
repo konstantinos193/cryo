@@ -299,7 +299,8 @@ Windows, the WebKit child-process tree on Linux/macOS — not host memory or
 unique physical RAM. Platforms without a sampler adapter retain manual freezing
 without the old 24-view fallback.
 
-Tab-strip pointer activation regressions run with `node --test tests/tab_strip.cjs`
-(run `npm ci` first — jsdom is a devDependency). These exercise the chrome render
-script under jsdom, not a live WebView2; verify native focus and pointer behavior
-separately in the running app.
+Chrome-script tests run with `npm test` (run `npm ci` first — jsdom is a
+devDependency). They must be named `tests/*.test.cjs`: that is the pattern
+`node --test` discovers, and a chrome test outside it is dead weight CI will
+never run. They exercise the render script under jsdom, not a live WebView2;
+verify native focus and pointer behavior separately in the running app.
