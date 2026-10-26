@@ -243,6 +243,11 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
         if p.maximized {
             window.set_maximized(true);
         }
+    } else {
+        // No remembered placement yet: first launch and incognito open
+        // maximized — a bare 1280x800 floating window reads as broken
+        // on a desktop monitor.
+        window.set_maximized(true);
     }
 
     #[cfg(not(feature = "servo-engine"))]

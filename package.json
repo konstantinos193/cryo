@@ -1,0 +1,11 @@
+{
+  "name": "cryo",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test tests/"
+  },
+  "devDependencies": {
+    "jsdom": "^30.1.3"
+  }
+}

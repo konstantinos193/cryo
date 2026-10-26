@@ -210,6 +210,9 @@
     all.textContent = bookmarks.length ? '»' : '★ »';
     all.onclick = () => openLib('bookmarks');
     bar.appendChild(all);
+    // More entries than the row is wide: drop to icon-only chips rather
+    // than clipping the tail — the tooltip still carries the title.
+    bar.classList.toggle('compact', bar.scrollWidth > bar.clientWidth);
   };
 
   // Browser shortcuts are not handled here — the engine forwards every

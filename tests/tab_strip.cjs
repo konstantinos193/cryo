@@ -1,56 +1,55 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const vm = require('node:vm');
 const { test } = require('node:test');
+const { JSDOM } = require('jsdom');
 
-class Element {
-  constructor() {
-    this.children = [];
-    this.listeners = {};
-    this.classList = { toggle() {}, add() {}, remove() {} };
-    this.dataset = {};
-  }
-  set innerHTML(value) { this.children = []; }
-  append(...children) { this.children.push(...children); }
-  appendChild(child) { this.children.push(child); }
-  addEventListener(name, callback) { this.listeners[name] = callback; }
-  remove() {}
-  closest(selector) {
-    return selector.split(',').some((s) => s.trim() === '.' + this.className)
-      ? this : null;
-  }
-}
+const RENDER_JS = fs.readFileSync(
+  path.join(__dirname, '../src/shell/chrome/render.js'), 'utf8');
 
 function fixture() {
+  const dom = new JSDOM(
+    '<!doctype html><body>' +
+    '<div id="tabs"></div><input id="url">' +
+    '<button id="back"></button><button id="fwd"></button>' +
+    '<button id="reload"></button><div id="loadbar"></div>' +
+    '<button id="menu"></button><div id="menupop"></div>' +
+    '<div id="update-item"></div><button id="star"></button>' +
+    '<button id="signin"></button></body>',
+    { runScripts: 'outside-only' });
+  const { window } = dom;
+  const { document } = window;
   const commands = [];
-  const tabsEl = new Element();
+  const el = (id) => document.getElementById(id);
+  Object.assign(window, {
+    tabsEl: el('tabs'), urlEl: el('url'),
+    backBtn: el('back'), fwdBtn: el('fwd'),
+    reloadBtn: el('reload'), loadbar: el('loadbar'),
+    menuPop: el('menupop'), updateItem: el('update-item'),
+    signinBtn: el('signin'), lastState: {},
+    ipc: (cmd) => commands.push(cmd),
+    renderDl() {}, renderBar() {},
+  });
+  window.eval(RENDER_JS);
   const state = {
     tabs: [{ id: 7, title: 'Frozen page', state: 'frozen', active: false }],
     active_url: '',
   };
-  const context = {
-    window: {}, tabsEl, lastState: {}, ipc: (cmd) => commands.push(cmd),
-    document: { createElement: () => new Element(), getElementById: () => new Element() },
-    urlEl: new Element(), reloadBtn: new Element(), loadbar: new Element(),
-    backBtn: new Element(), fwdBtn: new Element(), menuPop: new Element(),
-    updateItem: new Element(), signinBtn: new Element(),
-    renderDl() {}, renderBar() {},
-  };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/shell/chrome/render.js'), 'utf8'), context);
-  const render = () => context.window.__cryo_update(state);
+  const render = () => window.__cryo_update(state);
   render();
   const press = (target, button = 0) => {
-    const tab = tabsEl.children[0];
-    tab.listeners.pointerdown?.({ target, button, preventDefault() {} });
+    target.dispatchEvent(new window.MouseEvent(
+      'pointerdown', { button, bubbles: true, cancelable: true }));
   };
-  return { commands, tabsEl, state, render, press };
+  const tab = () => window.tabsEl.children[0];
+  const child = (cls) =>
+    [...tab().children].find((c) => c.classList.contains(cls));
+  return { commands, window, state, render, press, tab, child };
 }
 
 test('first press on a frozen tab activates before a state update replaces it', () => {
   const f = fixture();
-  const title = f.tabsEl.children[0].children.find((c) => c.className === 'title');
-  f.press(title);
+  f.press(f.child('title'));
   f.render();
   assert.equal(f.commands.length, 1);
   assert.equal(f.commands[0].cmd, 'activate');
@@ -62,8 +61,7 @@ test('tab padding, frozen marker and favicon activate on first press', () => {
     const f = fixture();
     f.state.tabs[0].favicon = 'data:image/png;base64,AA==';
     f.render();
-    const tab = f.tabsEl.children[0];
-    f.press(targetClass ? tab.children.find((c) => c.className === targetClass) : tab);
+    f.press(targetClass ? f.child(targetClass) : f.tab());
     assert.equal(f.commands.length, 1);
     assert.equal(f.commands[0].cmd, 'activate');
   }
@@ -74,16 +72,16 @@ test('freeze and close controls do not activate the tab', () => {
   f.state.tabs[0].state = 'active';
   f.render();
   for (const control of ['fz', 'x']) {
-    const target = f.tabsEl.children[0].children.find((c) => c.className === control);
+    const target = f.child(control);
     f.press(target);
-    target.onclick();
+    target.dispatchEvent(new f.window.MouseEvent('click', { bubbles: true }));
   }
   assert.deepEqual(f.commands.map((c) => c.cmd), ['freeze', 'close']);
 });
 
 test('middle and right presses do not activate tabs', () => {
   const f = fixture();
-  f.press(f.tabsEl.children[0], 1);
-  f.press(f.tabsEl.children[0], 2);
+  f.press(f.tab(), 1);
+  f.press(f.tab(), 2);
   assert.equal(f.commands.length, 0);
 });

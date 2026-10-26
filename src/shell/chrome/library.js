@@ -100,6 +100,7 @@
     if (libPane === 'bookmarks') paintBookmarks();
     else if (libPane === 'passwords') paintPasswords();
     else if (libPane === 'history') paintHistory();
+    else if (libPane === 'downloads') paintDownloads();
     else if (libPane === 'import') paintImport();
     else paintExport();
   };

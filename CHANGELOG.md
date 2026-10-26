@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.10.0
+
+### Added
+
+- Downloads pane in the library. It shows the same rows as the ⬇ shelf
+  at page scale, with a count, "Clear finished" and live repaints while
+  a transfer runs; "Show all downloads" on the shelf opens it. Finished
+  rows keep the shelf's verbs — click to open, drag out to copy, show in
+  folder.
+
+### Changed
+
+- Download progress moved from the bar under the ⬇ glyph to a ring
+  around it. A transfer with a declared size sets the arc; one without
+  runs an orbiting segment. Row controls are 28px hit targets instead of
+  12px glyphs.
+- The bookmarks bar drops to icon-only chips once there are more entries
+  than the row is wide, rather than clipping the tail. Titles stay in the
+  tooltips.
+- A launch with no remembered placement opens maximized — the bare
+  1280x800 floating window read as broken on a desktop monitor. A
+  remembered placement is still restored as before.
+- `tests/tab_strip.cjs` runs against jsdom instead of a hand-written DOM
+  stub, so the tests exercise real event dispatch and `closest()`. Run
+  `npm ci` before `node --test tests/tab_strip.cjs`.
+
 ## 0.9.0
 
 ### Added

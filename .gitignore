@@ -13,3 +13,4 @@ installer/output/
 .playwright-cli/
 nul
 register-as-default.reg
+node_modules/

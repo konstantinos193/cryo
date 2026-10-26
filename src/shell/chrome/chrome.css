@@ -67,6 +67,9 @@
     background: var(--ice-dim); color: var(--ice); font-size: 9px; font-weight: 600;
   }
   .dial .lbl { overflow: hidden; text-overflow: ellipsis; }
+  /* Compact bar: icons only, title moves to the tooltip entirely. */
+  #dial.compact .dial { max-width: none; padding: 0 5px; }
+  #dial.compact .dial .lbl { display: none; }
   #tabs { display: flex; gap: 5px; overflow: hidden; flex: 0 1 auto; }
   .tab {
     display: flex; align-items: center; gap: 6px;
@@ -165,26 +168,38 @@
     display: flex; align-items: center; justify-content: center;
     background: var(--ice-deep); color: #eaf9fd; font-size: 12px;
   }
-  /* Downloads button: hidden until a file starts; the thin bar under
-     the glyph is aggregate in-flight progress. */
+  /* Downloads button: hidden until a file starts; the ring around the
+     glyph is aggregate in-flight progress. */
   #dl { position: relative; }
   #dl svg, .dl-row .act svg { display: block; margin: 0 auto; }
-  /* First appearance and each new transfer pop the icon. */
+  #dl.busy { color: var(--ice); }
+  /* First appearance and each new transfer ease the icon in. */
   @keyframes dlpop {
-    0% { transform: scale(.4); } 60% { transform: scale(1.25); }
-    100% { transform: scale(1); }
+    from { transform: scale(.55); opacity: .35; }
   }
-  #dl.pop { animation: dlpop .35s ease-out; }
-  #dl .bar {
-    position: absolute; left: 5px; bottom: 3px; height: 2px; width: 0;
-    background: var(--ice); border-radius: 1px; transition: width .15s linear;
+  #dl.pop { animation: dlpop .28s cubic-bezier(.2, .8, .3, 1); }
+  /* The ring: a faint track plus an ice arc. Determinate transfers set
+     the arc's dash offset; a transfer with no declared size runs an
+     orbiting segment instead — something visibly alive while bytes move. */
+  #dl .ring {
+    position: absolute; inset: 0; width: 27px; height: 27px;
+    transform: rotate(-90deg); opacity: 0; pointer-events: none;
+    transition: opacity .18s ease;
   }
-  /* No declared size: the fill can't be computed, so a segment sweeps
-     the track instead — something visibly alive while bytes move. */
-  #dl .bar.ind { animation: dlsweep 1.1s ease-in-out infinite; }
-  @keyframes dlsweep {
-    0% { left: 5px; } 50% { left: 60%; } 100% { left: 5px; }
+  #dl.busy .ring { opacity: 1; }
+  #dl .ring circle { fill: none; stroke-width: 1.8; }
+  #dl .ring-track { stroke: rgba(143, 220, 240, .16); }
+  #dl .ring-prog {
+    stroke: var(--ice); stroke-linecap: round;
+    stroke-dasharray: 59.7; stroke-dashoffset: 59.7;
+    filter: drop-shadow(0 0 3px rgba(143, 220, 240, .5));
+    transition: stroke-dashoffset .2s linear;
   }
+  #dl.ind .ring-prog {
+    stroke-dasharray: 15 44.7; stroke-dashoffset: 0;
+    animation: dlorbit 1.1s linear infinite;
+  }
+  @keyframes dlorbit { to { stroke-dashoffset: -59.7; } }
   /* A row that just finished flashes once. */
   @keyframes dlflash {
     0% { background: rgba(95, 207, 143, .26); } 100% { background: transparent; }
@@ -202,13 +217,15 @@
   #dl-pop.open { display: block; }
   .dl-row { padding: 8px 10px; border-radius: 8px; }
   .dl-row:hover { background: rgba(255, 255, 255, .04); }
-  .dl-row .top { display: flex; align-items: center; gap: 8px; }
+  .dl-row .top { display: flex; align-items: center; gap: 6px; }
   .dl-row .nm {
     flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .dl-row .act {
-    flex: 0 0 auto; border: 0; border-radius: 6px; padding: 3px 6px;
-    background: transparent; color: var(--tx2); font-size: 12px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex: 0 0 auto; min-width: 28px; height: 28px; border: 0;
+    border-radius: 7px; padding: 0 6px;
+    background: transparent; color: var(--tx2); font-size: 14px; cursor: pointer;
     transition: background .12s ease;
   }
   .dl-row .act:hover { background: var(--bg3); color: #fff; }
@@ -217,7 +234,7 @@
   .dl-row.done { cursor: grab; }
   .dl-row.done .nm { cursor: pointer; }
   .dl-row.done .nm:hover { color: var(--ice); }
-  .dl-row .act.retry { padding: 3px 9px; }
+  .dl-row .act.retry { padding: 0 11px; font-size: 12px; }
   #menu-pop {
     display: none; position: fixed; top: 40px; right: 8px; z-index: 10;
     min-width: 240px; padding: 5px;
