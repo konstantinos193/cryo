@@ -39,6 +39,38 @@ The two-outcome backoff rule is taken from the current `budget.rs`. Older checkl
 
 A budget is a soft target for measured engine memory. It excludes host memory and does not guarantee an OS-level RAM ceiling. Shared overhead or protected tabs can keep usage above budget.
 
+## Per-tab attribution — decision, 2026-10-26
+
+Roadmap Phase 2 is "finish per-tab attribution". This section fixes what a per-tab number is allowed to mean, because Phase 3's dashboard and the task-manager surface both have to display one, and the wrong choice there would undo the claim this whole document protects. Decided before the surface exists, deliberately.
+
+**Decision: sole-owner attribution, plus one separately reported shared pool. No division, no estimates.**
+
+| Case | What a tab reports |
+| --- | --- |
+| Its renderer serves only that view | That renderer's private bytes, as an exact figure |
+| Its renderer serves two or more views | No per-tab figure. The tab is marked as sharing, and names the pool it shares |
+| Browser and GPU processes | Reported once as engine overhead, never divided across tabs |
+| Frozen or discarded | No figure, because there is no view. Not zero — absent |
+
+**Why not a share-of-renderer estimate.** The recorded forced-sharing probe settles it: one shared ~160 MiB renderer served two views; freezing one view reclaimed 69.1 MiB, and only freezing both reclaimed 158.6 MiB. A naive half-share would have claimed ~80 MiB per tab, which overstates what freezing one tab returns and understates what freezing both does. An estimate that is wrong in both directions is worse than an honest absence, and it would be the first thing a reader quoted back at the README.
+
+**What the sampler is missing today.** `MemorySnapshot` carries `ProcessId` and `ProcessKind` and no view association at all, which is why the code currently refuses to bill any renderer to any tab. Sole-owner attribution needs exactly one new fact: which views a renderer serves.
+
+On Windows that fact is available in the pinned `webview2-com 0.39` without new dependencies:
+
+- `ICoreWebView2Environment13::GetProcessExtendedInfos` returns the same process set as `GetProcessInfos` plus each renderer's `AssociatedFrameInfos`. The collection is populated for renderer processes only; non-renderers are always empty, and a renderer with no live frames can be empty too.
+- `ICoreWebView2FrameInfo2::FrameId` is non-zero only when the frame came from `AssociatedFrameInfos`, and it is the same id space as the webview's own frame id.
+- `ICoreWebView2_20::FrameId` gives each view its own top-level frame id, so a renderer's frame-id set intersected against the view set yields sole-owner or shared, with no URL matching. Two tabs on the same URL must not be confused, which rules out matching on `Source`.
+
+Constraints on the implementation, both already rules elsewhere in the tree:
+
+- `GetProcessExtendedInfos` is asynchronous with a completion handler. It must not be waited on inside a tao handler. Either complete through the handler and post the result to the event loop like `measure` already does, or go through `engine::wry_impl::pump` — see the re-entrancy note in `AGENTS.md`.
+- Frame ids are a snapshot. A view created or destroyed mid-call invalidates them, so a sample that cannot be reconciled against the current view set is discarded, not patched up. A discarded sample is an existing, tested path.
+
+**Platforms without that mapping** report shared for every view rather than guessing. The honest-unsupported rule already applies to mute and download pause; this is the same rule.
+
+**Consequences to hold on to.** No per-tab saving is claimed, in the UI or anywhere else — a sole-owner figure is what that renderer currently holds, not what freezing the tab will return to the OS. Working sets are still never summed as unique physical RAM. The budget stays an aggregate over the engine's process set; attribution is for display and must not become an input to freeze selection, which is the registry's business.
+
 ## 1. Baseline and deterministic coverage
 
 - [x] Read the existing policy tests before changing constants or state transitions. (No constants or transitions changed; three tests added.)
