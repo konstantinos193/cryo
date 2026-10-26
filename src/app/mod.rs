@@ -29,6 +29,7 @@ mod permissions;
 mod resources;
 mod suggest;
 mod surfaces;
+mod tabfind;
 mod transfer;
 mod update;
 mod window;

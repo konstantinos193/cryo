@@ -172,6 +172,10 @@ pub struct Notice {
 pub struct ChromeTab {
     pub id: u64,
     pub title: String,
+    /// The tab's address, so the tab-search overlay can match on it.
+    /// It never leaves this document — the chrome view is the shell
+    /// origin, and only this window's tabs are in it.
+    pub url: String,
     pub active: bool,
     /// "active" | "frozen" | "discarded" — the strip dims and badges by it.
     pub state: &'static str,

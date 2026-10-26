@@ -320,3 +320,60 @@
   /* The bar's trailing "»" into the library panel. */
   .dial.all { color: var(--tx3); padding: 0 9px; }
   .dial.all:hover { color: var(--tx); }
+  /* Tab search (Ctrl+Shift+A). Same overlay shape as the library — the
+     app has stretched this view over the window by the time it is up —
+     but it sits near the top like a command palette, because the eye is
+     already at the strip the search is standing in for. */
+  #tabfind {
+    display: none; position: fixed; inset: 0; z-index: 30;
+    background: rgba(5, 7, 10, .58); backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    justify-content: center; align-items: flex-start;
+  }
+  #tabfind.open { display: flex; }
+  #tabfind .panel {
+    display: flex; flex-direction: column;
+    width: min(620px, calc(100vw - 48px)); max-height: min(70vh, 560px);
+    margin-top: 11vh;
+    background: #12151c; border: 1px solid rgba(255, 255, 255, .09);
+    border-radius: 16px; box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  #tabfind input {
+    flex: 0 0 auto; padding: 15px 18px; border: 0;
+    border-bottom: 1px solid var(--line-soft); background: transparent;
+    color: var(--tx); font: 14px/1.4 inherit; outline: none;
+  }
+  #tabfind input::placeholder { color: var(--tx3); }
+  #tabfind .results { overflow-y: auto; padding: 6px; }
+  #tabfind .count {
+    flex: 0 0 auto; padding: 8px 18px; border-top: 1px solid var(--line-soft);
+    color: var(--tx3); font-size: 11px;
+  }
+  .tf-row {
+    display: flex; align-items: center; gap: 11px;
+    padding: 8px 11px; border-radius: 9px; cursor: pointer;
+  }
+  /* One highlight, moved by the arrows and by hover alike, so the mouse
+     and the keyboard never disagree about what Enter would take. */
+  .tf-row.at { background: var(--bg3); }
+  .tf-row .fav { width: 16px; height: 16px; flex: 0 0 auto; border-radius: 3px; }
+  .tf-row .fav.blank { background: var(--bg3); }
+  .tf-row.at .fav.blank { background: var(--line); }
+  .tf-row .copy { flex: 1; min-width: 0; }
+  .tf-row .nm {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 13px;
+  }
+  .tf-row .ad {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--tx3); font-size: 11px;
+  }
+  .tf-row.live .nm { color: var(--ice); }
+  .tf-state {
+    flex: 0 0 auto; padding: 2px 7px; border-radius: 999px;
+    font-size: 10px; font-weight: 600;
+  }
+  .tf-state.frozen { background: var(--ice-dim); color: var(--ice); }
+  .tf-state.discarded { background: var(--bg3); color: var(--tx3); }
+  .tf-state.here { background: transparent; color: var(--tx3); }

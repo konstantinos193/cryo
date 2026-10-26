@@ -4,6 +4,12 @@
 
 ### Added
 
+- Tab search (`Ctrl+Shift+A`): an overlay that filters every open tab by
+  name or address and takes one with the arrows or a click. Frozen and
+  discarded tabs are listed like any other and picking one restores it
+  through the ordinary activate path — the overlay is a selector and owns
+  no restore logic. The strip stops being a way to find a tab long before
+  freezing stops making tabs cheap to keep.
 - CI runs the chrome-script tests. They were only ever run by hand, so the
   tab-strip pointer regression they cover was ungated.
 

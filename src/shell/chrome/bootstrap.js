@@ -40,7 +40,7 @@
   let menuOpen = false, omniOpen = false, dlOpen = false, libOpen = false,
       acctOpen = false, passwordOpen = false;
   const reportOverlay = () =>
-    ipc({cmd: 'overlay', open: menuOpen || omniOpen || dlOpen || libOpen || acctOpen || passwordOpen || permissionOpen});
+    ipc({cmd: 'overlay', open: menuOpen || omniOpen || dlOpen || libOpen || acctOpen || passwordOpen || permissionOpen || tabfindOpen});
   // Signed in, the avatar opens a dropdown of every account in the jar;
   // signed out, the same spot is still the sign-in pill.
   const setAcct = (open) => {
@@ -150,6 +150,13 @@
     paintLib();
     ipc({cmd: 'library', pane});
   };
+  // Every path that takes the screen away from an overlay shuts all of
+  // them: Escape, a click on the document, a tab switch, the app replacing
+  // the view. One list, so a new overlay joins it in one place.
+  const dismissOverlays = () => {
+    setMenu(false); setOmni(false); setDl(false); setLib(false); setAcct(false);
+    setTabfind(false);
+  };
   // Ctrl+Shift+O lands here.
   window.__cryo_library_toggle = (pane) => {
     if (libOpen && (!pane || pane === libPane)) { setLib(false); return; }
@@ -160,7 +167,7 @@
   window.__cryo_overlay = (open) => {
     if (!open) {
       denyPermission();
-      setMenu(false); setOmni(false); setDl(false); setLib(false); setAcct(false);
+      dismissOverlays();
       passwordOpen = false; passwordPop.classList.remove('open');
     }
   };
@@ -172,7 +179,7 @@
     passwordPop.classList.toggle('open', passwordOpen);
     passwordPop.innerHTML = '';
     if (!data) return;
-    setMenu(false); setOmni(false); setDl(false); setLib(false); setAcct(false);
+    dismissOverlays();
     const head = document.createElement('div');
     head.className = 'pw-head';
     const mark = document.createElement('span');
@@ -300,13 +307,13 @@
   menuPop.onclick = (e) => e.stopPropagation();
   document.addEventListener('click', () => {
     if (permissionOpen) denyPermission();
-    setMenu(false); setOmni(false); setDl(false); setLib(false); setAcct(false);
+    dismissOverlays();
     if (passwordOpen) closePassword();
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       if (permissionOpen) denyPermission();
-      setMenu(false); setOmni(false); setDl(false); setLib(false); setAcct(false);
+      dismissOverlays();
       if (passwordOpen) closePassword();
     }
   });

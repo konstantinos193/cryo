@@ -90,6 +90,7 @@ impl App {
                 .map(|t| ChromeTab {
                     id: t.id().get(),
                     title: t.title().to_string(),
+                    url: t.url().to_string(),
                     active: self.registry.active_id() == Some(t.id()),
                     state: t.state().as_str(),
                     favicon: t.favicon().map(favicon_data_url),

@@ -60,6 +60,10 @@ enum KeyCommand {
     /// Ctrl+D: keep the active page on the bookmarks bar, or drop it
     /// again if it is already kept.
     BookmarkPage,
+    /// Ctrl+Shift+A: the tab-search overlay. The strip stops being a
+    /// way to find a tab long before freezing stops making tabs cheap to
+    /// keep open.
+    TabSearch,
     /// Ctrl+Shift+O: the library panel — kept pages, saved passwords,
     /// import and export.
     Library,
@@ -134,6 +138,7 @@ fn key_command(acc: Accelerator) -> Option<(KeyCommand, bool)> {
         (true, false, true, Character('s')) => (KeyCommand::Screenshot, true),
         (true, false, true, Character('f')) => (KeyCommand::FreezeActive, true),
         (true, false, false, Character('d')) => (KeyCommand::BookmarkPage, true),
+        (true, false, true, Character('a')) => (KeyCommand::TabSearch, true),
         (true, false, true, Character('o')) => (KeyCommand::Library, true),
         (true, false, false, Character('h')) => (KeyCommand::History, true),
         (true, false, true, Delete) => (KeyCommand::ClearBrowsingData, true),
@@ -265,6 +270,7 @@ impl App {
             KeyCommand::Screenshot => self.screenshot_active(),
             KeyCommand::ClearBrowsingData => self.clear_data(),
             KeyCommand::BookmarkPage => self.bookmark_active(),
+            KeyCommand::TabSearch => self.toggle_tab_search(),
             KeyCommand::Library => self.toggle_library(),
             KeyCommand::History => self.toggle_history(),
             KeyCommand::FreezeActive => match self.registry.active_id() {

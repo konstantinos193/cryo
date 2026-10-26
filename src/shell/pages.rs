@@ -350,6 +350,7 @@ pub const SETTINGS_HTML: &str = r##"<!doctype html>
     <tr><td class="k">Ctrl+M</td><td>Mute tab</td></tr>
     <tr><td class="k">Ctrl+Shift+F</td><td>Freeze tab — drops the surface, keeps a snapshot; click the tab to restore. ⋮ menu also has Discard.</td></tr>
     <tr><td class="k">F11 / F12</td><td>Fullscreen / DevTools</td></tr>
+    <tr><td class="k">Ctrl+Shift+A</td><td>Find a tab by name or address — frozen and discarded tabs are listed too</td></tr>
     <tr><td class="k">Ctrl+H / Ctrl+Shift+O</td><td>History / library panel</td></tr>
     <tr><td class="k">Ctrl+Shift+N</td><td>Incognito window</td></tr>
     <tr><td class="k">Ctrl+Shift+Del</td><td>Clear browsing data</td></tr>

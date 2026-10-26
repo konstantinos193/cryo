@@ -125,4 +125,7 @@
       signinBtn.textContent = 'Sign in';
       signinBtn.title = 'Sign in with your Google account';
     }
+    // An open tab-search overlay reads this same state, so a tab that
+    // freezes, renames or closes behind it repaints rather than lying.
+    if (tabfindOpen) paintTabfind();
   };

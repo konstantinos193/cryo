@@ -51,6 +51,11 @@ What exists today:
   same path the closed-tab stack uses.
 - One ordered tab registry: reopen closed (`Ctrl+Shift+T`, restores strip
   position), duplicate, mute, reorder, middle-click to close.
+- Tab search (`Ctrl+Shift+A`): filter every open tab by name or address and
+  take one with the arrows. Frozen and discarded tabs are listed like any
+  other, and picking one restores it through the ordinary path — the strip
+  stops being a way to find a tab long before freezing stops making tabs
+  cheap to keep.
 - Speed dial in both places browsers put it: a bar under the toolbar and tiles
   on the new-tab page, both fed by one `/dials` list on the internal protocol.
 - Omnibox memory: typed input and visits are remembered and suggested, bounded
@@ -87,6 +92,7 @@ behave the same whether the page or the chrome owns focus.
 | `Ctrl+Shift+T` | Reopen closed tab (bounded stack, restores strip position) |
 | `Ctrl+Tab` / `Ctrl+PgDn` · `Ctrl+Shift+Tab` / `Ctrl+PgUp` | Next / previous tab |
 | `Ctrl+1..8` / `Ctrl+9` | Jump to tab N / last tab |
+| `Ctrl+Shift+A` | Find a tab by name or address, frozen ones included |
 | `Ctrl+Shift+PgUp` / `PgDn` | Move tab left / right |
 | `Ctrl+Shift+Home` / `End` | Move tab to start / end |
 | `Ctrl+Shift+K` | Duplicate tab |
@@ -246,8 +252,8 @@ there is no longer a 24-live-view cap.
 - [ ] Phase 5: evaluate Servo as a second engine backend. If it earns the slot.
 
 Known gaps by design: find-in-page, a browsable history surface (the store
-exists, the page doesn't), tab search overlay, a task manager. They go in
-issues, not in half-built code.
+exists, the page doesn't), a task manager. They go in issues, not in
+half-built code.
 
 ## Contributing
 
