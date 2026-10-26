@@ -4,6 +4,7 @@
 pub mod chrome;
 pub mod dial;
 pub mod error;
+pub mod geometry;
 pub mod pages;
 pub mod search;
 

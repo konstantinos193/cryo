@@ -16,6 +16,11 @@
                      (t.state !== 'active' ? ' ' + t.state : '');
       el.title = t.state === 'frozen' ? 'Frozen — click to restore'
                : t.state === 'discarded' ? 'Discarded — click to reload' : '';
+      el.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0 || e.target.closest('.fz, .x')) return;
+        e.preventDefault();
+        ipc({cmd: 'activate', id: t.id});
+      });
       // Middle-click anywhere on the tab closes it.
       el.addEventListener('auxclick', (e) => {
         if (e.button === 1) ipc({cmd: 'close', id: t.id});
@@ -52,7 +57,6 @@
       const title = document.createElement('span');
       title.className = 'title';
       title.textContent = t.title;
-      title.onclick = () => ipc({cmd: 'activate', id: t.id});
       const x = document.createElement('span');
       x.className = 'x';
       x.textContent = '×';

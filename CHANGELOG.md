@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.9.0
+
+### Added
+
+- Window placement persistence: size, position and maximized state are
+  written to `window.json` at close and restored on the next launch. A
+  remembered position is only re-seated on a monitor that still exists;
+  incognito reads the size but never writes placement.
+- cryo.exe and the installer now carry VERSIONINFO from the crate
+  metadata.
+
+### Fixed
+
+- Tab-strip activation moved to `pointerdown`, so a press on a frozen or
+  discarded tab lands before a re-render can move the target out from
+  under the click. Regression coverage in `tests/tab_strip.cjs`.
+
 ## 0.8.2
 
 ### Fixed

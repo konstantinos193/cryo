@@ -205,14 +205,45 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
     // come up, and watching them appear one after another reads as
     // flicker — showing the window after `App::new` means the first
     // frame the user sees is already the finished layout.
+    // Where the last window closed is where this one opens — size,
+    // position and maximized come back from `window.json`. Incognito
+    // still gets the size but never writes it: its closing shape isn't
+    // the profile's to keep.
+    let state_path = if incognito {
+        None
+    } else {
+        Some(shell::geometry::default_path())
+    };
+    let saved = state_path.as_deref().and_then(shell::geometry::load);
     let builder = WindowBuilder::new()
         .with_title(title)
-        .with_inner_size(LogicalSize::new(1280.0, 800.0))
+        .with_inner_size(match saved {
+            Some(p) => LogicalSize::new(p.width, p.height),
+            None => LogicalSize::new(1280.0, 800.0),
+        })
         .with_visible(false)
         .with_background_color(shell::CONTENT_BACKGROUND);
     #[cfg(windows)]
     let builder = with_icons(builder)?;
     let window = Rc::new(builder.build(&event_loop)?);
+    if let Some(p) = saved {
+        // Re-seat only onto a monitor that still exists — a removed
+        // display's coordinates would park the window off-screen.
+        if let (Some(x), Some(y)) = (p.x, p.y) {
+            let on_screen = event_loop.available_monitors().any(|m| {
+                let scale = m.scale_factor();
+                let pos = m.position().to_logical::<f64>(scale);
+                let size = m.size().to_logical::<f64>(scale);
+                x >= pos.x && x < pos.x + size.width && y >= pos.y && y < pos.y + size.height
+            });
+            if on_screen {
+                window.set_outer_position(tao::dpi::LogicalPosition::new(x, y));
+            }
+        }
+        if p.maximized {
+            window.set_maximized(true);
+        }
+    }
 
     #[cfg(not(feature = "servo-engine"))]
     let engine: Rc<dyn Engine> = Rc::new(WryEngine::new(
@@ -291,6 +322,7 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
         proxy,
         open_url,
         profile,
+        state_path,
     )?;
     app.set_memory_budget(memory_budget);
     // Views are spawned and navigating — reveal once, complete.

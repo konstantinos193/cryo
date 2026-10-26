@@ -225,6 +225,7 @@ fn fixture_app(
         event_loop.create_proxy(),
         None,
         Profile::session_only(),
+        None,
     )?;
     let anchor = app.registry.active_id().expect("initial tab is active");
     let mut tabs = Vec::new();

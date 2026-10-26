@@ -33,6 +33,7 @@ mod transfer;
 mod update;
 mod window;
 
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -172,6 +173,12 @@ pub struct App {
     registry: Tabs,
     chrome: Box<dyn ContentView>,
     logical_size: (f64, f64),
+    /// Inner size while not maximized — a maximized close reopens at
+    /// this size, not at the screen's.
+    normal_size: (f64, f64),
+    /// File the window's placement is written to at close — `None` in
+    /// incognito, which leaves nothing behind.
+    window_state: Option<PathBuf>,
     modifiers: ModifiersState,
     /// Where keystrokes go right now: chrome bar or the active page.
     /// Approximate — a page click isn't reported back — but F6's cycle
@@ -276,6 +283,7 @@ impl App {
         proxy: EventLoopProxy<AppEvent>,
         open_url: Option<String>,
         profile: Profile,
+        window_state: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
         let logical = window.inner_size().to_logical::<f64>(window.scale_factor());
         let logical_size = (logical.width, logical.height);
@@ -316,6 +324,8 @@ impl App {
             registry,
             chrome,
             logical_size,
+            normal_size: logical_size,
+            window_state,
             modifiers: ModifiersState::empty(),
             chrome_focused: false,
             page_fullscreen: false,
@@ -365,6 +375,38 @@ impl App {
     pub(super) fn request_exit(&mut self, control_flow: &mut ControlFlow) {
         self.exiting = true;
         *control_flow = ControlFlow::Exit;
+        self.note_placement();
+    }
+
+    /// Write where the window ended up so the next launch reopens there.
+    /// The remembered size is the un-maximized one — storing a maximized
+    /// window's screen-sized bounds would reopen huge on a smaller
+    /// display.
+    fn note_placement(&mut self) {
+        let Some(path) = &self.window_state else {
+            return;
+        };
+        let scale = self.window.scale_factor();
+        let (x, y) = match self.window.outer_position() {
+            Ok(p) => (Some(p.x as f64 / scale), Some(p.y as f64 / scale)),
+            Err(_) => (None, None),
+        };
+        let maximized = self.window.is_maximized();
+        let (width, height) = if maximized {
+            self.normal_size
+        } else {
+            self.logical_size
+        };
+        let placement = shell::geometry::Placement {
+            width,
+            height,
+            x,
+            y,
+            maximized,
+        };
+        if let Err(e) = shell::geometry::save(path, &placement) {
+            crate::report!("window placement not saved: {e}");
+        }
     }
 
     fn dispatch(&mut self, event: AppEvent, control_flow: &mut ControlFlow) {
@@ -487,6 +529,9 @@ impl App {
         let w = width_px as f64 / scale;
         let h = height_px as f64 / scale;
         self.logical_size = (w, h);
+        if !self.window.is_maximized() {
+            self.normal_size = (w, h);
+        }
         let (_, content_rect) = shell::layout(w, h);
         if let Err(e) = self.chrome.set_bounds(self.chrome_rect()) {
             crate::report!("{e:?}");
