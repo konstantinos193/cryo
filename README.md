@@ -155,6 +155,39 @@ Requirements: Windows 10/11 (WebView2 ships with the OS), a Linux with
 WebKitGTK installed (wry's appetite, not ours), or macOS (WKWebView comes
 free).
 
+### Windows will warn you
+
+The installer is unsigned, so SmartScreen opens with "Windows protected
+your PC" the first time you run it. That is not a verdict on the file.
+It means the binary carries no code-signing certificate and no download
+reputation yet — every new unsigned installer gets the same greeting,
+and a brand-new signature gets a politer version of it.
+
+Two things worth more than the dialog:
+
+1. Take `cryo-setup.exe` from the
+   [releases page](https://github.com/konstantinos193/cryo/releases) and
+   nowhere else.
+2. Check the bytes against the hash the build published:
+
+   ```powershell
+   (Get-FileHash .\cryo-setup.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+   ```
+
+   Compare it with the `sha256` field in `latest.json` on the same
+   release. That file is written by the GitHub Actions run that built the
+   installer — the same hash the updater verifies before it installs
+   anything. A mismatch means the file is not what CI produced, and the
+   warning stops being theoretical.
+
+Matching hash, then **More info → Run anyway**.
+
+The pipeline signs both `cryo.exe` and `cryo-setup.exe` the moment a real
+code-signing certificate lands in repo secrets; no workflow change needed
+(see [CONTRIBUTING.md](CONTRIBUTING.md)). A self-signed one proves
+integrity and clears nothing — SmartScreen trades in reputation, not
+homework.
+
 Or build it. Rust stable:
 
 ```powershell
