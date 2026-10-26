@@ -162,6 +162,11 @@ pub enum ChromeCommand {
     ExtensionRemove {
         slug: String,
     },
+    /// Switch an installed extension on or off.
+    ExtensionEnable {
+        slug: String,
+        enabled: bool,
+    },
     /// Fetch one from the Chrome Web Store. `input` is whatever was typed —
     /// a store address or an id — and the app is what decides whether it
     /// names an extension at all.

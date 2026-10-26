@@ -25,21 +25,68 @@ impl App {
         let Some(catalogue) = &self.extensions else {
             return Vec::new();
         };
-        match catalogue.list() {
-            Ok(found) => found
-                .into_iter()
-                .map(|e| ChromeExtension {
+        let found = match catalogue.list() {
+            Ok(found) => found,
+            Err(e) => {
+                crate::report!("{e:?}");
+                return Vec::new();
+            }
+        };
+        // Two different questions: the catalogue says what is on disk, the
+        // engine says what it loaded and whether it is on. Where they
+        // disagree the pane shows it rather than picking one to believe.
+        let loaded = self.engine.loaded_extensions().unwrap_or_else(|e| {
+            crate::report!("{e:?}");
+            Vec::new()
+        });
+        found
+            .into_iter()
+            .map(|e| {
+                // A store install's folder is named by its id; a folder added
+                // by hand is not, so it may have no engine row to match.
+                let engine_row = loaded.iter().find(|l| l.id == e.slug());
+                ChromeExtension {
                     slug: e.slug().to_string(),
                     name: e.name().to_string(),
                     version: e.version().to_string(),
                     manifest_version: e.manifest_version(),
                     dir: e.dir().display().to_string(),
-                })
-                .collect(),
-            Err(e) => {
-                crate::report!("{e:?}");
-                Vec::new()
-            }
+                    loaded: engine_row.is_some(),
+                    enabled: engine_row.is_some_and(|l| l.enabled),
+                }
+            })
+            .collect()
+    }
+
+    /// Switch one on or off without uninstalling it. The engine owns this
+    /// state — the folder on disk says nothing about it — so the answer is
+    /// read back from the engine rather than assumed from the request.
+    pub(super) fn set_extension_enabled(
+        &mut self,
+        slug: &str,
+        enabled: bool,
+    ) -> anyhow::Result<()> {
+        // Resolved against the catalogue first, so a handle from the document
+        // can only name something installed.
+        let known = self
+            .extensions
+            .as_ref()
+            .and_then(|c| c.list().ok())
+            .is_some_and(|all| all.iter().any(|e| e.slug() == slug));
+        if !known {
+            return Ok(());
+        }
+        match self.engine.set_extension_enabled(slug, enabled) {
+            Ok(()) => self.push_library(),
+            Err(e) => self.notice(
+                false,
+                if enabled {
+                    "That extension was not switched on"
+                } else {
+                    "That extension was not switched off"
+                },
+                vec![e.to_string()],
+            ),
         }
     }
 
@@ -172,6 +219,14 @@ impl App {
         let Some(catalogue) = &self.extensions else {
             return Ok(());
         };
+        // Ask the engine to unregister it before the folder goes. Deleting
+        // the folder alone does make WebView2 drop the extension, but by
+        // side effect; this is the actual uninstall. A failure here is not
+        // fatal — an extension the engine never loaded has nothing to
+        // unregister — so it is noted and the folder still goes.
+        if let Err(e) = self.engine.remove_extension(slug) {
+            crate::report!("engine did not unregister {slug}: {e}");
+        }
         match catalogue.remove(slug) {
             Ok(()) => {
                 self.notice(

@@ -428,7 +428,44 @@ pub trait Engine {
         ))
     }
 
+    /// What the engine says it has loaded, keyed by extension id. The
+    /// catalogue knows what is on disk; only the engine knows what is
+    /// actually running and whether it is switched on, so the pane asks for
+    /// both and shows where they disagree.
+    ///
+    /// Backends that load no extensions answer with an empty list rather than
+    /// an error: nothing loaded is a true answer, not a failure.
+    fn loaded_extensions(&self) -> Result<Vec<LoadedExtension>, EngineError> {
+        Ok(Vec::new())
+    }
+
+    /// Switch one on or off without uninstalling it.
+    fn set_extension_enabled(&self, _id: &str, _enabled: bool) -> Result<(), EngineError> {
+        Err(EngineError::Unsupported(
+            "this backend cannot enable or disable extensions",
+        ))
+    }
+
+    /// Uninstall through the engine, which is what actually unregisters an
+    /// extension from the profile. Deleting the folder makes the engine drop
+    /// it as a side effect; this asks.
+    fn remove_extension(&self, _id: &str) -> Result<(), EngineError> {
+        Err(EngineError::Unsupported(
+            "this backend cannot remove extensions",
+        ))
+    }
+
     fn spawn(&self, spec: ViewSpec) -> Result<Box<dyn ContentView>, EngineError>;
+}
+
+/// One extension as the *engine* sees it, which is not the same question as
+/// what the catalogue has on disk: a folder can be present while the engine
+/// never loaded it, and an extension can be loaded but switched off.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoadedExtension {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -446,4 +483,6 @@ pub enum EngineError {
     View(String),
     #[error("script evaluation failed: {0}")]
     Script(String),
+    #[error("{0}")]
+    Unsupported(&'static str),
 }

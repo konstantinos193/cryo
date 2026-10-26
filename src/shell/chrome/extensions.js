@@ -69,6 +69,16 @@
       // The folder, so it can be found and left alone.
       main.appendChild(node('div', 'u path', ext.dir));
       row.appendChild(main);
+      // On/off is the engine's answer, not the folder's. An extension the
+      // engine has not loaded gets no switch — there is nothing to switch —
+      // and the row says why instead of showing a dead control.
+      if (ext.loaded) {
+        row.appendChild(button(ext.enabled ? 'On' : 'Off',
+          ext.enabled ? 'on' : '',
+          () => ipc({cmd: 'extension_enable', slug: ext.slug, enabled: !ext.enabled})));
+      } else {
+        row.appendChild(node('span', 'tf-state discarded', 'Not loaded yet'));
+      }
       row.appendChild(button('Remove', 'warn',
         () => ipc({cmd: 'extension_remove', slug: ext.slug})));
       list.appendChild(row);

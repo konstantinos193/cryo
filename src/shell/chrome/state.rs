@@ -129,6 +129,13 @@ pub struct ChromeExtension {
     /// Shown so a person can find the folder cryo copied in, and know not
     /// to edit it — WebView2 drops an extension whose files change.
     pub dir: String,
+    /// The engine has this one registered. False means the folder is there
+    /// but nothing loaded it — usually because no tab has been opened since
+    /// it was installed — which the pane says rather than implying it runs.
+    pub loaded: bool,
+    /// Switched on, as the engine reports it. Meaningless while `loaded` is
+    /// false, and the pane does not show a switch in that case.
+    pub enabled: bool,
 }
 
 /// One remembered entry on the wire — a visited URL or a committed

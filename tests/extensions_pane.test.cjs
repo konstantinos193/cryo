@@ -113,6 +113,26 @@ test('Enter in the store field fetches, and an empty field sends nothing', () =>
   ]);
 });
 
+test('the switch reflects the engine, and toggling sends the opposite', () => {
+  const f = fixture(supported([
+    { ...INSTALLED[0], loaded: true, enabled: true },
+    { ...INSTALLED[1], loaded: true, enabled: false },
+  ]));
+  assert.deepEqual(f.buttons(), [
+    'Add unpacked folder', 'Fetch', 'On', 'Remove', 'Off', 'Remove']);
+  f.click('On');
+  assert.deepEqual(f.commands, [
+    { cmd: 'extension_enable', slug: 'tab-tidier', enabled: false },
+  ]);
+});
+
+test('an extension the engine has not loaded gets no switch', () => {
+  const f = fixture(supported([{ ...INSTALLED[0], loaded: false, enabled: false }]));
+  assert.match(f.text(), /Not loaded yet/);
+  // No dead control: Remove is the only row button.
+  assert.deepEqual(f.buttons(), ['Add unpacked folder', 'Fetch', 'Remove']);
+});
+
 test('removing sends the slug, never a path', () => {
   const f = fixture(supported(INSTALLED));
   f.click('Remove');

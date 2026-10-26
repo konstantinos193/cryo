@@ -335,3 +335,9 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     color: var(--tx3); opacity: .75;
   }
+  /* The extensions pane's on/off switch — the engine's answer, not a
+     checkbox the pane keeps its own opinion in. */
+  .lbtn.on {
+    background: var(--ice-dim); color: var(--ice);
+    border-color: rgba(143, 220, 240, .35);
+  }

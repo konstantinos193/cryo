@@ -90,6 +90,9 @@ impl App {
             ChromeCommand::ExtensionAdd => self.add_extension(),
             ChromeCommand::ExtensionRemove { slug } => self.remove_extension(&slug),
             ChromeCommand::ExtensionInstall { input } => self.install_from_store(&input),
+            ChromeCommand::ExtensionEnable { slug, enabled } => {
+                self.set_extension_enabled(&slug, enabled)
+            }
             ChromeCommand::HistoryOpen { url, ctrl, shift } => self.open_history(&url, ctrl, shift),
             ChromeCommand::HistoryRemove { text } => self.remove_history(&text),
             ChromeCommand::HistoryClear {} => self.clear_history(),

@@ -14,6 +14,8 @@ mod downloads;
 #[cfg(target_os = "windows")]
 mod events;
 #[cfg(target_os = "windows")]
+mod extensions;
+#[cfg(target_os = "windows")]
 mod ops;
 #[cfg(target_os = "windows")]
 mod permission_profile;
@@ -83,6 +85,13 @@ pub struct WryEngine {
     /// of the process does it and the rest inherit the result.
     #[cfg(target_os = "windows")]
     extensions_loaded: std::cell::Cell<bool>,
+    /// The profile the loaded extensions belong to, taken from the first
+    /// content view. Extensions are registered against the profile rather
+    /// than a view, so any view's profile answers for all of them — but
+    /// there is no profile at all until one view exists.
+    #[cfg(target_os = "windows")]
+    extension_profile:
+        RefCell<Option<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Profile7>>,
 }
 
 impl WryEngine {
@@ -106,7 +115,17 @@ impl WryEngine {
             extensions_dir,
             #[cfg(target_os = "windows")]
             extensions_loaded: std::cell::Cell::new(false),
+            #[cfg(target_os = "windows")]
+            extension_profile: RefCell::new(None),
         }
+    }
+
+    /// The profile to ask about extensions, if a view has given us one yet.
+    #[cfg(target_os = "windows")]
+    fn extension_profile(
+        &self,
+    ) -> Option<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Profile7> {
+        self.extension_profile.borrow().clone()
     }
 
     /// The shared environment, created once — the same options wry
@@ -231,6 +250,32 @@ fn create_environment(extensions: bool) -> Result<ICoreWebView2Environment, Engi
 }
 
 impl Engine for WryEngine {
+    /// Nothing is loaded before the first content view exists, and an empty
+    /// list is the true answer then — not a failure.
+    #[cfg(target_os = "windows")]
+    fn loaded_extensions(&self) -> Result<Vec<crate::engine::LoadedExtension>, EngineError> {
+        match self.extension_profile() {
+            Some(profile) => extensions::loaded(&profile),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn set_extension_enabled(&self, id: &str, enabled: bool) -> Result<(), EngineError> {
+        let profile = self.extension_profile().ok_or(EngineError::Unsupported(
+            "no view has loaded extensions yet",
+        ))?;
+        extensions::set_enabled(&profile, id, enabled)
+    }
+
+    #[cfg(target_os = "windows")]
+    fn remove_extension(&self, id: &str) -> Result<(), EngineError> {
+        let profile = self.extension_profile().ok_or(EngineError::Unsupported(
+            "no view has loaded extensions yet",
+        ))?;
+        extensions::remove(&profile, id)
+    }
+
     #[cfg(target_os = "windows")]
     fn measure_memory(
         &self,
@@ -392,6 +437,29 @@ impl Engine for WryEngine {
         #[cfg(target_os = "windows")]
         if load_extensions.is_some() {
             self.extensions_loaded.set(true);
+        }
+        // Keep the first content view's profile: it is how the pane asks what
+        // the engine actually loaded, rather than reporting folder contents
+        // as though they were running.
+        #[cfg(target_os = "windows")]
+        if access != crate::engine::ViewAccess::Chrome && self.extension_profile.borrow().is_none()
+        {
+            use webview2_com::Microsoft::Web::WebView2::Win32::{
+                ICoreWebView2Profile7, ICoreWebView2_13,
+            };
+            use windows::core::Interface;
+            use wry::WebViewExtWindows;
+            let profile = (|| -> windows::core::Result<ICoreWebView2Profile7> {
+                let webview = unsafe { view.controller().CoreWebView2()? };
+                unsafe { webview.cast::<ICoreWebView2_13>()?.Profile()? }.cast()
+            })();
+            match profile {
+                Ok(profile) => *self.extension_profile.borrow_mut() = Some(profile),
+                // An older runtime has no profile interface for this. The
+                // pane then shows the catalogue alone, which is the honest
+                // fallback rather than a failed spawn.
+                Err(e) => crate::report!("no extension profile on this runtime: {e}"),
+            }
         }
         let view = WryView::new(
             view,
