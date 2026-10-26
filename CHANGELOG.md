@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Chrome extensions, unpacked, on Windows. `Ctrl+Shift+O` → **Extensions**
+  adds the folder holding a `manifest.json`, lists what is installed with its
+  version and manifest version, and removes one. MV2 and MV3 both load;
+  verified against a real content script running on a live page.
+- A new `extensions` context owns the catalogue — what is installed and what
+  a manifest says — while loading stays the engine's job behind
+  `engine::Engine`. An install copies the folder into the profile and never
+  touches the copy again, because WebView2 drops an extension whose files
+  change under it.
+
+### Known limits
+
+- Windows only. WebView2 is what loads extensions; wry's extension path on
+  WebKitGTK means native WebKit extensions, which are a different thing, so
+  the pane says so rather than pretending.
+- Unpacked folders only — no `.crx` and no Web Store, which WebView2 does not
+  offer.
+- An extension reaches a tab when that tab's view is built, so it starts
+  working in tabs opened after it is added.
+- Incognito windows load none, deliberately: an extension sees the pages it
+  is granted, and a private window is not the place to decide that silently.
+- Requires WebView2 runtime 120.0.2210.55 or newer; older runtimes ignore the
+  option and no extension appears.
+
 ## 0.11.0
 
 ### Added

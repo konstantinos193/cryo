@@ -217,6 +217,7 @@ fn fixture_app(
         window.window_handle()?.as_raw(),
         crate::shell::pages::internal_page,
         true,
+        None,
     ));
     let mut app = App::new(
         window,

@@ -42,6 +42,8 @@ pub(crate) const CHROME_SCRIPT: &str = concat!(
     "\n",
     include_str!("chrome/history.js"),
     "\n",
+    include_str!("chrome/extensions.js"),
+    "\n",
     include_str!("chrome/transfer.js"),
     "\n",
     include_str!("chrome/tabfind.js"),

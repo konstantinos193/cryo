@@ -18,6 +18,7 @@ pub mod account;
 pub mod app;
 pub mod bookmarks;
 pub mod engine;
+pub mod extensions;
 pub mod instance;
 mod memory;
 pub mod persist;
@@ -61,6 +62,13 @@ pub(crate) fn data_dir() -> std::path::PathBuf {
                 .map(|h| std::path::PathBuf::from(h).join(".local").join("share"))
         });
     base.unwrap_or_else(std::env::temp_dir).join("cryo")
+}
+
+/// Where unpacked extensions live: one directory under the data root with
+/// one subdirectory per extension, which is the shape the engine adapter
+/// loads. Named here because the composition root names paths (AGENTS §5).
+pub(crate) fn extensions_root() -> std::path::PathBuf {
+    data_dir().join("extensions")
 }
 
 /// Read a whole file — `Ok(None)` when it isn't there, since a missing
@@ -251,10 +259,15 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
     }
 
     #[cfg(not(feature = "servo-engine"))]
+    // The composition root names the path (AGENTS §5). An incognito window
+    // loads none: an extension sees the pages it is granted, and a private
+    // window is not the place to decide that on the user's behalf.
+    let extensions_dir = (!incognito).then(|| extensions::Catalogue::new(extensions_root()));
     let engine: Rc<dyn Engine> = Rc::new(WryEngine::new(
         window.window_handle()?.as_raw(),
         shell::pages::internal_page,
         incognito,
+        extensions_dir.as_ref().map(|c| c.root().to_path_buf()),
     ));
     #[cfg(feature = "servo-engine")]
     let engine: Rc<dyn Engine> = {
@@ -297,6 +310,7 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
                 vault::SealedFile::default_path(),
                 vault_protector(),
             )),
+            extensions: Some(extensions::Catalogue::new(extensions_root())),
             incognito: false,
         }
     };

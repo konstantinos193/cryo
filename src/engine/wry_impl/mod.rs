@@ -70,10 +70,30 @@ pub struct WryEngine {
     /// option, not an environment one, so all views can share it.
     #[cfg(target_os = "windows")]
     environment: RefCell<Option<ICoreWebView2Environment>>,
+    /// Directory of unpacked extensions to load, or `None` for a window
+    /// that runs without them. Incognito passes `None`: extensions see
+    /// every page they are granted, and a private window is not the place
+    /// to decide that silently.
+    #[cfg(target_os = "windows")]
+    extensions_dir: Option<std::path::PathBuf>,
+    /// Extensions are installed into the profile, not into a view, and
+    /// WebView2 keeps them there. Loading on every spawn would re-add the
+    /// same set per tab — each one a COM wait that pumps the message queue,
+    /// which is the hazard `pump` exists for — so the first content view
+    /// of the process does it and the rest inherit the result.
+    #[cfg(target_os = "windows")]
+    extensions_loaded: std::cell::Cell<bool>,
 }
 
 impl WryEngine {
-    pub fn new(parent: RawWindowHandle, resolve_page: PageResolver, incognito: bool) -> Self {
+    pub fn new(
+        parent: RawWindowHandle,
+        resolve_page: PageResolver,
+        incognito: bool,
+        #[cfg_attr(not(target_os = "windows"), allow(unused_variables))] extensions_dir: Option<
+            std::path::PathBuf,
+        >,
+    ) -> Self {
         Self {
             parent,
             resolve_page,
@@ -82,6 +102,10 @@ impl WryEngine {
             delayer: Delayer::new(),
             #[cfg(target_os = "windows")]
             environment: RefCell::new(None),
+            #[cfg(target_os = "windows")]
+            extensions_dir,
+            #[cfg(target_os = "windows")]
+            extensions_loaded: std::cell::Cell::new(false),
         }
     }
 
@@ -93,7 +117,7 @@ impl WryEngine {
         if let Some(env) = &*self.environment.borrow() {
             return Ok(env.clone());
         }
-        let env = create_environment()?;
+        let env = create_environment(self.extensions_dir.is_some())?;
         *self.environment.borrow_mut() = Some(env.clone());
         Ok(env)
     }
@@ -152,7 +176,13 @@ fn browser_args() -> String {
 /// Null executable folder and user-data folder mean WebView2's defaults,
 /// which is what a wry view with no custom context already gets.
 #[cfg(target_os = "windows")]
-fn create_environment() -> Result<ICoreWebView2Environment, EngineError> {
+/// `extensions` turns on `AreBrowserExtensionsEnabled`. It has to be decided
+/// here rather than on the builder: wry sets the same option during *its*
+/// environment creation, which `with_environment` replaces, so a builder
+/// flag alone would leave the environment refusing installs. WebView2
+/// requires runtime 120.0.2210.55 or newer for this; older runtimes ignore
+/// the option and extensions simply never appear.
+fn create_environment(extensions: bool) -> Result<ICoreWebView2Environment, EngineError> {
     use std::sync::mpsc::channel;
     use webview2_com::{
         CoreWebView2EnvironmentOptions, CreateCoreWebView2EnvironmentCompletedHandler,
@@ -169,6 +199,7 @@ fn create_environment() -> Result<ICoreWebView2Environment, EngineError> {
     let options = CoreWebView2EnvironmentOptions::default();
     unsafe {
         options.set_additional_browser_arguments(browser_args());
+        options.set_are_browser_extensions_enabled(extensions);
         let lcid = GetUserDefaultUILanguage();
         let mut lang = [0u16; MAX_LOCALE_NAME as usize];
         LCIDToLocaleName(lcid as u32, Some(&mut lang), LOCALE_ALLOW_NEUTRAL_NAMES);
@@ -235,6 +266,23 @@ impl Engine for WryEngine {
         // environment creation, which sharing replaces.
         #[cfg(target_os = "windows")]
         let builder = builder.with_environment(self.environment()?);
+        // Extensions belong to content views: the chrome document is ours
+        // and does not host anyone else's scripts. wry loads them during a
+        // build and only when this flag is set on the builder too — the
+        // environment option alone unlocks installing, not loading.
+        #[cfg(target_os = "windows")]
+        let load_extensions = self
+            .extensions_dir
+            .as_ref()
+            .filter(|_| access != crate::engine::ViewAccess::Chrome)
+            .filter(|_| !self.extensions_loaded.get());
+        #[cfg(target_os = "windows")]
+        let builder = match load_extensions {
+            Some(dir) => builder
+                .with_browser_extensions_enabled(true)
+                .with_extensions_path(dir.clone()),
+            None => builder,
+        };
         let mut builder = builder
             // The scheme exists for chrome IPC as much as for pages —
             // see `protocol::respond` for why it must be a real URL.
@@ -339,6 +387,12 @@ impl Engine for WryEngine {
         let view = builder
             .build_as_child(&parent)
             .map_err(|e| EngineError::Spawn(e.to_string()))?;
+        // Only now: a spawn that failed loaded nothing, and the next
+        // content view should still get the chance to.
+        #[cfg(target_os = "windows")]
+        if load_extensions.is_some() {
+            self.extensions_loaded.set(true);
+        }
         let view = WryView::new(
             view,
             internal,

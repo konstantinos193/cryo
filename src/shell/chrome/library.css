@@ -329,3 +329,9 @@
   #toast.bad { border-left-color: var(--bad); }
   #toast .tt { font-weight: 600; }
   #toast .tl { color: var(--tx2); font-size: 11px; margin-top: 2px; }
+  /* The extensions pane shows each copied folder so it can be found and
+     left alone; a long path ellipses rather than wrapping the row. */
+  .lrow .u.path {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--tx3); opacity: .75;
+  }

@@ -264,6 +264,8 @@ impl App {
                 .collect(),
             sources_ready: self.import_sources.is_some(),
             locked: self.vault.locked_out().map(str::to_string),
+            extensions: self.extension_rows(),
+            extensions_supported: self.extensions_supported(),
             incognito: self.incognito,
         };
         let json = serde_json::to_string(&state)?;

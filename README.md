@@ -71,6 +71,11 @@ What exists today:
 - Import and export for other browsers' formats. Foreign bytes become drafts
   here, then pass through the same constructors as homegrown data.
   `edge-import/` holds a real Edge profile as the fixture.
+- Chrome extensions, unpacked, on Windows: add the folder holding a
+  `manifest.json` and WebView2 loads it (MV2 and MV3). `Ctrl+Shift+O` →
+  **Extensions** lists what is installed and removes one. There is no Web
+  Store install — WebView2 takes folders, not `.crx` — an extension starts
+  working in tabs built after it is added, and incognito windows load none.
 - Incognito windows as real InPrivate sibling processes (`--incognito`), not a
   cosmetic flag.
 - On Windows, external links reach the running window over a named pipe and
@@ -248,7 +253,10 @@ there is no longer a 24-live-view cap.
   accounting adapters. Measured budgets are implemented on all three
   platforms and live-verified on Windows.
 - [ ] Phase 3: memory dashboard (the real `Shift+Esc`).
-- [ ] Phase 4: a WebExtensions (MV3) surface.
+- [ ] Phase 4: a WebExtensions (MV3) surface. Loading unpacked extensions and
+  managing them is done on Windows; what remains is the parts the engine does
+  not hand over — Web Store installs, a toolbar action surface, and per-site
+  or incognito grants.
 - [ ] Phase 5: evaluate Servo as a second engine backend. If it earns the slot.
 
 Known gaps by design: find-in-page, a browsable history surface (the store

@@ -94,8 +94,10 @@ value objects, aggregates, domain services. That's it.
 - **Bounded contexts = top-level modules.** `tabs`, `engine` (wry backend
   by default; `servo_impl` behind `--features servo-engine`), `shell`
   (window/UI), `persist` (history recorder), `bookmarks`, `vault`
-  (passwords), `transfer` (foreign-file import/export), `instance`
-  (single-instance handoff), `update` (self-update), `account` (Google
+  (passwords), `transfer` (foreign-file import/export), `extensions`
+  (the installed unpacked-extension catalogue — it owns what is installed
+  and what a manifest says, never the loading, which is `engine`'s),
+  `instance` (single-instance handoff), `update` (self-update), `account` (Google
   session detection — HTTP and foreign-wire parsing are session
   plumbing, not window UI, so it is not `shell`). `memory` is the
   resource-policy context: it owns live-view budget selection and idle

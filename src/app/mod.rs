@@ -21,6 +21,7 @@ mod chrome;
 mod downloads;
 mod dragout;
 mod events;
+mod extensions;
 #[cfg(all(test, target_os = "windows"))]
 mod freeze_probe;
 mod keys;
@@ -47,6 +48,7 @@ use crate::bookmarks::Keeper;
 use crate::engine::{
     Accelerator, ContentView, DownloadUpdate, Engine, LoadFailure, PageMessage, Rect,
 };
+use crate::extensions::Catalogue;
 use crate::persist::Recorder;
 use crate::shell;
 use crate::shell::chrome::{normalize_nav_input, ChromeCommand};
@@ -206,6 +208,10 @@ pub struct App {
     /// Saved sign-ins, sealed at rest. Session-only in incognito, for
     /// the same reason.
     vault: Vault,
+    /// Installed unpacked extensions, or `None` in a window that loads
+    /// none. The catalogue reads the same folders the engine was pointed
+    /// at, so there is no second list to keep in step.
+    extensions: Option<Catalogue>,
     /// Explicit consent decisions, scoped to this window and web origin.
     permission_grants: permissions::Grants,
     permission_seq: u64,
@@ -261,6 +267,7 @@ pub struct Profile {
     pub recorder: Option<Recorder>,
     pub bookmarks: Keeper,
     pub vault: Vault,
+    pub extensions: Option<Catalogue>,
     pub incognito: bool,
 }
 
@@ -271,6 +278,7 @@ impl Profile {
             recorder: None,
             bookmarks: Keeper::session_only(),
             vault: Vault::session_only(),
+            extensions: None,
             incognito: true,
         }
     }
@@ -335,6 +343,7 @@ impl App {
             recorder: profile.recorder,
             bookmarks: profile.bookmarks,
             vault: profile.vault,
+            extensions: profile.extensions,
             permission_grants: permissions::Grants::default(),
             permission_seq: 0,
             incognito: profile.incognito,

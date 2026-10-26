@@ -154,6 +154,14 @@ pub enum ChromeCommand {
     Library {
         pane: String,
     },
+    /// Add an unpacked extension. Carries no path: the folder comes from
+    /// an OS picker the app raises, never from this document.
+    ExtensionAdd,
+    /// Remove an installed extension. `slug` is a catalogue handle, and
+    /// the app resolves it against the listing rather than as a path.
+    ExtensionRemove {
+        slug: String,
+    },
     /// A history row clicked — where it lands follows the modifiers,
     /// same rule as `BookmarkOpen`. The URL travels instead of an id:
     /// history's key is the remembered text itself.

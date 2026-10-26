@@ -143,8 +143,12 @@
     // Start the pane empty rather than showing the last one's rows for
     // the frame before the app's push lands.
     libData = {pane, bookmarks: [], passwords: [], history: [], sources: [],
-               more_bookmarks: 0, more_passwords: 0, more_history: 0,
-               locked: null, sources_ready: false, incognito: libData.incognito};
+               extensions: [], more_bookmarks: 0, more_passwords: 0,
+               more_history: 0, locked: null, sources_ready: false,
+               // Carried over, not reset: both answer "what can this window
+               // do", which does not change between panes.
+               extensions_supported: libData.extensions_supported,
+               incognito: libData.incognito};
     libFilter = '';
     setLib(true);
     paintLib();

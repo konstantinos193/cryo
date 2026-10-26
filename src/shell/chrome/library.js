@@ -8,7 +8,7 @@
   const toast = document.getElementById('toast');
   let libPane = 'bookmarks';
   let libData = {pane: 'bookmarks', bookmarks: [], passwords: [], history: [],
-                 sources: []};
+                 sources: [], extensions: []};
   let libFilter = '';
   let bookmarkScope = 'all';
   let bookmarkSort = 'newest';
@@ -101,6 +101,7 @@
     else if (libPane === 'passwords') paintPasswords();
     else if (libPane === 'history') paintHistory();
     else if (libPane === 'downloads') paintDownloads();
+    else if (libPane === 'extensions') paintExtensions();
     else if (libPane === 'import') paintImport();
     else paintExport();
   };

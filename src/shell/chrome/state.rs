@@ -78,7 +78,8 @@ pub struct ChromeBookmark {
 /// are long.
 #[derive(Debug, Serialize)]
 pub struct ChromeLibrary {
-    /// "bookmarks" | "passwords" | "history" | "import" | "export"
+    /// "bookmarks" | "passwords" | "history" | "downloads" | "extensions"
+    /// | "import" | "export"
     pub pane: String,
     pub bookmarks: Vec<ChromeBookmark>,
     /// Kept bookmarks the push left out — the pane says how many rather
@@ -104,9 +105,30 @@ pub struct ChromeLibrary {
     /// The vault could not be opened (another Windows account, a
     /// damaged file) — the pane says so instead of looking empty.
     pub locked: Option<String>,
+    /// Installed unpacked extensions. Empty with `extensions_supported`
+    /// false means this build or platform cannot load any, which the pane
+    /// says rather than looking like nothing is installed.
+    pub extensions: Vec<ChromeExtension>,
+    /// Whether loading extensions is possible here at all — Windows, and
+    /// not an incognito window.
+    pub extensions_supported: bool,
     /// Incognito windows keep nothing: the panes say so and the import
     /// buttons stay off.
     pub incognito: bool,
+}
+
+/// One installed unpacked extension, as the pane lists it. `slug` is the
+/// handle the document sends back; the app resolves it against the
+/// catalogue rather than treating it as a path.
+#[derive(Debug, Serialize)]
+pub struct ChromeExtension {
+    pub slug: String,
+    pub name: String,
+    pub version: String,
+    pub manifest_version: u32,
+    /// Shown so a person can find the folder cryo copied in, and know not
+    /// to edit it — WebView2 drops an extension whose files change.
+    pub dir: String,
 }
 
 /// One remembered entry on the wire — a visited URL or a committed
