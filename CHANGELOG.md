@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.14.0
+
+### Added
+
+- "Add to Chrome" installs. The store button could not reach cryo before, so
+  the address had to be pasted into the Extensions pane by hand; now the click
+  raises a card that asks, fetches, verifies and installs. cryo asks first
+  because a navigation is not proof of a click — any page can send a view at a
+  crafted store address — and each answer carries a token the app issued, so a
+  stale or invented one installs nothing.
+- A real progress bar while the package comes down, determinate when the store
+  declares a length and an orbiting segment when it does not. A 25 MB
+  extension used to be twenty seconds of silence, which reads as a hang.
+- Per-extension On/Off in the Extensions pane, from the engine rather than
+  from the folder. A row says "Not loaded yet" where the folder is installed
+  but nothing has loaded it, instead of implying it runs.
+
+### Changed
+
+- The question, the download and the outcome now happen in one card that puts
+  itself away, rather than a dialog, a toast and an error page in three
+  places. The throwaway tab the store opens for the package is closed — that
+  address was a download target, never a page — or becomes a new tab when it
+  is the only one.
+- The Web Store error page is kept only for what cryo genuinely cannot do — a
+  private window, or a platform that loads no extensions — and says that,
+  rather than describing a manual workaround that is no longer needed.
+- Uninstalling asks the engine to unregister the extension before deleting the
+  folder. Deleting alone did work, because WebView2 drops an extension whose
+  files change under it, but by side effect rather than by asking.
+
+### Fixed
+
+- Navigating a frozen tab moved the tab's address without moving the snapshot
+  it would restore at, so the restore reloaded the frozen page and dropped the
+  navigation.
+
 ## 0.13.0
 
 ### Added
