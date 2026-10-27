@@ -152,6 +152,15 @@ impl BudgetEnforcer {
 mod tests {
     use super::*;
 
+    /// A base far enough along that any idle age in these tests can be
+    /// subtracted from it. `Instant::now()` counts from boot on Windows,
+    /// so a tree tested minutes after a restart panicked inside `candidate`
+    /// instead of running — the policy reads its clock from a parameter,
+    /// and the tests own what that parameter says.
+    fn start() -> Instant {
+        Instant::now() + Duration::from_secs(86_400)
+    }
+
     fn candidate(now: Instant, age: u64, protected: bool) -> Candidate {
         Candidate {
             id: TabId::from_raw(age),
@@ -180,7 +189,7 @@ mod tests {
 
     #[test]
     fn restored_tab_cannot_be_refrozen_until_a_full_new_idle_grace_period() {
-        let now = Instant::now();
+        let now = start();
         let mut p = BudgetEnforcer::new(ByteBudget::from_mib(100).unwrap(), now);
         sample(&mut p, now, Some(200), vec![]);
         let frozen = now + SAMPLE_INTERVAL;
@@ -207,7 +216,7 @@ mod tests {
 
     #[test]
     fn every_active_work_signal_blocks_automatic_freeze() {
-        let now = Instant::now();
+        let now = start();
         for signal in 0..7 {
             let mut c = candidate(now, 300, false);
             match signal {
@@ -230,7 +239,7 @@ mod tests {
 
     #[test]
     fn under_budget_never_freezes_regardless_of_tab_count() {
-        let now = Instant::now();
+        let now = start();
         let mut p = BudgetEnforcer::new(ByteBudget::from_mib(100).unwrap(), now);
         for i in 0..5 {
             let now = now + SAMPLE_INTERVAL * i;
@@ -248,7 +257,7 @@ mod tests {
 
     #[test]
     fn timed_out_request_can_be_replaced_without_accepting_its_late_reply() {
-        let now = Instant::now();
+        let now = start();
         let mut p = BudgetEnforcer::new(ByteBudget::from_mib(100).unwrap(), now);
         let old = p.begin_sample(now).unwrap();
         let later = now + SAMPLE_TIMEOUT;
@@ -269,7 +278,7 @@ mod tests {
 
     #[test]
     fn requires_sustained_pressure_and_selects_oldest_eligible_tab() {
-        let now = Instant::now();
+        let now = start();
         let mut p = BudgetEnforcer::new(ByteBudget::from_mib(100).unwrap(), now);
         assert_eq!(
             sample(&mut p, now, Some(110), vec![candidate(now, 300, false)]),
@@ -295,7 +304,7 @@ mod tests {
 
     #[test]
     fn hysteresis_stops_below_low_watermark_and_rechecks_after_each_freeze() {
-        let now = Instant::now();
+        let now = start();
         let mut p = BudgetEnforcer::new(ByteBudget::from_mib(100).unwrap(), now);
         sample(&mut p, now, Some(110), vec![]);
         assert!(sample(
@@ -325,7 +334,7 @@ mod tests {
 
     #[test]
     fn incomplete_stale_and_duplicate_samples_cannot_freeze() {
-        let now = Instant::now();
+        let now = start();
         let mut p = BudgetEnforcer::new(ByteBudget::from_mib(100).unwrap(), now);
         let seq = p.begin_sample(now).unwrap();
         assert!(p.begin_sample(now + SAMPLE_INTERVAL).is_none());
@@ -347,7 +356,7 @@ mod tests {
     /// and an exact-budget sample still freezes.
     #[test]
     fn exactly_at_budget_resets_the_streak_without_lifting_pressure() {
-        let now = Instant::now();
+        let now = start();
         let mut p = BudgetEnforcer::new(ByteBudget::from_mib(100).unwrap(), now);
         for i in 0..2u32 {
             let now = now + SAMPLE_INTERVAL * i;
@@ -375,7 +384,7 @@ mod tests {
     /// registry's order — not by whichever id sorts first.
     #[test]
     fn equal_age_candidates_freeze_in_candidate_order() {
-        let now = Instant::now();
+        let now = start();
         let mut p = BudgetEnforcer::new(ByteBudget::from_mib(100).unwrap(), now);
         sample(&mut p, now, Some(110), vec![]);
         let later = now + SAMPLE_INTERVAL;
@@ -402,7 +411,7 @@ mod tests {
     /// whether freezing that tab reclaimed anything.
     #[test]
     fn a_failed_sample_after_freeze_keeps_the_reclaim_baseline() {
-        let now = Instant::now();
+        let now = start();
         let mut p = BudgetEnforcer::new(ByteBudget::from_mib(100).unwrap(), now);
         sample(&mut p, now, Some(110), vec![]);
         let later = now + SAMPLE_INTERVAL;
@@ -422,7 +431,7 @@ mod tests {
     /// on the settle cadence, not after a backoff.
     #[test]
     fn one_empty_delta_still_freezes_the_next_candidate_on_schedule() {
-        let now = Instant::now();
+        let now = start();
         let mut p = BudgetEnforcer::new(ByteBudget::from_mib(100).unwrap(), now);
         sample(&mut p, now, Some(110), vec![]);
         sample(
@@ -439,7 +448,7 @@ mod tests {
     /// reclaims — back off instead of churning through every remaining tab.
     #[test]
     fn consecutive_empty_deltas_back_off() {
-        let now = Instant::now();
+        let now = start();
         let mut p = BudgetEnforcer::new(ByteBudget::from_mib(100).unwrap(), now);
         sample(&mut p, now, Some(110), vec![]);
         sample(
