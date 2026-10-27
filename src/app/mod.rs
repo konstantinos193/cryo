@@ -152,6 +152,9 @@ pub enum AppEvent {
     StoreExtension(
         Result<Box<crate::extensions::crx::VerifiedCrx>, Box<crate::extensions::ExtensionError>>,
     ),
+    /// Bytes of a store package in, with the declared total where the store
+    /// sent one. Feeds the prompt's progress bar.
+    StoreExtensionProgress(u64, Option<u64>),
     /// A worker answered who the profile's Google session belongs to —
     /// `None` reads as signed out.
     GoogleSession(Option<crate::account::Session>),
@@ -217,6 +220,14 @@ pub struct App {
     /// none. The catalogue reads the same folders the engine was pointed
     /// at, so there is no second list to keep in step.
     extensions: Option<Catalogue>,
+    /// An "Add to Chrome" waiting for an answer, with the token that answer
+    /// has to carry. One at a time: a second store click replaces the first
+    /// rather than queueing prompts nobody asked for.
+    pending_install: Option<(u64, crate::extensions::web_store::InstallRequest)>,
+    install_seq: u64,
+    /// A fetch is in flight and the prompt is showing it. Progress that
+    /// arrives after the prompt is gone is dropped rather than reopening it.
+    installing: bool,
     /// Explicit consent decisions, scoped to this window and web origin.
     permission_grants: permissions::Grants,
     permission_seq: u64,
@@ -349,6 +360,9 @@ impl App {
             bookmarks: profile.bookmarks,
             vault: profile.vault,
             extensions: profile.extensions,
+            pending_install: None,
+            install_seq: 0,
+            installing: false,
             permission_grants: permissions::Grants::default(),
             permission_seq: 0,
             incognito: profile.incognito,
@@ -451,6 +465,9 @@ impl App {
             AppEvent::ImportSources(sources) => self.on_import_sources(sources),
             AppEvent::UpdateChecked(outcome) => self.on_update(outcome, control_flow),
             AppEvent::StoreExtension(result) => self.on_store_extension(result),
+            AppEvent::StoreExtensionProgress(received, total) => {
+                self.on_store_progress(received, total)
+            }
             AppEvent::GoogleSession(session) => self.on_google_session(session),
             AppEvent::StoreFailed(failure) => {
                 crate::report!("store write failed: {failure}");

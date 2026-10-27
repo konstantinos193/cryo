@@ -162,6 +162,12 @@ pub enum ChromeCommand {
     ExtensionRemove {
         slug: String,
     },
+    /// Answer the "Add to Chrome" prompt. `token` is the app's own, so a
+    /// forged or stale answer matches nothing.
+    ExtensionAnswer {
+        token: u64,
+        install: bool,
+    },
     /// Switch an installed extension on or off.
     ExtensionEnable {
         slug: String,

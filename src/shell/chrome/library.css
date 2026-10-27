@@ -341,3 +341,91 @@
     background: var(--ice-dim); color: var(--ice);
     border-color: rgba(143, 220, 240, .35);
   }
+  /* "Add to Chrome": one card for the question, the download and the
+     result. Same corner and the same material as the password prompt,
+     because it is the same kind of question — asked by the browser, about
+     something the page wants. */
+  #install-pop {
+    display: none; position: fixed; top: 84px; right: 14px; z-index: 29;
+    width: min(360px, calc(100vw - 28px)); overflow: hidden;
+    background: linear-gradient(145deg, rgba(29, 37, 47, .97), rgba(17, 21, 28, .97));
+    border: 1px solid rgba(143, 220, 240, .2); border-radius: 16px;
+    box-shadow: 0 22px 65px rgba(0, 0, 0, .62), 0 0 0 1px rgba(0, 0, 0, .2);
+    backdrop-filter: blur(22px) saturate(1.35);
+    -webkit-backdrop-filter: blur(22px) saturate(1.35);
+  }
+  /* Arrives from the edge it lives on rather than appearing on top of the
+     page in one frame. */
+  @keyframes insIn {
+    from { opacity: 0; transform: translateY(-8px) scale(.97); }
+  }
+  #install-pop.open { display: block; animation: insIn .22s cubic-bezier(.2, .8, .3, 1); }
+  #install-pop .ins-head {
+    display: flex; align-items: center; gap: 11px; padding: 14px 15px 0;
+  }
+  #install-pop .ins-mark {
+    display: grid; place-items: center; flex: 0 0 auto;
+    width: 32px; height: 32px; border-radius: 10px;
+    border: 1px solid rgba(143, 220, 240, .3);
+    background: linear-gradient(145deg, #1b4356, #14202a);
+    color: var(--ice); font-size: 15px;
+  }
+  #install-pop .ins-mark.ok {
+    border-color: rgba(95, 207, 143, .4); color: var(--ok);
+    background: linear-gradient(145deg, #1d3f2e, #16211b);
+  }
+  #install-pop .ins-mark.bad {
+    border-color: rgba(224, 123, 123, .4); color: var(--bad);
+    background: linear-gradient(145deg, #402323, #211718);
+  }
+  #install-pop .ins-title {
+    color: #f2f7f9; font-size: 13px; font-weight: 650;
+  }
+  /* An id is 32 characters with no spaces: it has to be allowed to break or
+     it pushes the card wider than the window. */
+  #install-pop .ins-who {
+    color: var(--tx2); font-size: 11px; overflow-wrap: anywhere;
+  }
+  #install-pop .ins-note {
+    padding: 9px 15px 0; color: var(--tx3); font-size: 11px; line-height: 1.55;
+  }
+  #install-pop .ins-track {
+    height: 4px; margin: 11px 15px 0; border-radius: 2px; overflow: hidden;
+    background: rgba(143, 220, 240, .14);
+  }
+  #install-pop .ins-track i {
+    display: block; width: 0; height: 100%; border-radius: 2px;
+    background: var(--ice); box-shadow: 0 0 8px rgba(143, 220, 240, .5);
+    transition: width .2s linear;
+  }
+  /* No declared length: a segment travels the track instead of a fill that
+     would have to claim a share it cannot know. */
+  #install-pop .ins-track.ind i {
+    width: 38%; transition: none; animation: insSweep 1.1s ease-in-out infinite;
+  }
+  @keyframes insSweep {
+    0% { transform: translateX(-100%); } 100% { transform: translateX(263%); }
+  }
+  #install-pop .ins-count {
+    padding: 6px 15px 14px; color: var(--tx3); font-size: 10px;
+    font-variant-numeric: tabular-nums; min-height: 24px;
+  }
+  #install-pop .ins-actions {
+    display: flex; justify-content: flex-end; gap: 8px;
+    margin-top: 13px; padding: 11px 14px;
+    border-top: 1px solid var(--line-soft); background: rgba(0, 0, 0, .13);
+  }
+  #install-pop .ins-btn {
+    padding: 7px 14px; border-radius: 9px; border: 1px solid var(--line);
+    background: transparent; color: var(--tx2);
+    font: inherit; font-weight: 600; cursor: pointer;
+    transition: background .12s ease, color .12s ease, border-color .12s ease;
+  }
+  #install-pop .ins-btn:hover { background: var(--bg3); color: #fff; }
+  #install-pop .ins-btn.go {
+    border-color: rgba(143, 220, 240, .4); background: var(--ice-dim);
+    color: var(--ice);
+  }
+  #install-pop .ins-btn.go:hover {
+    background: var(--ice-deep); color: #eaf9fd;
+  }

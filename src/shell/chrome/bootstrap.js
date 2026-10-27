@@ -40,7 +40,7 @@
   let menuOpen = false, omniOpen = false, dlOpen = false, libOpen = false,
       acctOpen = false, passwordOpen = false;
   const reportOverlay = () =>
-    ipc({cmd: 'overlay', open: menuOpen || omniOpen || dlOpen || libOpen || acctOpen || passwordOpen || permissionOpen || tabfindOpen});
+    ipc({cmd: 'overlay', open: menuOpen || omniOpen || dlOpen || libOpen || acctOpen || passwordOpen || permissionOpen || tabfindOpen || installOpen});
   // Signed in, the avatar opens a dropdown of every account in the jar;
   // signed out, the same spot is still the sign-in pill.
   const setAcct = (open) => {

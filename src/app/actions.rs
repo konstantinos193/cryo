@@ -5,7 +5,6 @@
 use tao::event_loop::ControlFlow;
 use tao::window::Fullscreen;
 
-use crate::shell;
 use crate::shell::chrome::{canonize_nav_input, normalize_nav_input, ChromeCommand};
 use crate::shell::pages;
 use crate::tabs::TabId;
@@ -90,6 +89,9 @@ impl App {
             ChromeCommand::ExtensionAdd => self.add_extension(),
             ChromeCommand::ExtensionRemove { slug } => self.remove_extension(&slug),
             ChromeCommand::ExtensionInstall { input } => self.install_from_store(&input),
+            ChromeCommand::ExtensionAnswer { token, install } => {
+                self.answer_store_install(token, install)
+            }
             ChromeCommand::ExtensionEnable { slug, enabled } => {
                 self.set_extension_enabled(&slug, enabled)
             }
@@ -169,23 +171,11 @@ impl App {
         if let Some(tab) = self.registry.get_mut(id) {
             tab.note_focused();
         }
-        if let Some(view) = self.view_of(id) {
-            let (_, content_rect) = shell::layout(self.logical_size.0, self.logical_size.1);
-            // Show before hiding: the incoming view becomes visible while
-            // the outgoing one is still painted, so no frame ever shows
-            // the bare window behind them. Both changes settle in this
-            // same event turn, so z-order between the two never reaches
-            // the screen.
-            // A suspended view needs waking before it paints — a failed
-            // resume is reported but must not block the switch.
-            if let Err(e) = view.resume() {
-                crate::report!("resume tab {id}: {e:?}");
-            }
-            view.set_bounds(content_rect)?;
-            view.set_visible(true)?;
-            view.focus()?;
-            self.chrome_focused = false;
-        }
+        // Show before hiding: the incoming view becomes visible while the
+        // outgoing one is still painted, so no frame ever shows the bare
+        // window behind them. Both changes settle in this same event turn,
+        // so z-order between the two never reaches the screen.
+        self.show_view(id)?;
         if let Some(p) = prev.and_then(|p| self.view_of(p)) {
             p.set_visible(false)?;
         }
@@ -228,15 +218,24 @@ impl App {
         let Some(id) = self.registry.active_id() else {
             return Ok(());
         };
+        // The address goes on the tab first: a frozen or discarded tab has
+        // no surface to load into, and `restore_view` spawns one at the
+        // address the tab now carries.
+        if let Some(tab) = self.registry.get_mut(id) {
+            tab.navigate(url.to_string());
+        }
         if let Some(view) = self.view_of(id) {
             view.load_url(content_url_for(url))?;
             // Hand keyboard focus to the page — a committed navigation in a
             // real browser moves focus out of the address bar.
             view.focus()?;
             self.chrome_focused = false;
-        }
-        if let Some(tab) = self.registry.get_mut(id) {
-            tab.navigate(url.to_string());
+        } else {
+            // Typing an address into a tab with no surface is a restore,
+            // the same as clicking it. Without this the bar would show the
+            // new address over the old page and nothing would ever load.
+            self.restore_view(id)?;
+            self.show_view(id)?;
         }
         self.sync_chrome()
     }

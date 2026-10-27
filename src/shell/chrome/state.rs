@@ -117,6 +117,19 @@ pub struct ChromeLibrary {
     pub incognito: bool,
 }
 
+/// The "Add to Chrome" consent prompt. `token` binds an answer to this
+/// request: the app refuses any answer that does not carry it.
+#[derive(Debug, Serialize)]
+pub struct ChromeInstallPrompt {
+    pub token: u64,
+    pub id: String,
+    /// Not known before the package is fetched. Present only if the app
+    /// already has a name for the id — never guessed.
+    pub name: Option<String>,
+    /// The card is showing a download rather than asking a question.
+    pub fetching: bool,
+}
+
 /// One installed unpacked extension, as the pane lists it. `slug` is the
 /// handle the document sends back; the app resolves it against the
 /// catalogue rather than treating it as a path.

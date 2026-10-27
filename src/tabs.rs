@@ -351,7 +351,14 @@ impl<V, A: SurfaceResources> Tab<V, A> {
         Ok(())
     }
 
+    /// Point the tab at an address. A frozen tab's snapshot follows: the
+    /// page it froze on is not where it is going any more, and a restore
+    /// that reloaded the old address would silently discard the
+    /// navigation.
     pub(crate) fn navigate(&mut self, url: String) {
+        if let Lifecycle::Frozen(snap) = &mut self.lifecycle {
+            snap.url.clone_from(&url);
+        }
         self.url = url;
     }
 

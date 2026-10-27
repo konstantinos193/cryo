@@ -158,20 +158,29 @@ pub fn install_request(url: &str) -> Option<InstallRequest> {
 /// which the app turns into an `AppEvent`.
 pub fn spawn_fetch(
     request: InstallRequest,
+    progress: impl Fn(u64, Option<u64>) + Send + 'static,
     done: impl FnOnce(Result<crate::extensions::crx::VerifiedCrx, ExtensionError>) + Send + 'static,
 ) {
     let spawned = std::thread::Builder::new()
         .name("cryo-extension-fetch".into())
-        .spawn(move || done(fetch(&request)));
+        .spawn(move || done(fetch(&request, &progress)));
     if let Err(e) = spawned {
         crate::report!("could not start the extension fetch: {e}");
     }
 }
 
+/// How often the worker reports progress. A 25 MiB package in 256 KiB steps
+/// is about a hundred messages — enough for a bar that moves, few enough that
+/// the event loop is not doing nothing else.
+const PROGRESS_STEP: u64 = 256 * 1024;
+
 /// One package, fetched and checked. The size cap is here rather than at the
 /// caller because this is the only place that reads from the network: without
 /// it, a hostile or broken endpoint decides how much memory cryo allocates.
-fn fetch(request: &InstallRequest) -> Result<crate::extensions::crx::VerifiedCrx, ExtensionError> {
+fn fetch(
+    request: &InstallRequest,
+    progress: &(impl Fn(u64, Option<u64>) + ?Sized),
+) -> Result<crate::extensions::crx::VerifiedCrx, ExtensionError> {
     use std::io::Read;
 
     const MAX_PACKAGE: u64 = 128 * 1024 * 1024;
@@ -185,18 +194,45 @@ fn fetch(request: &InstallRequest) -> Result<crate::extensions::crx::VerifiedCrx
         .get(download_url(request))
         .call()
         .map_err(|e| ExtensionError::Fetch(e.to_string()))?;
-    let mut bytes = Vec::new();
-    response
-        .into_body()
-        .into_reader()
-        .take(MAX_PACKAGE + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| ExtensionError::Fetch(e.to_string()))?;
+    // The store does send a length; where it does not, the bar runs
+    // indeterminate rather than inventing a total.
+    let total = response
+        .headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&n| n > 0 && n <= MAX_PACKAGE);
+
+    // Read in steps so the prompt can show movement. A 25 MiB extension over
+    // a slow line is twenty seconds of nothing otherwise, which reads as a
+    // hang however honest the spinner.
+    let mut reader = response.into_body().into_reader().take(MAX_PACKAGE + 1);
+    let mut bytes = Vec::with_capacity(total.unwrap_or(4 * 1024 * 1024) as usize);
+    let mut buffer = [0u8; 64 * 1024];
+    let mut announced = 0u64;
+    progress(0, total);
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|e| ExtensionError::Fetch(e.to_string()))?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+        let received = bytes.len() as u64;
+        if received - announced >= PROGRESS_STEP {
+            announced = received;
+            progress(received, total);
+        }
+    }
     if bytes.len() as u64 > MAX_PACKAGE {
         return Err(ExtensionError::Fetch(
             "the package is larger than 128 MiB".into(),
         ));
     }
+    // The last step lands on the real total, so the bar does not stop at 98%
+    // while the signature is being checked.
+    progress(bytes.len() as u64, total);
 
     let verified = crate::extensions::crx::verify(&bytes)?;
     // The store is asked for one extension; a package that says it is another
@@ -341,7 +377,7 @@ mod tests {
     #[ignore]
     fn real_web_store_package_verifies_and_a_tampered_one_does_not() {
         let request = parse_input("nkbihfbeogaeaoehlefnkodbefgpgknn").expect("id");
-        let package = fetch(&request).expect("fetched and verified");
+        let package = fetch(&request, &|_, _| {}).expect("fetched and verified");
         assert_eq!(package.id(), &request.id);
         let archive = package.archive().to_vec();
         assert!(archive.starts_with(b"PK"), "the archive is a zip");

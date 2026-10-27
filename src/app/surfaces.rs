@@ -169,6 +169,26 @@ impl App {
         drop(view);
     }
 
+    /// Put `id`'s surface on screen: awake, sized, visible, holding the
+    /// keyboard. `restore_view` spawns hidden, so this is the step that
+    /// makes a restored tab the page the window shows.
+    pub(super) fn show_view(&mut self, id: TabId) -> anyhow::Result<()> {
+        let Some(view) = self.view_of(id) else {
+            return Ok(());
+        };
+        let (_, content_rect) = shell::layout(self.logical_size.0, self.logical_size.1);
+        // A suspended view needs waking before it paints — a failed resume
+        // is reported but must not block the switch.
+        if let Err(e) = view.resume() {
+            crate::report!("resume tab {id}: {e:?}");
+        }
+        view.set_bounds(content_rect)?;
+        view.set_visible(true)?;
+        view.focus()?;
+        self.chrome_focused = false;
+        Ok(())
+    }
+
     /// Give a view-less tab — frozen, discarded, or one coming back from
     /// the closed stack — a fresh surface under a new generation. If the
     /// spawn fails the tab stays as it was, so the next activation can
@@ -285,14 +305,53 @@ impl App {
         let Some(tab) = self.registry.get(id) else {
             return Ok(());
         };
+        // A Web Store install fails as an unresolvable host, which is true
+        // and tells the reader nothing. That address was a download target,
+        // never a page: the store opens a tab for it and the tab has nowhere
+        // to go back to. Closing it and asking in the prompt is the whole
+        // interaction — an error page behind a dialog is two answers to one
+        // question. A tab that *does* have history keeps its page and gets
+        // the explanation instead.
+        let store_install = crate::extensions::web_store::install_request(tab.url());
+        if let Some(request) = store_install {
+            // The error page is for the case cryo cannot help with. Where it
+            // can — and it is about to ask — a page explaining a manual
+            // workaround would contradict the card offering to do it.
+            if self.extensions.is_none() {
+                if let Some(view) = tab.view() {
+                    view.load_url(&error::web_store_url(tab.url()))?;
+                }
+                return self.offer_store_install(request);
+            }
+            let throwaway = tab
+                .view()
+                .map(|view| view.can_go_back().unwrap_or(false))
+                .is_some_and(|back| !back);
+            if throwaway && self.registry.len() == 1 {
+                // The only tab: nothing to fall back to, so it becomes a new
+                // tab rather than a dead end behind the card.
+                if let Some(view) = tab.view() {
+                    view.load_url(NEW_TAB_URL)?;
+                }
+            } else if throwaway {
+                // Through the event loop rather than straight into
+                // `close_tab`: that one needs the `ControlFlow` a failure
+                // handler does not carry, and a tab should not be destroyed
+                // from inside the handler for its own failed load.
+                super::post(
+                    &self.proxy,
+                    super::AppEvent::Chrome(crate::shell::chrome::ChromeCommand::Close {
+                        id: id.get(),
+                    }),
+                );
+            }
+            // A tab with somewhere to go back to keeps whatever it is
+            // showing: the card is the answer, and replacing the page with
+            // one that explains the same thing twice is not an improvement.
+            return self.offer_store_install(request);
+        }
         if let Some(view) = tab.view() {
-            // A Web Store install fails as an unresolvable host, which is
-            // true and tells the reader nothing. Name what actually happened.
-            let url = match crate::extensions::web_store::install_request(tab.url()) {
-                Some(_) => error::web_store_url(tab.url()),
-                None => error::error_url(failure, tab.url()),
-            };
-            view.load_url(&url)?;
+            view.load_url(&error::error_url(failure, tab.url()))?;
         }
         Ok(())
     }

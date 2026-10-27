@@ -156,8 +156,8 @@ pub const ERROR_HTML: &str = r##"<!doctype html>
       "The page renderer stopped and cryo shut it down. Reloading usually brings it back."],
     "unknown": ["Something went wrong",
       "The page did not load, and the engine did not say why."],
-    "web-store": ["The store cannot install this one for you",
-      "\"Add to Chrome\" asked the engine for the package, and this engine carries no endpoint to ask — the address it was sent to is a placeholder that can never resolve, so retrying will not help. cryo can fetch it instead: open Ctrl+Shift+O → Extensions and paste the store page address there. The package's signature is checked against the key its id comes from before anything is installed."]
+    "web-store": ["This window cannot install extensions",
+      "\"Add to Chrome\" asked the engine for the package, and the address it was sent to is a placeholder that can never resolve, so retrying will not help. cryo installs from the store in an ordinary window on Windows — a private window loads no extensions, and other platforms cannot load them at all."]
   };
   var HTTP = {
     "400": "The server rejected the request as malformed.",

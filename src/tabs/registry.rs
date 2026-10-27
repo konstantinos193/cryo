@@ -545,6 +545,22 @@ mod tests {
     }
 
     #[test]
+    fn navigating_a_frozen_tab_moves_the_snapshot_it_will_restore_at() {
+        let mut reg = Reg::new();
+        let id = create(&mut reg, "https://a");
+        let tab = reg.get_mut(id).unwrap();
+        tab.freeze(snapshot("https://a")).unwrap();
+
+        tab.navigate("https://b".into());
+        assert_eq!(tab.url(), "https://b");
+        // Restore reads the snapshot, so a stale address there would
+        // reload the frozen page and drop the navigation on the floor.
+        assert_eq!(tab.snapshot().unwrap().url, "https://b");
+        // Everything else the snapshot carries survives the move.
+        assert_eq!(tab.snapshot().unwrap().zoom, 1.5);
+    }
+
+    #[test]
     fn freeze_and_restore_reject_the_wrong_state() {
         let mut reg = Reg::new();
         let id = create(&mut reg, "https://a");
