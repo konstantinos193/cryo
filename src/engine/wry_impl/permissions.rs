@@ -115,7 +115,10 @@ impl Drop for Permissions {
     }
 }
 
-fn permission_kind(kind: COREWEBVIEW2_PERMISSION_KIND) -> PermissionKind {
+/// Also how `permission_profile` names a stored grant in the log: a row
+/// the reader has to act on is worth naming in our vocabulary, not in
+/// WebView2's enum.
+pub(super) fn permission_kind(kind: COREWEBVIEW2_PERMISSION_KIND) -> PermissionKind {
     match kind {
         COREWEBVIEW2_PERMISSION_KIND_MICROPHONE => PermissionKind::Microphone,
         COREWEBVIEW2_PERMISSION_KIND_CAMERA => PermissionKind::Camera,
