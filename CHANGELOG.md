@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.14.1
+
+### Fixed
+
+- With an extension installed, a new tab would not go to any address. The
+  permission reset holds navigation until every stored grant has been
+  cleared, and WebView2 refuses to clear a `chrome-extension://` one, so the
+  wait never ended. Those grants are no longer ours to revoke — they came
+  with an extension the user installed, and the manifest declares them.
+- A stored grant that cannot be cleared for any other reason now leaves the
+  address bar working. The failure is named in the log with the permission
+  and the origin, and the rest of the sweep still runs: one stale row a
+  reader can act on beats a browser that answers no address at all.
+
 ## 0.14.0
 
 ### Added
