@@ -223,7 +223,10 @@ mod tests {
         for url in ["file:///etc/passwd", "ftp://a.test/", "cryo://newtab"] {
             match agent.fetch(url) {
                 Err(FetchError::UnsupportedScheme(_)) => {}
-                other => panic!("{url} should be refused, got {other:?}"),
+                // The error detail is not printed: a certificate
+                // rejection carries TLS detail that must not reach
+                // stderr.
+                _ => panic!("{url} should be refused"),
             }
         }
     }
@@ -256,7 +259,7 @@ mod tests {
                 FetchError::Offline => "Offline",
                 FetchError::ConnectionFailed(_) => "ConnectionFailed",
                 FetchError::HostNotFound(_) => "HostNotFound",
-                other => panic!("unexpected {other:?}"),
+                _ => "unexpected",
             };
             assert_eq!(name, expected, "for {kind:?}");
         }
@@ -294,7 +297,9 @@ mod tests {
                 FetchError::ConnectionFailed(_) => "ConnectionFailed",
                 FetchError::CertificateRejected(_) => "CertificateRejected",
                 FetchError::TimedOut => "TimedOut",
-                other => panic!("unexpected {other:?}"),
+                // Naming the variant is fine; printing the error is
+                // not, since `CertificateRejected` carries TLS detail.
+                _ => "unexpected",
             };
             assert_eq!(name, expected);
         }
@@ -304,7 +309,7 @@ mod tests {
     fn a_status_code_survives_translation() {
         match translate(ureq::Error::StatusCode(503)) {
             FetchError::Status(503) => {}
-            other => panic!("expected 503, got {other:?}"),
+            _ => panic!("expected Status(503)"),
         }
     }
 

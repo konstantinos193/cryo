@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.16.1
+
+### Fixed
+
+- Certificate detail no longer reaches process output. A
+  `CertificateRejected` carries the TLS reason, and the fetch tests were
+  formatting the whole translated error into panic messages — which is a
+  write to stderr, and the reason `rust/cleartext-logging` raised two
+  code-scanning alerts. The assertions still say what they expected;
+  they no longer print the error.
+
 ## 0.16.0
 
 ### Added
