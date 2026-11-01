@@ -258,8 +258,10 @@ impl SystemFonts {
         for directory in &self.directories {
             for extension in EXTENSIONS {
                 let path = directory.join(format!("{stem}.{extension}"));
-                if let Ok(font) = OutlineFont::from_bytes(std::fs::read(&path).ok()?, family) {
-                    return Some(font);
+                if let Ok(data) = std::fs::read(&path) {
+                    if let Ok(font) = OutlineFont::from_bytes(data, family) {
+                        return Some(font);
+                    }
                 }
             }
             // Linux keeps fonts in per-family subdirectories, so an
@@ -454,6 +456,19 @@ mod tests {
         let fonts = SystemFonts::new();
         let font = fonts.load_default().expect("some usable font exists");
         assert!(font.file().glyph_count() > 50);
+    }
+
+    #[test]
+    fn a_missing_first_directory_does_not_stop_font_lookup() {
+        let fonts = SystemFonts::new();
+        if fonts.load_default().is_none() {
+            return;
+        }
+        let mut directories = vec![PathBuf::from("/no/such/cryo-font-directory")];
+        directories.extend_from_slice(fonts.directories());
+        assert!(SystemFonts::with_directories(directories)
+            .load_default()
+            .is_some());
     }
 
     #[test]
