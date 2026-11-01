@@ -16,7 +16,7 @@
             ProcessorArchitecture="x64" />
 
   <Properties>
-    <DisplayName>cryo</DisplayName>
+    <DisplayName>cryo browser</DisplayName>
     <PublisherDisplayName>@PUBLISHER_DISPLAY@</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
     <Description>A memory-obsessed browser shell. Tabs freeze. Budgets hold.</Description>
