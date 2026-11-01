@@ -177,9 +177,9 @@ impl WebViewDelegate for Delegate {
             load.respond(empty_response());
             return;
         }
-        let html = (self.handlers.resolve_page)(parsed.path());
-        load.respond(match html {
-            Some(html) => text_response(html),
+        let path = parsed.path();
+        load.respond(match (self.handlers.resolve_page)(path) {
+            Some(body) => text_response(path, body),
             None => empty_response(),
         });
     }
@@ -188,8 +188,8 @@ impl WebViewDelegate for Delegate {
 /// SERVO-API: response construction — `WebResourceResponse` /
 /// `load.respond` signatures are the piece most likely to need adjusting
 /// on first compile.
-fn text_response(html: &'static str) -> servo::WebResourceResponse {
-    servo::WebResourceResponse::new(html.as_bytes()).content_type("text/html; charset=utf-8")
+fn text_response(path: &str, body: &'static str) -> servo::WebResourceResponse {
+    servo::WebResourceResponse::new(body.as_bytes()).content_type(crate::engine::content_type(path))
 }
 fn empty_response() -> servo::WebResourceResponse {
     servo::WebResourceResponse::new(Vec::<u8>::new())

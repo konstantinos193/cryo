@@ -223,6 +223,17 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
         Some(shell::geometry::default_path())
     };
     let saved = state_path.as_deref().and_then(shell::geometry::load);
+    // Which palette this window opens in. The documents read the pick
+    // out of the shell origin's own storage; the app needs it before any
+    // of them runs, for the window icon and for the colour a view paints
+    // before its first frame. An incognito window has its own storage
+    // area, where no pick exists, so it opens in the default rather than
+    // wearing a palette its own pages would not.
+    let theme_state = (!incognito).then(shell::theme::default_path);
+    let theme = theme_state
+        .as_deref()
+        .and_then(shell::theme::load)
+        .unwrap_or(shell::theme::Theme::DEFAULT);
     let builder = WindowBuilder::new()
         .with_title(title)
         .with_inner_size(match saved {
@@ -230,9 +241,9 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
             None => LogicalSize::new(1280.0, 800.0),
         })
         .with_visible(false)
-        .with_background_color(shell::CONTENT_BACKGROUND);
+        .with_background_color(theme.content_background());
     #[cfg(windows)]
-    let builder = with_icons(builder)?;
+    let builder = with_icons(builder, theme)?;
     let window = Rc::new(builder.build(&event_loop)?);
     if let Some(p) = saved {
         // Re-seat only onto a monitor that still exists — a removed
@@ -312,6 +323,8 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
             )),
             extensions: Some(extensions::Catalogue::new(extensions_root())),
             incognito: false,
+            theme,
+            theme_state,
         }
     };
     let mut writers = Vec::new();
@@ -377,9 +390,28 @@ fn vault_protector() -> impl vault::Protector {
     vault::Keyring
 }
 
-/// Resource id the icon is compiled under — must match `assets/icon.rc`.
+/// The two icon handles Windows reads, in the theme's colours: the one
+/// the title bar draws and the one the taskbar does. Compiled into the
+/// executable, one resource per theme (`assets/icon.rc`), so a theme
+/// change is a reload of an embedded icon and not a file read.
+///
+/// Lives at the crate root because both the launch path below and
+/// `app::window`'s theme change need it, and the rule for loading an
+/// icon exists once (AGENTS §2).
 #[cfg(windows)]
-const ICON_RESOURCE_ID: u16 = 1;
+pub(crate) fn window_icons(
+    theme: shell::theme::Theme,
+) -> Result<(tao::window::Icon, tao::window::Icon), tao::window::BadIcon> {
+    use tao::dpi::PhysicalSize;
+    use tao::platform::windows::IconExtWindows;
+    use tao::window::Icon;
+
+    let id = theme.icon_resource();
+    Ok((
+        Icon::from_resource(id, Some(PhysicalSize::new(16, 16)))?,
+        Icon::from_resource(id, Some(PhysicalSize::new(32, 32)))?,
+    ))
+}
 
 /// Attach the embedded icon to both slots Windows reads.
 ///
@@ -387,13 +419,10 @@ const ICON_RESOURCE_ID: u16 = 1;
 /// taskbar button reads `ICON_BIG` and needs a handle of its own, otherwise it
 /// falls back to the generic application icon.
 #[cfg(windows)]
-fn with_icons(builder: WindowBuilder) -> anyhow::Result<WindowBuilder> {
-    use tao::dpi::PhysicalSize;
-    use tao::platform::windows::{IconExtWindows, WindowBuilderExtWindows};
-    use tao::window::Icon;
+fn with_icons(builder: WindowBuilder, theme: shell::theme::Theme) -> anyhow::Result<WindowBuilder> {
+    use tao::platform::windows::WindowBuilderExtWindows;
 
-    let title_bar = Icon::from_resource(ICON_RESOURCE_ID, Some(PhysicalSize::new(16, 16)))?;
-    let taskbar = Icon::from_resource(ICON_RESOURCE_ID, Some(PhysicalSize::new(32, 32)))?;
+    let (title_bar, taskbar) = window_icons(theme)?;
     Ok(builder
         .with_window_icon(Some(title_bar))
         .with_taskbar_icon(Some(taskbar)))

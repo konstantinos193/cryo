@@ -7,37 +7,63 @@
 //! can read the list too — keep it free of anything private.
 //!
 //! The entries are compile-time defaults until a `persist` context exists
-//! (Phase 1+); a stored list then replaces `JSON` and this module becomes
-//! the seed + the migration home.
+//! (Phase 1+); a stored list then replaces [`ENTRIES`] and this module
+//! becomes the seed + the migration home.
 
-/// Path on the internal protocol serving [`JSON`]. Registered in
+/// Path on the internal protocol serving [`json`]. Registered in
 /// `pages::internal_page`; shell documents `fetch('/dials')`.
 pub const PATH: &str = "/dials";
 
-/// The dial set as the shell documents consume it: `[{name, url}]`.
-/// Served verbatim — it must stay valid JSON and only carry `https`
-/// destinations, which the tests pin down.
-pub const JSON: &str = r#"[
-  {"name":"Google","url":"https://www.google.com"},
-  {"name":"Reddit","url":"https://www.reddit.com"},
-  {"name":"YouTube","url":"https://www.youtube.com"},
-  {"name":"GitHub","url":"https://github.com"},
-  {"name":"Wikipedia","url":"https://www.wikipedia.org"},
-  {"name":"DuckDuckGo","url":"https://duckduckgo.com"}
-]"#;
-
-/// One pinned destination, parsed from [`JSON`]. The app matches these
-/// for omnibox suggestions; the shell documents read the JSON directly.
-#[derive(Debug, serde::Deserialize)]
+/// One pinned destination. The app matches these for omnibox
+/// suggestions; the shell documents read the serialized list.
+#[derive(Clone, Copy, Debug)]
 pub struct Entry {
-    pub name: String,
-    pub url: String,
+    pub name: &'static str,
+    pub url: &'static str,
 }
 
-/// The dial set parsed. Called per keystroke from `suggest` — cheap at
-/// this list's size; if it ever grows, cache it.
-pub fn entries() -> Vec<Entry> {
-    serde_json::from_str(JSON).expect("dial JSON parses — the tests pin it")
+/// The shipped dial set, in display order. Destinations are `https` and
+/// names are unique — the tests pin both down.
+pub const ENTRIES: &[Entry] = &[
+    Entry {
+        name: "Google",
+        url: "https://www.google.com",
+    },
+    Entry {
+        name: "Reddit",
+        url: "https://www.reddit.com",
+    },
+    Entry {
+        name: "YouTube",
+        url: "https://www.youtube.com",
+    },
+    Entry {
+        name: "GitHub",
+        url: "https://github.com",
+    },
+    Entry {
+        name: "Wikipedia",
+        url: "https://www.wikipedia.org",
+    },
+    Entry {
+        name: "DuckDuckGo",
+        url: "https://duckduckgo.com",
+    },
+];
+
+/// The dial set as the shell documents consume it: `[{name, url}]`.
+/// Built once from [`ENTRIES`] so the wire cannot drift from the list the
+/// app matches against — the same shape `search::json` uses, and the
+/// reason neither is a hand-written blob.
+pub fn json() -> &'static str {
+    static JSON: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    JSON.get_or_init(|| {
+        let rows: Vec<serde_json::Value> = ENTRIES
+            .iter()
+            .map(|e| serde_json::json!({ "name": e.name, "url": e.url }))
+            .collect();
+        serde_json::to_string(&rows).expect("dial rows are plain strings")
+    })
 }
 
 #[cfg(test)]
@@ -46,9 +72,8 @@ mod tests {
 
     #[test]
     fn list_is_nonempty_with_https_destinations_only() {
-        let entries = entries();
-        assert!(!entries.is_empty());
-        for e in &entries {
+        assert!(!ENTRIES.is_empty());
+        for e in ENTRIES {
             assert!(!e.name.trim().is_empty(), "dial entry needs a name");
             assert!(
                 e.url.starts_with("https://"),
@@ -61,14 +86,26 @@ mod tests {
 
     #[test]
     fn names_and_urls_are_unique() {
-        let entries = entries();
-        let mut names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
-        let mut urls: Vec<_> = entries.iter().map(|e| e.url.as_str()).collect();
+        let mut names: Vec<&str> = ENTRIES.iter().map(|e| e.name).collect();
+        let mut urls: Vec<&str> = ENTRIES.iter().map(|e| e.url).collect();
         names.sort_unstable();
         urls.sort_unstable();
         names.dedup();
         urls.dedup();
-        assert_eq!(names.len(), entries.len(), "duplicate dial names");
-        assert_eq!(urls.len(), entries.len(), "duplicate dial urls");
+        assert_eq!(names.len(), ENTRIES.len(), "duplicate dial names");
+        assert_eq!(urls.len(), ENTRIES.len(), "duplicate dial urls");
+    }
+
+    /// The documents read the wire, the omnibox reads the list. One
+    /// derives from the other, and this is what says so.
+    #[test]
+    fn the_wire_carries_every_entry() {
+        let rows: Vec<serde_json::Value> =
+            serde_json::from_str(json()).expect("the dial wire is JSON");
+        assert_eq!(rows.len(), ENTRIES.len());
+        for (row, entry) in rows.iter().zip(ENTRIES) {
+            assert_eq!(row["name"], entry.name);
+            assert_eq!(row["url"], entry.url);
+        }
     }
 }

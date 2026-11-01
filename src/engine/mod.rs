@@ -3,6 +3,7 @@
 //! for tests. A Servo backend slots in here later without touching policy.
 
 pub mod accounting;
+pub mod cryo_impl;
 pub mod fake;
 #[cfg(feature = "servo-engine")]
 pub mod servo_impl;
@@ -21,6 +22,21 @@ pub struct Rect {
 /// to static HTML. Implemented by the shell, injected into the engine so
 /// plumbing never names shell pages.
 pub type PageResolver = fn(&str) -> Option<&'static str>;
+
+/// Content type for a resolved internal path, chosen by extension. Every
+/// backend answers the same way: a shell page's stylesheet or script typed
+/// as HTML is dropped (`nosniff`), so the page renders unstyled or dead.
+pub fn content_type(path: &str) -> &'static str {
+    if path.ends_with(".js") {
+        "text/javascript; charset=utf-8"
+    } else if path.ends_with(".css") {
+        "text/css; charset=utf-8"
+    } else if path.ends_with(".svg") {
+        "image/svg+xml"
+    } else {
+        "text/html; charset=utf-8"
+    }
+}
 
 /// A surface's immutable authority over internal documents.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -485,4 +501,19 @@ pub enum EngineError {
     Script(String),
     #[error("{0}")]
     Unsupported(&'static str),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A shell page's sheet and script are separate requests, and a browser
+    /// drops either one if it arrives typed as a document.
+    #[test]
+    fn internal_assets_are_typed_by_extension() {
+        assert!(content_type("/chrome/chrome.css").starts_with("text/css"));
+        assert!(content_type("/chrome/chrome.js").starts_with("text/javascript"));
+        assert_eq!(content_type("/icon.svg"), "image/svg+xml");
+        assert!(content_type("/newtab").starts_with("text/html"));
+    }
 }

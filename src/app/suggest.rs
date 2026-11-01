@@ -63,12 +63,12 @@ impl App {
                     });
                 }
             }
-            for d in dial::entries() {
+            for d in dial::ENTRIES {
                 if d.name.to_lowercase().contains(&ql) || d.url.to_lowercase().contains(&ql) {
                     rows.push(Suggestion {
                         label: format!("{} — {}", d.name, d.url),
-                        complete: completion_for(&d.url, q),
-                        input: d.url,
+                        complete: completion_for(d.url, q),
+                        input: d.url.to_string(),
                         icon: None,
                         kind: "page",
                     });

@@ -5,8 +5,11 @@ pub mod chrome;
 pub mod dial;
 pub mod error;
 pub mod geometry;
+pub mod newtab;
 pub mod pages;
 pub mod search;
+pub mod settings;
+pub mod theme;
 
 use crate::engine::Rect;
 
@@ -18,14 +21,6 @@ pub const DIAL_HEIGHT: f64 = 32.0;
 
 /// Height of the chrome strip in logical pixels: toolbar + dial bar.
 pub const CHROME_HEIGHT: f64 = BAR_HEIGHT + DIAL_HEIGHT;
-
-/// What a content view paints before its first document composites
-/// (RGBA). Matched to the shell pages' `#16181c` so a fresh view never
-/// flashes the engine's white default.
-pub const CONTENT_BACKGROUND: (u8, u8, u8, u8) = (22, 24, 28, 255);
-
-/// Same guard for the chrome strip — `chrome.rs`'s `#1b1d21`.
-pub const CHROME_BACKGROUND: (u8, u8, u8, u8) = (27, 29, 33, 255);
 
 /// Split a logical window size into (chrome, content) rects.
 pub fn layout(width: f64, height: f64) -> (Rect, Rect) {

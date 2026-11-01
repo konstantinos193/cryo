@@ -13,23 +13,31 @@ pub(super) fn internal_url(url: &str) -> bool {
 }
 
 pub(super) fn allowed(access: ViewAccess, internal: bool, path: &str) -> bool {
+    // Furniture every shell document wears: the palette, the script that
+    // applies the stored theme, and that theme's favicon and mark. A
+    // surface that may load a shell page may load its theme — a document
+    // served without one renders unstyled.
+    let theme = path.starts_with("/theme/");
     match access {
         ViewAccess::Chrome => {
             path == "/chrome"
                 || path.starts_with("/chrome/")
-                || matches!(path, "/cmd" | "/icon.svg" | "/dials" | "/engines")
+                || theme
+                || matches!(path, "/cmd" | "/dials" | "/engines")
         }
-        ViewAccess::Content if internal => matches!(
-            path,
-            "/newtab"
-                | "/settings"
-                | "/settings/download-folder"
-                | "/settings/download-folder/choose"
-                | "/error"
-                | "/icon.svg"
-                | "/dials"
-                | "/engines"
-        ),
+        // A shell page is a document plus the folder next to it, so the
+        // stylesheet and script it links have to pass as well. The
+        // resolver still answers nothing outside the paths it knows.
+        ViewAccess::Content if internal => {
+            path.starts_with("/newtab/")
+                || path.starts_with("/settings/")
+                || path.starts_with("/error/")
+                || theme
+                || matches!(
+                    path,
+                    "/newtab" | "/settings" | "/error" | "/dials" | "/engines" | "/themes"
+                )
+        }
         _ => false,
     }
 }
@@ -87,18 +95,7 @@ pub(super) fn respond(
             .header("X-Frame-Options", "DENY")
             .header("Content-Security-Policy", "frame-ancestors 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; script-src 'self' 'unsafe-inline'; connect-src 'self'")
             .header("X-Content-Type-Options", "nosniff")
-            .header(
-                CONTENT_TYPE,
-                if path.ends_with(".js") {
-                    "text/javascript; charset=utf-8"
-                } else if path.ends_with(".css") {
-                    "text/css; charset=utf-8"
-                } else if path.ends_with(".svg") {
-                    "image/svg+xml"
-                } else {
-                    "text/html; charset=utf-8"
-                },
-            )
+            .header(CONTENT_TYPE, crate::engine::content_type(path))
             .body(Cow::Borrowed(html.as_bytes()))
             .expect("static headers are valid"),
         None => Response::builder()
@@ -121,7 +118,7 @@ mod tests {
     #[test]
     fn untrusted_surfaces_cannot_fetch_internal_pages_or_send_commands() {
         for access in [ViewAccess::Web, ViewAccess::Content] {
-            for path in ["/chrome", "/chrome/app.js", "/cmd"] {
+            for path in ["/chrome", "/chrome/chrome.js", "/cmd"] {
                 let request = Request::builder()
                     .uri(format!("http://cryo.localhost{path}"))
                     .method("POST")
@@ -192,6 +189,52 @@ mod tests {
             );
         }
         assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    /// Each shell surface is a document plus the files it links. Leave
+    /// one of those out of the gate and the page renders unstyled and
+    /// dead, which no test of the resolver would catch — so the list
+    /// comes off the documents themselves rather than being kept here
+    /// by hand. (Shipping code in `engine` still names no shell page;
+    /// this reads them the way a view would.)
+    #[test]
+    fn a_shell_page_may_fetch_the_files_its_document_links() {
+        let links = |page: &str| {
+            let html = crate::shell::pages::internal_page(page).expect("a shell document");
+            html.match_indices("=\"/")
+                .map(|(at, _)| {
+                    let rest = &html[at + 2..];
+                    rest[..rest.find('"').expect("an attribute is quoted")].to_string()
+                })
+                .collect::<Vec<_>>()
+        };
+        for page in ["/newtab", "/settings", crate::shell::error::ERROR_PATH] {
+            for asset in links(page) {
+                assert!(
+                    allowed(ViewAccess::Content, true, &asset),
+                    "{page} links {asset}, which the gate denies"
+                );
+            }
+        }
+        for asset in links("/chrome") {
+            assert!(
+                allowed(ViewAccess::Chrome, true, &asset),
+                "the chrome document links {asset}, which the gate denies"
+            );
+        }
+        // What the documents fetch rather than link.
+        for path in ["/dials", "/engines", "/themes"] {
+            assert!(allowed(ViewAccess::Content, true, path), "{path} is denied");
+        }
+        for path in ["/dials", "/engines"] {
+            assert!(allowed(ViewAccess::Chrome, true, path), "{path} is denied");
+        }
+        // A website, or a view that has navigated off the internal
+        // origin, still gets none of it.
+        for path in ["/newtab/newtab.js", "/theme/tokens.css", "/themes"] {
+            assert!(!allowed(ViewAccess::Content, false, path));
+            assert!(!allowed(ViewAccess::Web, true, path));
+        }
     }
 
     #[test]

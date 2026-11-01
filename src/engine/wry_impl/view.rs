@@ -7,6 +7,8 @@ use std::cell::{Cell, RefCell};
 #[cfg(target_os = "windows")]
 use std::rc::Rc;
 use std::sync::atomic::AtomicBool;
+#[cfg(target_os = "windows")]
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -125,11 +127,13 @@ impl WryView {
             // either arrival order.
             let download_started = Arc::new(AtomicBool::new(false));
             // NavigationStarting ⇄ NavigationCompleted: the id of the
-            // newest navigation, so a stale completion can't clear the
-            // loading signal a newer navigation is still using. The
-            // attempted URI and retry budget feed the completion's one
-            // silent retry for unclassified failures.
-            let latest_nav = Rc::new(Cell::new(0u64));
+            // newest navigation, so a stale completion can neither clear
+            // the loading signal a newer navigation is still using nor
+            // paint its own failure over that navigation's page. Atomic
+            // because the download-abort grace re-checks it off-thread.
+            // The attempted URI and retry budget feed the completion's
+            // one silent retry for unclassified failures.
+            let latest_nav = Arc::new(AtomicU64::new(0));
             let attempted = Rc::new(RefCell::new(String::new()));
             let retry_budget = Rc::new(Cell::new(events::UNCLASSIFIED_RETRIES));
             // The starting handler records the URI even when the app

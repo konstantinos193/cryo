@@ -59,6 +59,14 @@
     return ic;
   };
 
+  // Ctrl+L / F6. The app moves controller focus to this view first; what
+  // is left is DOM focus and selecting what is there, which only the
+  // document can do.
+  window.__cryo_focus_address = () => {
+    urlEl.focus();
+    urlEl.select();
+  };
+
   window.__cryo_suggest = (reply) => {
     // Drop a stale reply — the user typed on or blurred meanwhile.
     if (document.activeElement !== urlEl || urlEl.value.trim() !== reply.q) {

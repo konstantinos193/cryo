@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Settings</title>
+<link rel="icon" type="image/svg+xml" href="/theme/icon-glacier.svg">
+<link rel="stylesheet" href="/theme/tokens.css">
+<script src="/theme/theme.js"></script>
+<link rel="stylesheet" href="/settings/settings.css">
+</head>
+<body>
+  <h1>Settings</h1>
+  <div class="note">cryo — a memory-obsessed browser shell.</div>
+
+  <h2>Appearance</h2>
+  <table>
+    <tr><td class="k">Theme</td><td>
+      <div class="xdrop" id="theme-drop">
+        <button class="xdrop-btn" id="theme" type="button"
+                aria-haspopup="listbox" aria-label="Theme">
+          <span id="theme-label">Glacier</span><span class="chev">▾</span>
+        </button>
+        <div class="xdrop-pop" id="theme-pop" role="listbox"></div>
+      </div>
+      <div class="note">Glacier is the dark original; Light and Lilac are light. Applies as soon as it is picked — to this page, the tab strip and every open cryo page — and the window and taskbar icons follow it.</div>
+    </td></tr>
+  </table>
+
+  <h2>Search</h2>
+  <table>
+    <tr><td class="k">Search engine</td><td>
+      <div class="xdrop" id="engine-drop">
+        <button class="xdrop-btn" id="engine" type="button"
+                aria-haspopup="listbox" aria-label="Default search engine">
+          <span id="engine-label">DuckDuckGo</span><span class="chev">▾</span>
+        </button>
+        <div class="xdrop-pop" id="engine-pop" role="listbox"></div>
+      </div>
+      <input id="engine-tpl" type="text" spellcheck="false" hidden
+             placeholder="https://example.com/search?q=%s"
+             aria-label="Custom search URL">
+      <div class="note">Used by the address bar and the new-tab search box. Applies as soon as it is picked; for Custom, <code>%s</code> marks where the query goes.</div>
+    </td></tr>
+  </table>
+
+  <h2>Downloads</h2>
+  <table>
+    <tr><td class="k">Download folder</td><td>
+      <div id="download-path" style="overflow-wrap:anywhere">Loading…</div>
+      <button class="xdrop-btn" id="download-change" type="button" aria-label="Change download folder" aria-describedby="download-path download-status" style="margin-top:10px" disabled>Change…</button>
+      <div id="download-status" class="note" role="status" aria-live="polite"></div>
+      <div class="note">New downloads are saved here. Your choice is remembered across restarts; downloads already in progress keep their original location.</div>
+    </td></tr>
+  </table>
+
+  <h2>Profile &amp; sign-in</h2>
+  <table>
+    <tr><td class="k">Google sign-in</td><td>Use the Sign in button in the toolbar. Cookies live in the shared profile, so every site sees the session.</td></tr>
+    <tr><td class="k">Profile folder</td><td><code>cryo.exe.WebView2</code> next to the executable. Delete it (or Ctrl+Shift+Del) for a clean slate.</td></tr>
+  </table>
+
+  <h2>Permissions</h2>
+  <table>
+    <tr><td class="k">Microphone / camera</td><td>Blocked until you approve the requesting secure site's prompt. Your choice lasts for this window only.</td></tr>
+    <tr><td class="k">Extensions</td><td>Not supported — WebView2 cannot run Chrome extensions.</td></tr>
+  </table>
+
+  <h2>Shortcuts</h2>
+  <table>
+    <tr><td class="k">Ctrl+T / Ctrl+W</td><td>New / close tab</td></tr>
+    <tr><td class="k">Ctrl+Shift+T</td><td>Reopen closed tab</td></tr>
+    <tr><td class="k">Ctrl+Tab / Ctrl+Shift+Tab</td><td>Next / previous tab</td></tr>
+    <tr><td class="k">Ctrl+1..9</td><td>Jump to tab</td></tr>
+    <tr><td class="k">Ctrl+L, F6</td><td>Address bar; F6 toggles bar ↔ page</td></tr>
+    <tr><td class="k">F5 / Ctrl+Shift+R</td><td>Reload / hard reload</td></tr>
+    <tr><td class="k">Alt+Left / Alt+Right</td><td>Back / forward</td></tr>
+    <tr><td class="k">Ctrl+M</td><td>Mute tab</td></tr>
+    <tr><td class="k">Ctrl+Shift+F</td><td>Freeze tab — drops the surface, keeps a snapshot; click the tab to restore. ⋮ menu also has Discard.</td></tr>
+    <tr><td class="k">F11 / F12</td><td>Fullscreen / DevTools</td></tr>
+    <tr><td class="k">Ctrl+Shift+A</td><td>Find a tab by name or address — frozen and discarded tabs are listed too</td></tr>
+    <tr><td class="k">Ctrl+H / Ctrl+Shift+O</td><td>History / library panel</td></tr>
+    <tr><td class="k">Ctrl+Shift+N</td><td>Incognito window</td></tr>
+    <tr><td class="k">Ctrl+Shift+Del</td><td>Clear browsing data</td></tr>
+    <tr><td class="k">Ctrl+Shift+Q</td><td>Quit</td></tr>
+  </table>
+<script src="/settings/settings.js"></script>
+</body>
+</html>

@@ -10,12 +10,6 @@ on:
 permissions:
   contents: write
 
-env:
-  # Signing is optional: set CRYO_CERT_BASE64 + CRYO_CERT_PASSWORD secrets
-  # (a PFX exported from a code-signing cert) and both the binary and the
-  # installer get signed. Absent, everything still ships unsigned.
-  HAS_CERT: ${{ secrets.CRYO_CERT_BASE64 != '' && secrets.CRYO_CERT_PASSWORD != '' }}
-
 jobs:
   windows:
     runs-on: windows-latest
@@ -39,18 +33,19 @@ jobs:
       - name: Build
         run: cargo build --release --locked
 
-      - name: Decode signing certificate
-        if: env.HAS_CERT == 'true'
-        shell: pwsh
-        run: |
-          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\cryo-sign.pfx", [Convert]::FromBase64String("${{ secrets.CRYO_CERT_BASE64 }}"))
-
+      # Signs the binary before the installer packs it, so the installed
+      # cryo.exe carries the signature too. Unconditional: with no certificate
+      # configured the script says so and exits 0, which keeps the signing
+      # path exercised on every release instead of only on the first signed
+      # one. Secrets arrive as env, never interpolated into the command — a
+      # password with a quote in it would otherwise rewrite the line.
+      # Windows PowerShell 5.1, which is what installer\sign.tests.ps1 covers.
       - name: Sign binary
-        if: env.HAS_CERT == 'true'
-        shell: pwsh
-        run: |
-          $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Select-Object -Last 1).FullName
-          & $signtool sign /fd sha256 /td sha256 /tr http://timestamp.digicert.com /f "$env:RUNNER_TEMP\cryo-sign.pfx" /p "${{ secrets.CRYO_CERT_PASSWORD }}" target\release\cryo.exe
+        shell: powershell
+        env:
+          CRYO_CERT_BASE64: ${{ secrets.CRYO_CERT_BASE64 }}
+          CRYO_CERT_PASSWORD: ${{ secrets.CRYO_CERT_PASSWORD }}
+        run: .\installer\sign.ps1 -Path target\release\cryo.exe
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress --yes
@@ -59,16 +54,17 @@ jobs:
         run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=${{ steps.v.outputs.version }} installer\cryo.iss'
 
       - name: Sign installer
-        if: env.HAS_CERT == 'true'
-        shell: pwsh
-        run: |
-          $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Select-Object -Last 1).FullName
-          & $signtool sign /fd sha256 /td sha256 /tr http://timestamp.digicert.com /f "$env:RUNNER_TEMP\cryo-sign.pfx" /p "${{ secrets.CRYO_CERT_PASSWORD }}" installer\output\cryo-setup.exe
+        shell: powershell
+        env:
+          CRYO_CERT_BASE64: ${{ secrets.CRYO_CERT_BASE64 }}
+          CRYO_CERT_PASSWORD: ${{ secrets.CRYO_CERT_PASSWORD }}
+        run: .\installer\sign.ps1 -Path installer\output\cryo-setup.exe
 
-      # The updater fetches releases/latest/download/latest.json — the
-      # version and pinned tag URL in here are what the app compares
-      # against and downloads. Windows-only: the updater is cfg'd out on
-      # the other platforms.
+      # Hashed after signing, never before: a signature rewrites the file and
+      # a hash taken earlier would fail the updater's own check. The updater
+      # fetches releases/latest/download/latest.json — the version and pinned
+      # tag URL in here are what the app compares against and downloads.
+      # Windows-only: the updater is cfg'd out on the other platforms.
       - name: Write latest.json
         shell: pwsh
         run: |

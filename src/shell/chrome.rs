@@ -14,18 +14,21 @@ pub(crate) fn favicon_data_url(png: &[u8]) -> String {
     format!("data:image/png;base64,{}", crate::base64(png))
 }
 
-/// The strip's document — kept in its own file next to the module.
-pub const CHROME_HTML: &str = include_str!("chrome.html");
+/// The strip's document, served at [`crate::shell::pages::CHROME_URL`].
+/// Document, stylesheets and scripts all live in `chrome/`.
+pub(crate) const HTML: &str = include_str!("chrome/chrome.html");
 
-pub(crate) const CHROME_STYLE: &str = concat!(
+/// Its stylesheet, served at `/chrome/chrome.css`.
+pub(crate) const STYLE: &str = concat!(
     include_str!("chrome/chrome.css"),
     "\n",
     include_str!("chrome/library.css"),
 );
 
-/// One execution unit preserves initialization order and prevents callbacks
-/// from running between feature files while the document is still loading.
-pub(crate) const CHROME_SCRIPT: &str = concat!(
+/// Its script, served at `/chrome/chrome.js`. One execution unit preserves
+/// initialization order and prevents callbacks from running between feature
+/// files while the document is still loading.
+pub(crate) const SCRIPT: &str = concat!(
     include_str!("chrome/bootstrap.js"),
     "\n",
     include_str!("chrome/permissions.js"),
@@ -322,7 +325,7 @@ mod tests {
 
     #[test]
     fn chrome_contains_the_trusted_password_card() {
-        assert!(CHROME_HTML.contains("id=\"password-pop\""));
+        assert!(HTML.contains("id=\"password-pop\""));
         let bootstrap = include_str!("chrome/bootstrap.js");
         assert!(bootstrap.contains("window.__cryo_password_prompt"));
         assert!(bootstrap.contains("cmd: 'password_fill'"));

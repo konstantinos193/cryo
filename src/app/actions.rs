@@ -447,8 +447,7 @@ impl App {
         // JS sets DOM focus only, so without this the keystrokes keep going
         // to whichever webview last had it.
         self.chrome.focus()?;
-        self.chrome
-            .eval("const u=document.getElementById('url');u.focus();u.select();")?;
+        self.chrome.eval("window.__cryo_focus_address()")?;
         self.chrome_focused = true;
         Ok(())
     }

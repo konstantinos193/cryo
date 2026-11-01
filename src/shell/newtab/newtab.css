@@ -1,0 +1,361 @@
+  * { box-sizing: border-box; }
+  body {
+    min-height: 100vh; margin: 0; padding-bottom: 56px;
+    display: flex; align-items: flex-start; justify-content: center;
+    color: var(--tx); background: var(--bg0);
+    font: 15px/1.6 system-ui, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -webkit-user-select: none; user-select: none;
+    overflow-x: hidden;
+  }
+
+  /* ---- Ice field -------------------------------------------------- */
+  /* Three blurred lobes over a cold base. Everything that moves here is
+     transform or opacity on four elements, so the compositor carries it
+     and an idle new tab costs nothing worth measuring. */
+  #field {
+    position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none;
+    background: radial-gradient(1100px 480px at 50% -160px, rgba(var(--lobe-a-rgb), .18), transparent 72%);
+    /* Pointer parallax, written by the script as px offsets. */
+    transform: translate3d(var(--px, 0px), var(--py, 0px), 0);
+    transition: transform .7s cubic-bezier(.2, .6, .2, 1);
+  }
+  .lobe { position: absolute; border-radius: 50%; filter: blur(88px); }
+  .l1 {
+    width: 620px; height: 420px; left: 10%; top: -16%;
+    background: radial-gradient(closest-side, rgba(var(--lobe-a-rgb), .5), transparent);
+    animation: drift1 44s ease-in-out infinite;
+  }
+  .l2 {
+    width: 540px; height: 380px; right: 4%; top: 4%;
+    background: radial-gradient(closest-side, rgba(var(--lobe-b-rgb), .42), transparent);
+    animation: drift2 58s ease-in-out infinite;
+  }
+  .l3 {
+    width: 760px; height: 300px; left: 50%; bottom: -20%; margin-left: -380px;
+    background: radial-gradient(closest-side, rgba(var(--lobe-c-rgb), .3), transparent);
+    animation: drift3 72s ease-in-out infinite;
+  }
+  /* Film grain: without it the blurred lobes band on a dark panel. */
+  #field::after {
+    content: ""; position: absolute; inset: -20%; opacity: .035;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  /* Crystal lattice: three line families at 60 degrees, the way ice
+     actually grows. It is masked down to a disc around the pointer, so
+     frost blooms where the cursor passes and the page stays clean. */
+  #lattice {
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    opacity: 0; transition: opacity .5s ease;
+    background-image:
+      repeating-linear-gradient(60deg, rgba(var(--accent-rgb), .5) 0 1px, transparent 1px 38px),
+      repeating-linear-gradient(-60deg, rgba(var(--accent-rgb), .5) 0 1px, transparent 1px 38px),
+      repeating-linear-gradient(0deg, rgba(var(--accent-rgb), .32) 0 1px, transparent 1px 33px);
+    -webkit-mask-image: radial-gradient(260px 260px at var(--mx, -400px) var(--my, -400px), #000 0%, rgba(0, 0, 0, .45) 42%, transparent 72%);
+    mask-image: radial-gradient(260px 260px at var(--mx, -400px) var(--my, -400px), #000 0%, rgba(0, 0, 0, .45) 42%, transparent 72%);
+  }
+  #lattice.lit { opacity: .4; }
+
+  @keyframes drift1 {
+    50% { transform: translate3d(70px, 40px, 0) scale(1.12); }
+  }
+  @keyframes drift2 {
+    50% { transform: translate3d(-80px, 54px, 0) scale(1.08); }
+  }
+  @keyframes drift3 {
+    50% { transform: translate3d(50px, -36px, 0) scale(1.14); }
+  }
+
+  /* ---- Column ----------------------------------------------------- */
+  main {
+    position: relative; z-index: 1;
+    /* Wide enough that the shipped six and the add tile share one row. */
+    width: min(860px, calc(100vw - 48px));
+    /* Fixed drop from the top, not centreing: the dial tiles arrive over
+       an async fetch, and a centred block would jump up the moment they
+       land. ~14vh is where centreing put it anyway. */
+    margin-top: min(14vh, 140px); text-align: center;
+  }
+
+  .mark { position: relative; width: 116px; height: 116px; margin: 0 auto;
+          display: grid; place-items: center; }
+  /* A cold halo sweeping behind the crystal, the only thing on the page
+     that reads as alive at a glance. */
+  .mark .halo {
+    position: absolute; inset: -14px; border-radius: 50%;
+    background: conic-gradient(from 0deg, transparent 0 52%,
+                rgba(var(--accent-rgb), .38) 74%, transparent 90%);
+    filter: blur(16px); animation: spin 26s linear infinite;
+  }
+  /* The crystal comes from the palette (--mark-url), so the theme's own
+     mark arrives with its colours and this page keeps no copy of the
+     geometry. */
+  .mark .crystal {
+    position: relative; width: 84px; height: 84px;
+    background: var(--mark-url) center / contain no-repeat;
+    filter: drop-shadow(0 8px 26px rgba(var(--accent-rgb), .22));
+    animation: breathe 7s ease-in-out infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes breathe { 50% { transform: scale(1.035); } }
+
+  .brand {
+    margin: 16px 0 0; font-size: 40px; font-weight: 650; letter-spacing: .1em;
+    /* The light band in the middle of the ramp is what the one-off sheen
+       sweeps across the word on arrival. */
+    background: var(--brand-grad);
+    background-size: 260% 100%; background-position: 100% 0;
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  @keyframes sheen { to { background-position: 0 0; } }
+  .tag { margin: 6px 0 0; color: var(--tx3); font-size: 14px; letter-spacing: .02em; }
+
+  /* ---- Search ----------------------------------------------------- */
+  form#go { position: relative; margin-top: 30px; }
+  /* Cold bloom under the bar while it holds focus. */
+  form#go::before {
+    content: ""; position: absolute; left: 14%; right: 14%; top: 58%; height: 56px;
+    background: radial-gradient(closest-side, rgba(var(--accent-rgb), .22), transparent);
+    filter: blur(20px); opacity: 0; pointer-events: none;
+    transition: opacity .3s ease;
+  }
+  form#go:focus-within::before { opacity: 1; }
+  .box {
+    display: flex; align-items: center; gap: 10px; padding: 7px 8px 7px 9px;
+    border: 1px solid var(--line); border-radius: 999px;
+    background: rgba(var(--glass-rgb), .72); backdrop-filter: blur(16px);
+    box-shadow: var(--shadow-box);
+    transition: border-color .18s ease, box-shadow .18s ease,
+                background .18s ease, transform .18s ease;
+  }
+  .box:focus-within {
+    border-color: var(--accent-deep); background: rgba(var(--glass-hi-rgb), .86);
+    box-shadow: var(--shadow-box-focus);
+    transform: translateY(-1px);
+  }
+  #chip {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
+    height: 32px; padding: 0 13px; border-radius: 999px;
+    background: var(--accent-soft); color: var(--accent);
+    font-size: 12px; font-weight: 600; letter-spacing: .02em; white-space: nowrap;
+  }
+  #chip svg { width: 12px; height: 12px; opacity: .85; }
+  #q {
+    flex: 1; min-width: 0; padding: 10px 2px; border: 0; background: transparent;
+    color: var(--tx); font: inherit;
+    -webkit-user-select: text; user-select: text;
+  }
+  #q:focus { outline: none; }
+  #q::placeholder { color: var(--tx3); }
+  .enter {
+    flex: 0 0 auto; margin-right: 8px; color: var(--tx3); font-size: 13px;
+    opacity: 0; transform: translateX(-4px);
+    transition: opacity .15s ease, transform .15s ease;
+  }
+  .box.filled .enter { opacity: 1; transform: none; }
+
+  /* ---- Speed dial -------------------------------------------------- */
+  /* The shipped list seeds the row; what the reader does to it after
+     that is theirs, and lives in this origin's localStorage next to the
+     search-engine pick. */
+  #dial {
+    margin-top: 34px; display: flex; flex-wrap: wrap; gap: 12px;
+    justify-content: center;
+  }
+  .slot { position: relative; }
+  .tile {
+    position: relative; display: block; width: 106px; padding: 16px 8px 12px;
+    border: 1px solid var(--line); border-radius: 16px;
+    background: rgba(var(--glass-rgb), .6); backdrop-filter: blur(10px);
+    color: var(--tx2); text-decoration: none; text-align: center;
+    font: inherit; font-size: 12px; overflow: hidden;
+    transition: transform .18s cubic-bezier(.2, .7, .3, 1), border-color .18s ease,
+                background .18s ease, box-shadow .18s ease, color .18s ease;
+  }
+  .tile::after {
+    content: ""; position: absolute; inset: 0; border-radius: inherit;
+    background: linear-gradient(135deg, rgba(var(--sheen-rgb), .1), transparent 46%);
+    opacity: 0; transition: opacity .18s ease;
+  }
+  .tile:hover, .tile:focus-visible {
+    transform: translateY(-4px); border-color: var(--accent-deep); color: var(--tx);
+    background: rgba(var(--glass-hi-rgb), .78);
+    box-shadow: var(--shadow-tile-hover);
+    outline: none;
+  }
+  .tile:hover::after, .tile:focus-visible::after { opacity: 1; }
+  .tile:active { transform: translateY(-1px) scale(.98); }
+  .tile .dot {
+    position: relative; width: 40px; height: 40px; margin: 0 auto 9px;
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--chip, var(--accent-soft)); color: var(--glyph, var(--accent));
+    font-size: 17px; font-weight: 650;
+    box-shadow: inset 0 1px 0 rgba(var(--sheen-rgb), .1);
+    transition: transform .18s cubic-bezier(.2, .7, .3, 1);
+  }
+  .tile:hover .dot, .tile:focus-visible .dot { transform: scale(1.06); }
+  /* The site's own icon sits over the initial, which stays as the
+     fallback for anything that never answers. */
+  .tile .dot img {
+    position: absolute; width: 22px; height: 22px; object-fit: contain;
+    opacity: 0; transition: opacity .25s ease;
+  }
+  .tile .dot.iconed { color: transparent; }
+  .tile .dot.iconed img { opacity: 1; }
+  .tile .idx {
+    position: absolute; top: 7px; left: 9px; font-size: 10px; color: var(--tx3);
+    opacity: 0; transition: opacity .18s ease;
+  }
+  .slot:hover .idx, .tile:focus-visible .idx { opacity: .8; }
+  .tile .name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Remove sits outside the tile, so a click on it is never a navigation. */
+  .kill {
+    position: absolute; top: -7px; right: -7px; width: 21px; height: 21px;
+    display: grid; place-items: center; padding: 0;
+    border: 1px solid var(--line); border-radius: 50%;
+    background: var(--bg2); color: var(--tx3);
+    font: inherit; font-size: 13px; line-height: 1; cursor: pointer;
+    opacity: 0; transform: scale(.75);
+    transition: opacity .15s ease, transform .15s ease,
+                color .15s ease, border-color .15s ease;
+  }
+  .slot:hover .kill, .kill:focus-visible { opacity: 1; transform: none; outline: none; }
+  .kill:hover, .kill:focus-visible { color: var(--tx); border-color: var(--accent-deep); }
+
+  .tile.add {
+    cursor: pointer; border-style: dashed; background: rgba(var(--glass-rgb), .28);
+    color: var(--tx3);
+  }
+  .tile.add:hover { color: var(--tx2); background: rgba(var(--glass-hi-rgb), .5); }
+  .tile.add .dot {
+    background: rgba(var(--hair-rgb), .045); color: var(--tx3);
+    font-size: 22px; font-weight: 400;
+  }
+
+  /* The tile editor is a dialog over the page, not a row inside it: an
+     inline form shoved the whole column down the moment it opened. */
+  #scrim {
+    position: fixed; inset: 0; z-index: 2;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--veil); backdrop-filter: blur(6px);
+    animation: fade .18s ease both;
+  }
+  /* An id beats the bare [hidden] rule, so it has to say so itself. */
+  #scrim[hidden] { display: none; }
+  @keyframes fade { from { opacity: 0; } }
+  #editor {
+    width: min(380px, calc(100vw - 48px));
+    padding: 22px 22px 18px; border: 1px solid var(--line); border-radius: 18px;
+    background: var(--bg1); text-align: left;
+    box-shadow: var(--shadow-editor);
+    animation: lift .22s cubic-bezier(.2, .7, .3, 1) both;
+  }
+  @keyframes lift { from { opacity: 0; transform: translateY(10px) scale(.97); } }
+  #editor h2 { margin: 0 0 16px; font-size: 16px; font-weight: 650; letter-spacing: .01em; }
+  #editor label {
+    display: block; margin-bottom: 6px;
+    color: var(--tx3); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .09em;
+  }
+  #editor input {
+    width: 100%; margin-bottom: 14px; padding: 10px 13px;
+    border: 1px solid var(--line); border-radius: 10px;
+    background: var(--bg0); color: var(--tx); font: inherit; font-size: 13px;
+    -webkit-user-select: text; user-select: text;
+  }
+  #editor input::placeholder { color: var(--tx3); }
+  #editor input:focus {
+    outline: none; border-color: var(--accent-deep);
+    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .12);
+  }
+  #editor input.bad { border-color: var(--bad); box-shadow: 0 0 0 3px rgba(var(--bad-rgb), .12); }
+  #e-error { margin: -6px 0 12px; color: var(--bad); font-size: 12px; }
+  #editor .row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+  #editor button {
+    padding: 9px 16px; border: 1px solid var(--line); border-radius: 10px;
+    background: var(--bg2); color: var(--tx2); font: inherit; font-size: 13px;
+    cursor: pointer; transition: color .15s ease, border-color .15s ease;
+  }
+  #editor button:hover { color: var(--tx); border-color: var(--accent-deep); }
+  #editor button.go {
+    background: var(--accent-soft); border-color: transparent; color: var(--accent); font-weight: 600;
+  }
+  #editor button.go:hover { background: var(--accent-soft-hover); color: var(--accent); }
+
+  /* What is being built next, stated once and quietly. Not a link,
+     because there is nothing to open yet. */
+  .soon {
+    display: inline-flex; align-items: center; gap: 10px;
+    margin-top: 26px; padding: 6px 7px 6px 14px; border-radius: 999px;
+    border: 1px dashed rgba(var(--accent-rgb), .24);
+    background: rgba(var(--glass-rgb), .45);
+    color: var(--tx2); font-size: 12.5px;
+  }
+  .soon svg { width: 15px; height: 15px; color: var(--accent); opacity: .8; }
+  .soon .badge {
+    padding: 3px 9px; border-radius: 999px;
+    background: var(--accent-soft); color: var(--accent);
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em;
+  }
+
+  /* Corner clock, the one piece of the page that is not about the
+     browser. It ticks on the second, so the digits are tabular and the
+     line cannot jitter as they change. */
+  #clock {
+    position: fixed; top: 20px; right: 26px; z-index: 1; text-align: right;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    letter-spacing: .04em;
+  }
+  #clock .time { font-size: 19px; color: var(--tx2); font-variant-numeric: tabular-nums; }
+  #clock .date { margin-top: 2px; font-size: 11px; color: var(--tx3); }
+
+  .hint { margin: 22px 0 0; color: var(--tx3); font-size: 12px; }
+  .hint .sep { opacity: .45; margin: 0 8px; }
+  kbd {
+    font: inherit; font-size: 11px; padding: 2px 6px; border-radius: 6px;
+    border: 1px solid var(--line); background: rgba(var(--glass-rgb), .7); color: var(--tx2);
+  }
+  .link {
+    margin-top: 6px; padding: 0; border: 0; background: none;
+    color: var(--tx3); font: inherit; font-size: 11.5px; cursor: pointer;
+    text-decoration: underline; text-underline-offset: 3px;
+  }
+  .link:hover { color: var(--tx2); }
+  [hidden] { display: none; }
+
+  /* Everything lands in sequence instead of appearing at once. */
+  @keyframes rise { from { opacity: 0; transform: translateY(12px); } }
+  .mark, .brand, .tag, form#go, .soon, .hint, .slot, .tile.add {
+    animation: rise .55s cubic-bezier(.2, .7, .3, 1) both;
+  }
+  .brand {
+    animation: rise .55s cubic-bezier(.2, .7, .3, 1) .06s both,
+               sheen 2.4s cubic-bezier(.4, 0, .2, 1) .5s both;
+  }
+  .tag { animation-delay: .12s; }
+  form#go { animation-delay: .18s; }
+  .soon { animation-delay: .46s; }
+  .hint { animation-delay: .54s; }
+  #clock { animation: rise .55s cubic-bezier(.2, .7, .3, 1) .5s both; }
+  /* The staged arrival is for the first paint; an edit is immediate. */
+  #dial.settled .slot, #dial.settled .tile.add { animation: none; }
+
+  /* Typing is the only thing happening, so let the rest step back. */
+  body:has(#box.filled) #dial { opacity: .4; transform: translateY(6px); }
+  body:has(#box.filled) .tag, body:has(#box.filled) .soon { opacity: .45; }
+  #dial, .tag, .soon { transition: opacity .3s ease, transform .3s ease; }
+
+  /* A home page in a background tab costs nothing to look at, because
+     nobody is looking at it. */
+  body.still *, body.still *::before, body.still *::after {
+    animation-play-state: paused !important;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+    .brand { background-position: 0 0; }
+    /* No pointer bloom either, so show the lattice as plain texture. */
+    #lattice { opacity: .1; -webkit-mask-image: none; mask-image: none; }
+  }

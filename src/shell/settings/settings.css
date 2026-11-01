@@ -1,0 +1,70 @@
+  body {
+    max-width: 660px; margin: 0 auto; padding: 48px 24px;
+    background: var(--bg1); color: var(--tx);
+    font: 14px/1.6 system-ui, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1 { font-size: 24px; font-weight: 650; margin-bottom: 4px; letter-spacing: -.01em; }
+  h2 { font-size: 12px; font-weight: 700; text-transform: uppercase;
+       letter-spacing: .1em; color: var(--tx3); margin: 32px 0 10px; }
+  table {
+    width: 100%; border-collapse: collapse;
+    background: var(--bg2); border: 1px solid var(--line);
+    border-radius: 14px; overflow: visible;
+  }
+  td { padding: 12px 14px; border-bottom: 1px solid rgba(var(--hair-rgb), .05); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  td.k { width: 220px; color: var(--accent); white-space: nowrap;
+         font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; }
+  input[type="text"] {
+    background: var(--bg0); color: var(--tx); border: 1px solid var(--line);
+    border-radius: 9px; padding: 8px 11px; font: inherit;
+    transition: border-color .12s ease, box-shadow .12s ease;
+  }
+  input[type="text"] {
+    margin-top: 10px; width: 100%; box-sizing: border-box;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 13px;
+    -webkit-user-select: text; user-select: text;
+  }
+  input[type="text"]:focus {
+    outline: none; border-color: var(--accent-deep);
+    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .14);
+  }
+  input[type="text"]::placeholder { color: var(--tx3); }
+  .note { color: var(--tx2); margin-top: 8px; }
+  code { color: var(--accent); }
+  /* Same custom-dropdown pattern the chrome library uses — a native
+     <select> popup can't carry this theme. */
+  .xdrop { position: relative; display: inline-block; }
+  .xdrop.open { z-index: 10; }
+  .xdrop-btn {
+    display: flex; align-items: center; gap: 10px; min-width: 190px;
+    padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px;
+    background: var(--bg0); color: var(--tx); font: inherit; cursor: pointer;
+    transition: border-color .12s ease, box-shadow .12s ease;
+  }
+  .xdrop-btn:hover { border-color: var(--line-strong); }
+  #download-change:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  #download-change:disabled { opacity: .5; cursor: default; }
+  .xdrop.open .xdrop-btn {
+    border-color: var(--accent-deep);
+    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .14);
+  }
+  .xdrop-btn .chev { margin-left: auto; color: var(--tx3); font-size: 10px;
+                     transition: transform .15s ease; }
+  .xdrop.open .chev { transform: rotate(180deg); }
+  .xdrop-pop {
+    display: none; position: absolute; top: calc(100% + 6px); left: 0; z-index: 5;
+    min-width: 100%; padding: 4px; list-style: none;
+    background: var(--pop-bg); border: 1px solid var(--line-pop);
+    border-radius: 10px; box-shadow: var(--shadow);
+  }
+  .xdrop.open .xdrop-pop { display: block; }
+  .xdrop-item {
+    display: block; width: 100%; padding: 8px 10px; border: 0; border-radius: 7px;
+    background: transparent; color: var(--tx2); font: inherit; text-align: left;
+    cursor: pointer; white-space: nowrap;
+  }
+  .xdrop-item:hover { background: rgba(var(--hair-rgb), .06); color: var(--tx); }
+  .xdrop-item.on { color: var(--accent); }
+  .xdrop-item.on::after { content: ' ✓'; }
