@@ -84,6 +84,9 @@ jobs:
       - name: sign.ps1
         shell: powershell
         run: .\installer\sign.tests.ps1
+      - name: msix pack.ps1
+        shell: powershell
+        run: .\installer\msix\pack.tests.ps1
 
   # The restore/freeze boundary is the product — an unverified live
   # restore is a broken window. Runs only on Windows: the probes drive a
@@ -97,5 +100,7 @@ jobs:
         run: cargo test live_freeze_memory -- --ignored --nocapture
         env:
           CRYO_FREEZE_CASE: heap
+      - name: live find probe
+        run: cargo test live_find_in_page -- --ignored --nocapture
       - name: live budget + restore probe
         run: cargo test live_ram_budget -- --ignored --nocapture

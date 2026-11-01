@@ -7,6 +7,15 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ChromeCommand {
+    FindOpen,
+    FindQuery {
+        query: String,
+        match_case: bool,
+    },
+    FindNext {
+        backwards: bool,
+    },
+    FindClose,
     PermissionAnswer {
         token: u64,
         allow: bool,

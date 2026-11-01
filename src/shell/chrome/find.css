@@ -1,0 +1,26 @@
+#findbar:not([hidden]) {
+  position: absolute;
+  top: 44px;
+  right: 0;
+  z-index: 20;
+  height: 32px;
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  background: var(--bg2);
+  color: var(--tx);
+  border: 1px solid var(--line);
+  border-radius: 0 0 0 8px;
+  box-sizing: border-box;
+}
+#findbar input[type="search"] { width: 160px; min-width: 50px; }
+#findbar output { font-size: 11px; white-space: nowrap; }
+#findbar label { display: flex; align-items: center; font-size: 12px; }
+#findbar button { padding: 1px 6px; }
+#findbar button:disabled { opacity: .4; }
+
+#findbar input[type="search"] { height: 24px; padding: 2px 7px; background: var(--bg0); color: var(--tx); border: 1px solid var(--line-strong); border-radius: 5px; }
+#findbar button { color: var(--tx); background: var(--bg3); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+#findbar input:focus-visible, #findbar button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }

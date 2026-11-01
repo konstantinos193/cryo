@@ -5,6 +5,8 @@
 pub mod accounting;
 pub mod cryo_impl;
 pub mod fake;
+mod find;
+pub use find::{FindHandler, FindMatches};
 #[cfg(feature = "servo-engine")]
 pub mod servo_impl;
 pub mod wry_impl;
@@ -223,6 +225,28 @@ impl ViewSpec {
 
 /// A live web surface. All methods are called on the event loop thread.
 pub trait ContentView {
+    /// Whether this live surface exposes native text search.
+    fn supports_find(&self) -> bool {
+        false
+    }
+    fn find(
+        &self,
+        _query: &str,
+        _match_case: bool,
+        _report: FindHandler,
+    ) -> Result<(), EngineError> {
+        Err(EngineError::Unsupported(
+            "Find-in-page is unavailable on this engine",
+        ))
+    }
+    fn find_next(&self, _backwards: bool) -> Result<(), EngineError> {
+        Err(EngineError::Unsupported(
+            "Find-in-page is unavailable on this engine",
+        ))
+    }
+    fn find_clear(&self) -> Result<(), EngineError> {
+        Ok(())
+    }
     fn answer_permission(
         &self,
         _id: PermissionId,
@@ -487,6 +511,8 @@ pub struct LoadedExtension {
 #[derive(thiserror::Error, Debug)]
 #[non_exhaustive]
 pub enum EngineError {
+    #[error("find-in-page failed: {0}")]
+    Find(String),
     #[error("memory accounting failed: {0}")]
     ReadStats(String),
     #[error("view creation failed: {0}")]

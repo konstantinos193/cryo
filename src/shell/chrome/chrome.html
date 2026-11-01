@@ -58,6 +58,15 @@
   <div id="password-pop" role="dialog" aria-live="polite"></div>
   <div id="permission-pop" role="dialog" aria-live="polite"></div>
   <div id="toast"></div>
+  <div id="findbar" role="search" aria-label="Find in page" hidden>
+    <input type="search" aria-label="Find in page" placeholder="Find in page"
+           autocomplete="off" spellcheck="false" maxlength="2048">
+    <output aria-live="polite"></output>
+    <label title="Match case"><input type="checkbox" aria-label="Match case">Aa</label>
+    <button type="button" data-find="previous" aria-label="Previous match" title="Previous (Shift+Enter)">↑</button>
+    <button type="button" data-find="next" aria-label="Next match" title="Next (Enter)">↓</button>
+    <button type="button" data-find="close" aria-label="Close find" title="Close (Escape)">×</button>
+  </div>
 <script src="/chrome/chrome.js"></script>
 </body>
 </html>

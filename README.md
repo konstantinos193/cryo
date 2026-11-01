@@ -84,7 +84,14 @@ What exists today:
 - On Windows, external links reach the running window over a named pipe and
   become tabs instead of a second browser.
 - Self-update on Windows: check the release feed, verify the checksum, run the
-  installer.
+  installer. A Store-installed build leaves updates to the Store — the feed
+  check and the menu item stay out of a package's way.
+- Find in page on Windows: `Ctrl+F` opens a private find field with native
+  highlighting, match counts, case matching and next/previous controls.
+  `Enter` / `Shift+Enter`, `F3` / `Shift+F3` and `Ctrl+G` / `Ctrl+Shift+G`
+  move between matches; Escape closes and clears the query. Searches stay
+  on the active document and never restore a frozen background tab. Older
+  WebView2 runtimes and other backends show an explicit unavailable message.
 - Three themes, picked in **Settings → Appearance**: Glacier (the dark
   original), Light and Lilac. The pick restyles every open cryo page, the tab
   strip included, as soon as it is made, and the window and taskbar icons
@@ -126,6 +133,8 @@ behave the same whether the page or the chrome owns focus.
 | `F5` / `Ctrl+R` | Reload |
 | `Ctrl+F5` / `Ctrl+Shift+R` / `Shift+F5` | Hard reload (DevTools-protocol cache bypass) |
 | `Esc` | Stop loading (still reaches the page for dialogs and menus) |
+| `Ctrl+F` | Find in the active page (Windows) |
+| `F3` / `Shift+F3` | Next / previous page match |
 | `Ctrl+P` / `Ctrl+S` / `Ctrl+O` | Print / save-as / open file into `file://` |
 | `Ctrl+U` | `view-source:` in a new tab |
 | `Ctrl+=`/`+` / `Ctrl+-` / `Ctrl+0` | Zoom in / out / reset (×1.25 steps, 25 to 500%) |
@@ -177,6 +186,10 @@ free).
 
 ### Windows will warn you
 
+The Microsoft Store build is the path without this section — the package
+Microsoft signs never meets SmartScreen. It is being set up; until the
+listing is live the GitHub installer below is the build that exists.
+
 The installer is unsigned, so SmartScreen opens with "Windows protected
 your PC" the first time you run it. That is not a verdict on the file.
 It means the binary carries no code-signing certificate and no download
@@ -210,8 +223,11 @@ not homework.
 
 ### Code signing policy
 
-Free code signing provided by [SignPath.io](https://about.signpath.io/),
-certificate by [SignPath Foundation](https://signpath.org/).
+Trusted signing arrives through the Microsoft Store: the MSIX the release
+workflow packs is submitted unsigned and Microsoft signs the package it
+publishes. The free-certificate route was tried first — SignPath
+Foundation declined the application on 1 November 2026 for insufficient
+public adoption; reapplication is invited once that changes.
 
 cryo has one maintainer,
 [konstantinos193](https://github.com/konstantinos193), who is author,
@@ -297,7 +313,7 @@ there is no longer a 24-live-view cap.
   toolbar action surface, per-extension enable/disable, and incognito grants.
 - [ ] Phase 5: evaluate Servo as a second engine backend. If it earns the slot.
 
-Known gaps by design: find-in-page, a browsable history surface (the store
+Known gaps by design: native find-in-page on Linux/macOS, a browsable history surface (the store
 exists, the page doesn't), a task manager. They go in issues, not in
 half-built code.
 

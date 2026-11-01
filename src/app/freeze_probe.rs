@@ -381,3 +381,89 @@ fn fixture(case: &str) -> anyhow::Result<String> {
     })?;
     Ok(url)
 }
+
+#[test]
+#[ignore = "opens a real WebView2 document and verifies native find"]
+fn live_find_in_page() -> anyhow::Result<()> {
+    let (mut event_loop, mut app, tabs) = fixture_app("light")?;
+    let anchor = app.registry.active_id().expect("fixture anchor is active");
+    app.activate(tabs[0])?;
+    pump_until(&mut event_loop, &mut app, |app| {
+        Ok(app
+            .registry
+            .get(tabs[0])
+            .is_some_and(|tab| tab.title() == "probe-ready" && !tab.is_loading()))
+    })?;
+    anyhow::ensure!(
+        app.active_view()
+            .expect("fixture view is live")
+            .supports_find(),
+        "runtime lacks native Find API"
+    );
+    let (tx, rx) = channel();
+    app.active_view().expect("fixture view is live").find(
+        "e",
+        false,
+        Box::new(move |result| {
+            if tx.send(result).is_err() {
+                crate::report!("find probe receiver closed");
+            }
+        }),
+    )?;
+    wait_for_matches(&mut event_loop, &mut app, &rx, 5, 1)?;
+    app.active_view()
+        .expect("fixture view is live")
+        .find_next(false)?;
+    wait_for_matches(&mut event_loop, &mut app, &rx, 5, 2)?;
+    app.active_view()
+        .expect("fixture view is live")
+        .find_clear()?;
+    let (tx, rx) = channel();
+    app.active_view().expect("fixture view is live").find(
+        "freeze",
+        true,
+        Box::new(move |result| {
+            if tx.send(result).is_err() {
+                crate::report!("find probe receiver closed");
+            }
+        }),
+    )?;
+    wait_for_matches(&mut event_loop, &mut app, &rx, 0, 0)?;
+    app.open_find()?;
+    app.search_page("Freeze".into(), false)?;
+    app.activate(anchor)?;
+    app.freeze_tab(tabs[0])?;
+    app.open_find()?;
+    app.search_page("absent-on-anchor".into(), false)?;
+    anyhow::ensure!(
+        app.registry
+            .get(tabs[0])
+            .is_some_and(|tab| tab.state() == TabState::Frozen),
+        "find restored a background tab"
+    );
+    app.dismiss_find()?;
+    crate::report!("FIND_PROBE native count, case sensitivity, navigation, clearing and frozen-tab isolation passed");
+    Ok(())
+}
+
+fn wait_for_matches(
+    event_loop: &mut tao::event_loop::EventLoop<AppEvent>,
+    app: &mut App,
+    receiver: &Receiver<Result<crate::engine::FindMatches, crate::engine::EngineError>>,
+    expected: u32,
+    active: u32,
+) -> anyhow::Result<()> {
+    pump_until(event_loop, app, |_| {
+        while let Ok(result) = receiver.try_recv() {
+            let found = result?;
+            if found.total == expected && found.active == active {
+                anyhow::ensure!(
+                    found.active <= found.total,
+                    "native active match is outside its count"
+                );
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    })
+}

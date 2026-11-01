@@ -63,6 +63,8 @@ pub(super) struct Handlers {
 
 pub(super) struct WryView {
     #[cfg(target_os = "windows")]
+    find: RefCell<Option<super::find::Session>>,
+    #[cfg(target_os = "windows")]
     permissions: super::permissions::Permissions,
     #[cfg(target_os = "windows")]
     profile_consent: super::permission_profile::ProfileConsent,
@@ -194,6 +196,7 @@ impl WryView {
                 .transpose()?
                 .flatten();
             Ok(Self {
+                find: RefCell::new(None),
                 permissions,
                 profile_consent,
                 view,
@@ -238,6 +241,38 @@ impl Drop for WryView {
 }
 
 impl ContentView for WryView {
+    #[cfg(target_os = "windows")]
+    fn supports_find(&self) -> bool {
+        super::find::Session::supported(&self.view)
+    }
+
+    #[cfg(target_os = "windows")]
+    fn find(
+        &self,
+        query: &str,
+        match_case: bool,
+        report: crate::engine::FindHandler,
+    ) -> Result<(), EngineError> {
+        self.find_clear()?;
+        *self.find.borrow_mut() = Some(super::find::Session::start(
+            &self.view, query, match_case, report,
+        )?);
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    fn find_next(&self, backwards: bool) -> Result<(), EngineError> {
+        if let Some(session) = self.find.borrow().as_ref() {
+            session.next(backwards)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    fn find_clear(&self) -> Result<(), EngineError> {
+        self.find.borrow_mut().take();
+        Ok(())
+    }
     #[cfg(target_os = "windows")]
     fn answer_permission(
         &self,

@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.16.0
+
+### Added
+
+- Find in page on Windows: `Ctrl+F` opens a private find field over the
+  active document — WebView2's native Find session does the searching,
+  with highlighting, match counts, case matching and next/previous.
+  `Enter` / `Shift+Enter`, `F3` / `Shift+F3` and `Ctrl+G` /
+  `Ctrl+Shift+G` step between matches; Escape closes and clears the
+  query. Results carry the revision and the tab they were searched on,
+  so a late callback cannot repaint the bar after a switch, and a
+  search never restores a frozen background tab. Older WebView2 runtimes
+  and other backends say find is unavailable rather than pretending.
+- MSIX packaging for the Microsoft Store (`installer/msix/`): manifest,
+  tile art, `pack.ps1` with a `-DevSign` path for local installs, and
+  `pack.tests.ps1` under the CI signing gate. Once the package identity
+  is configured, tagged releases emit `cryo.msix` — the unsigned package
+  Partner Center accepts and Microsoft signs — alongside `cryo-setup.exe`.
+
+### Changed
+
+- A build running under package identity leaves updates to the Store:
+  `update::store_managed()` probes `GetCurrentPackageId` once, and the
+  launch-time feed check plus the menu's "Check for updates" stay out of
+  a packaged install's way.
+- Privacy policy published as `PRIVACY.md` — the Store listing requires
+  the URL; the content is the same facts the README has always stated.
+
 ## 0.14.1
 
 ### Fixed

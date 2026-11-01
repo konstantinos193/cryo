@@ -26,6 +26,7 @@ function fixture() {
     backBtn: el('back'), fwdBtn: el('fwd'),
     reloadBtn: el('reload'), loadbar: el('loadbar'),
     menuPop: el('menupop'), updateItem: el('update-item'),
+    updateCheckEl: null,
     signinBtn: el('signin'), lastState: {},
     ipc: (cmd) => commands.push(cmd),
     renderDl() {}, renderBar() {},
@@ -80,6 +81,18 @@ test('freeze and close controls do not activate the tab', () => {
     target.dispatchEvent(new f.window.MouseEvent('click', { bubbles: true }));
   }
   assert.deepEqual(f.commands.map((c) => c.cmd), ['freeze', 'close']);
+});
+
+test('a store-managed build hides the manual update check', () => {
+  const f = fixture();
+  const item = f.window.document.createElement('div');
+  f.window.updateCheckEl = item;
+  f.state.store_managed = true;
+  f.render();
+  assert.equal(item.hidden, true);
+  f.state.store_managed = false;
+  f.render();
+  assert.equal(item.hidden, false);
 });
 
 test('middle and right presses do not activate tabs', () => {

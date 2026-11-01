@@ -106,6 +106,7 @@ impl App {
             can_back,
             can_fwd,
             update_version: self.pending_update.as_ref().map(|u| u.version.to_string()),
+            store_managed: crate::update::store_managed(),
             downloads: self.download_rows(),
             bookmarks: self.bar_rows(),
             starred: self.active_starred(),

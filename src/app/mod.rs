@@ -22,6 +22,7 @@ mod downloads;
 mod dragout;
 mod events;
 mod extensions;
+mod find;
 #[cfg(all(test, target_os = "windows"))]
 mod freeze_probe;
 mod keys;
@@ -103,6 +104,10 @@ pub(crate) fn unix_now() -> u64 {
 /// `dispatch` drops the report unless that key is still the tab's live
 /// one, so no handler below ever sees a dead surface's callback.
 pub enum ViewEvent {
+    FindResult(
+        u64,
+        Result<crate::engine::FindMatches, crate::engine::EngineError>,
+    ),
     OpenInNewTab(String),
     Accelerator(Accelerator),
     Permission(crate::engine::PermissionRequest),
@@ -177,6 +182,7 @@ pub enum AppEvent {
 type Tabs = TabRegistry<Box<dyn ContentView>, TabResources>;
 
 pub struct App {
+    find: find::FindSession,
     window: Rc<Window>,
     engine: Rc<dyn Engine>,
     memory_budget: crate::memory::BudgetEnforcer,
@@ -374,6 +380,7 @@ impl App {
 
         let memory_budget = crate::memory::BudgetEnforcer::new(Default::default(), clock.now());
         Ok(Self {
+            find: find::FindSession::default(),
             memory_budget,
             window,
             engine,
@@ -536,6 +543,7 @@ impl App {
         }
         let id = key.tab();
         match event {
+            ViewEvent::FindResult(revision, result) => self.find_result(id, revision, result),
             ViewEvent::Permission(request) => self.on_permission(key, request),
             ViewEvent::OpenInNewTab(url) if pages::is_internal_url(&url) => Ok(()),
             ViewEvent::OpenInNewTab(url) => self.spawn_tab(&url, true),
