@@ -10,8 +10,9 @@ use tao::event_loop::EventLoopProxy;
 
 use crate::engine::{ContentView, DropEvent, Engine, LoadFailure, Rect, ViewSpec};
 use crate::shell::chrome::ChromeCommand;
-use crate::shell::pages::{self, CHROME_URL, NEW_TAB_URL};
-use crate::shell::{self, error};
+use crate::shell::pages::{CHROME_URL, NEW_TAB_URL};
+use crate::shell::theme::Theme;
+use crate::shell::{self, error, settings};
 use crate::tabs::{TabId, TabSnapshot, ViewKey};
 
 use super::{content_url_for, post, App, AppEvent, ViewEvent, DEFAULT_URL};
@@ -27,6 +28,7 @@ impl App {
         engine: &dyn Engine,
         proxy: &EventLoopProxy<AppEvent>,
         bounds: Rect,
+        theme: Theme,
     ) -> anyhow::Result<Box<dyn ContentView>> {
         // The engine's command transport runs inside the protocol handler,
         // which is Sync-bound — the proxy goes behind a Mutex (uncontended;
@@ -38,7 +40,7 @@ impl App {
             bounds,
             visible: true,
             transparent: true,
-            background: Some(shell::CHROME_BACKGROUND),
+            background: Some(theme.chrome_background()),
             on_accelerator: Some(Self::accelerator_forwarder(proxy, None)),
             // File drops on the strip are ours, not the document's: a
             // file landing anywhere on it (a shelf row dragged back, or
@@ -71,6 +73,7 @@ impl App {
         key: ViewKey,
         url: &str,
         visible: bool,
+        theme: Theme,
     ) -> anyhow::Result<Box<dyn ContentView>> {
         let report = |proxy: &EventLoopProxy<AppEvent>| {
             let proxy = proxy.clone();
@@ -90,15 +93,22 @@ impl App {
             access: crate::engine::ViewAccess::Content,
             bounds: content_rect,
             visible,
-            background: Some(shell::CONTENT_BACKGROUND),
+            background: Some(theme.content_background()),
             page_script: Some(super::autofill::PAGE_SCRIPT),
             // New-tab, settings and error pages — never the chrome
             // document, and no `/cmd`: content views carry no `on_ipc`.
             on_page_message: Some(Box::new(move |m| page(ViewEvent::PageMessage(m)))),
             on_title_change: Some(Box::new(move |t| title(ViewEvent::TitleChanged(t)))),
             on_navigate: Some(Box::new(move |uri| {
-                if let Some(choose) = pages::download_folder_request(&uri) {
+                if let Some(choose) = settings::download_folder_request(&uri) {
                     nav(ViewEvent::DownloadFolder(choose));
+                    return false;
+                }
+                // The settings page reporting a theme pick, not a place
+                // to go: the app needs it for the window icon and for
+                // what the next view paints before its first frame.
+                if let Some(picked) = settings::theme_request(&uri) {
+                    nav(ViewEvent::ThemePicked(picked));
                     return false;
                 }
                 nav(ViewEvent::Navigated(uri));
@@ -139,7 +149,15 @@ impl App {
     pub(super) fn open_tab(&mut self, domain: String, load: &str) -> anyhow::Result<TabId> {
         let (_, content_rect) = shell::layout(self.logical_size.0, self.logical_size.1);
         let id = self.registry.create_with(domain, |key| {
-            Self::spawn_content_view(&*self.engine, &self.proxy, content_rect, key, load, false)
+            Self::spawn_content_view(
+                &*self.engine,
+                &self.proxy,
+                content_rect,
+                key,
+                load,
+                false,
+                self.theme,
+            )
         })?;
         self.adopt_view(id)?;
         Ok(id)
@@ -151,7 +169,15 @@ impl App {
         let (_, content_rect) = shell::layout(self.logical_size.0, self.logical_size.1);
         let dup = self.registry.duplicate_with(id, |key, url| {
             let load = content_url_for(url);
-            Self::spawn_content_view(&*self.engine, &self.proxy, content_rect, key, load, false)
+            Self::spawn_content_view(
+                &*self.engine,
+                &self.proxy,
+                content_rect,
+                key,
+                load,
+                false,
+                self.theme,
+            )
         })?;
         self.adopt_view(dup)?;
         Ok(dup)
@@ -203,6 +229,7 @@ impl App {
         // Snapshot extras exist only for frozen tabs; discarded starts clean.
         let zoom = snap.map(|s| s.zoom).unwrap_or(1.0);
         let muted = snap.map(|s| s.muted).unwrap_or(false);
+        let theme = self.theme;
         let (_, content_rect) = shell::layout(self.logical_size.0, self.logical_size.1);
         self.registry.restore_with(id, |key| {
             let view = Self::spawn_content_view(
@@ -212,6 +239,7 @@ impl App {
                 key,
                 &load,
                 false,
+                theme,
             )?;
             if zoom != 1.0 {
                 view.set_zoom_factor(zoom)?;

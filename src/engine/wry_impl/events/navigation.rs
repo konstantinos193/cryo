@@ -1,7 +1,7 @@
 //! Navigation start, completion, SPA changes and download abort races.
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -82,7 +82,7 @@ pub(in crate::engine::wry_impl) fn attach_source_changed(
 pub(in crate::engine::wry_impl) fn attach_navigation_starting(
     view: &WebView,
     on_load_change: Rc<dyn Fn(bool)>,
-    latest_nav: Rc<Cell<u64>>,
+    latest_nav: Arc<AtomicU64>,
     attempted: Rc<RefCell<String>>,
 ) -> Result<ICoreWebView2NavigationStartingEventHandler, EngineError> {
     let handler =
@@ -90,7 +90,7 @@ pub(in crate::engine::wry_impl) fn attach_navigation_starting(
             let Some(args) = args else { return Ok(()) };
             let mut id = 0u64;
             unsafe { args.NavigationId(&mut id)? };
-            latest_nav.set(id);
+            latest_nav.store(id, Ordering::SeqCst);
             let mut uri = windows::core::PWSTR::null();
             unsafe { args.Uri(&mut uri)? };
             *attempted.borrow_mut() = unsafe { uri.to_string() }.unwrap_or_default();
@@ -112,7 +112,7 @@ pub(in crate::engine::wry_impl) fn attach_navigation_starting(
 pub(in crate::engine::wry_impl) struct NavState {
     pub download_started: Arc<AtomicBool>,
     pub on_load_change: Option<Rc<dyn Fn(bool)>>,
-    pub latest_nav: Rc<Cell<u64>>,
+    pub latest_nav: Arc<AtomicU64>,
     pub attempted: Rc<RefCell<String>>,
     pub retry_budget: Rc<Cell<u8>>,
 }
@@ -156,15 +156,16 @@ unsafe fn navigation_completed(
         retry_budget,
     } = state;
     let on_load_change = on_load_change.as_ref();
-    // Clear "loading" only for the navigation that set it: a superseded
-    // navigation's completion arrives too, and must leave the newer
-    // one's spinner running. `0` means no start event was seen — a spec
-    // URL can complete without one, and clearing a never-set flag is
-    // harmless.
+    // A completion counts as the view's current state only when no newer
+    // navigation has started since: a superseded navigation completes
+    // too, and must leave the newer one's spinner running. `0` means no
+    // start event was seen — a spec URL can complete without one, and
+    // clearing a never-set flag is harmless.
     let mut nav_id = 0u64;
     args.NavigationId(&mut nav_id)?;
+    let current = is_current(latest_nav, nav_id);
     if let Some(on_change) = on_load_change {
-        if latest_nav.get() == 0 || nav_id == latest_nav.get() {
+        if current {
             on_change(false);
         }
     }
@@ -174,20 +175,40 @@ unsafe fn navigation_completed(
     let mut success = windows::core::BOOL::default();
     args.IsSuccess(&mut success)?;
     if !success.as_bool() {
+        // The navigation that replaced this one owns the page and will
+        // report its own verdict. Painting this one's failure over a load
+        // still in flight is how a working page becomes "the connection
+        // failed".
+        if !current {
+            return Ok(());
+        }
         let mut status = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
         args.WebErrorStatus(&mut status)?;
-        // A navigation that became a download completes "aborted" by
-        // design — but the two events race: DownloadStarting can land a
-        // few ms *after* this abort. A flag already set is claimed now;
-        // otherwise the report is re-checked on the shared delay worker
-        // once the grace expires, so a download on its way can still
-        // claim it.
+        // "Aborted" is WebView2's catch-all for a navigation that stopped
+        // short, and most of the ways it does are not transport failures:
+        // a page calling `window.stop()`, a document the site replaced
+        // mid-load, a navigation that became a download. Only one of
+        // those got no answer at all, so a response code — any response
+        // code — settles it: the server was reachable, and whatever ended
+        // the load was not the connection.
         if status == COREWEBVIEW2_WEB_ERROR_STATUS_CONNECTION_ABORTED {
+            if http_status(args).is_some_and(|code| code != 0) {
+                return Ok(());
+            }
+            // Nothing arrived. A navigation that became a download looks
+            // exactly like this — and the two events race: DownloadStarting
+            // can land a few ms *after* the abort. A flag already set is
+            // claimed now; otherwise the report is re-checked on the shared
+            // delay worker once the grace expires, so a download on its way
+            // can still claim it — as can a navigation that starts in the
+            // meantime and takes the view with it.
             if !download_started.swap(false, Ordering::SeqCst) {
+                crate::report!("navigation to {} aborted", attempted.borrow());
                 let report = report.clone();
                 let flag = download_started.clone();
+                let latest_nav = latest_nav.clone();
                 delayer.after(DOWNLOAD_ABORT_GRACE, move || {
-                    if !flag.swap(false, Ordering::SeqCst) {
+                    if !flag.swap(false, Ordering::SeqCst) && is_current(&latest_nav, nav_id) {
                         (*report)(LoadFailure::ConnectionFailed);
                     }
                 });
@@ -225,11 +246,9 @@ unsafe fn navigation_completed(
     // A 4xx or 5xx is still a successful navigation — the server answered.
     // Only step in when it answered with nothing to render, so a site's own
     // 404 page survives, the way Chrome leaves it alone.
-    let Ok(args) = args.cast::<ICoreWebView2NavigationCompletedEventArgs2>() else {
+    let Some(code) = http_status(args) else {
         return Ok(());
     };
-    let mut code = 0i32;
-    args.HttpStatusCode(&mut code)?;
     let Ok(status) = u16::try_from(code) else {
         return Ok(());
     };
@@ -244,4 +263,42 @@ unsafe fn navigation_completed(
         Ok(())
     }));
     webview.ExecuteScript(&windows::core::HSTRING::from(EMPTY_BODY_PROBE), &probe)
+}
+
+/// The response code this navigation got, or `None` when the runtime is
+/// too old to carry one. `Some(0)` means nothing arrived — a transport
+/// failure, a `file://` load, or a same-document move.
+unsafe fn http_status(args: &ICoreWebView2NavigationCompletedEventArgs) -> Option<i32> {
+    let args = args
+        .cast::<ICoreWebView2NavigationCompletedEventArgs2>()
+        .ok()?;
+    let mut code = 0i32;
+    args.HttpStatusCode(&mut code).ok()?;
+    Some(code)
+}
+
+/// Whether `nav_id` is still the navigation the view is on — false once a
+/// newer one has started. A `0` on either side means no start event was
+/// seen, and nothing can contradict a navigation we never watched begin.
+fn is_current(latest_nav: &AtomicU64, nav_id: u64) -> bool {
+    let latest = latest_nav.load(Ordering::SeqCst);
+    latest == 0 || nav_id == 0 || nav_id == latest
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_newer_navigation_supersedes_an_older_one() {
+        let latest = AtomicU64::new(7);
+        assert!(is_current(&latest, 7));
+        assert!(!is_current(&latest, 6));
+    }
+
+    #[test]
+    fn an_unwatched_navigation_is_never_superseded() {
+        assert!(is_current(&AtomicU64::new(0), 7));
+        assert!(is_current(&AtomicU64::new(7), 0));
+    }
 }

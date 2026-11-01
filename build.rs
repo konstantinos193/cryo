@@ -2,9 +2,14 @@ fn main() {
     #[cfg(windows)]
     {
         // embed-resource emits no `rerun-if-changed` of its own, so name the
-        // inputs here or an edited icon never gets relinked.
+        // inputs here or an edited icon never gets relinked. One icon per
+        // theme: `shell::theme::Theme::icon_resource` names the ids
+        // `assets/icon.rc` compiles them under, and
+        // `assets/gen-theme-icons.ps1` draws all but the first.
         println!("cargo:rerun-if-changed=assets/icon.rc");
         println!("cargo:rerun-if-changed=assets/icon.ico");
+        println!("cargo:rerun-if-changed=assets/icon-light.ico");
+        println!("cargo:rerun-if-changed=assets/icon-lilac.ico");
         embed_resource::compile("assets/icon.rc", embed_resource::NONE)
             .manifest_required()
             .unwrap();

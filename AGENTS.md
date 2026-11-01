@@ -45,6 +45,25 @@ helpers, or one small coherent set of functions.
 - **Shotgun surgery names a misplaced responsibility.** One logical
   change needing matching edits across three modules means the concept
   lives in the wrong place — move it, don't scatter it.
+- **Assets are files, never string literals.** HTML, CSS and JS live in
+  `.html`/`.css`/`.js` files pulled in with `include_str!` — one asset,
+  one owning module. A shell page owns a folder named for it
+  (`shell/newtab/newtab.{html,css,js}`), served as `/newtab` plus
+  `/newtab/newtab.{css,js}`; `pages.rs` is the only place a path maps to
+  a file. Markup inside a `const &str` loses every editor that would have
+  caught the typo, and a page split between a Rust file and a `.js` has
+  two places to look. `tests/source_layout.rs` holds both halves of this.
+  Two things are *not* assets: a wire format a module writes row by row
+  (`transfer::netscape`) is that module's job, and a fixture a test reads
+  belongs next to the assertion that reads it.
+- **Rust calls the page; it does not reach into it.** The app's only line
+  into a document is `eval("window.__cryo_thing(json)")` — a named
+  function the page defines and a payload. A Rust string that walks the
+  DOM is page logic filed under the wrong language.
+- **Serve what you derive, don't hand-write the wire.** `dial::json` and
+  `search::json` build their JSON from the typed list the app already
+  matches against, once, in a `OnceLock`. A hand-kept JSON blob beside
+  the list it mirrors is two sources of truth with a parse in between.
 
 ## 3. Dependency direction is one-way
 
@@ -256,6 +275,9 @@ or every persistence change becomes spaghetti.
     change scattered as matching edits across three modules?
 11. A comment this diff made stale, or a function mixing plumbing and
     policy in one body?
+12. Did markup, CSS or script text land in a `.rs` file, did a page's
+    files leave its folder, or did an `eval` start walking the DOM
+    instead of calling a `__cryo_` function?
 
 ## Live freeze-memory verification (Windows)
 

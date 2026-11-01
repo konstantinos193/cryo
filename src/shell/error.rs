@@ -2,15 +2,29 @@
 //!
 //! The engine reports *why* a load failed as a [`LoadFailure`]; this module
 //! turns that into an internal URL, and the page at that URL renders the copy.
-//! The copy lives in the template rather than in Rust because the page is
-//! static: `PageResolver` hands back `&'static str`, so the parameters travel
-//! in the query string and the document fills itself in.
+//! The copy lives in the page's script rather than in Rust because the page
+//! is static: `PageResolver` hands back `&'static str`, so the parameters
+//! travel in the query string and the document fills itself in.
+//!
+//! Document, stylesheet and script live in `error/`, one file each.
 
 use crate::engine::LoadFailure;
 use crate::shell::pages::INTERNAL_ORIGIN;
 
 /// Path the error page is served on, relative to [`INTERNAL_ORIGIN`].
 pub const ERROR_PATH: &str = "/error";
+
+/// The error document. Reads its parameters from `location.search` and
+/// picks its own copy; `<title>` is set from script because the tab strip
+/// reads it.
+pub(crate) const HTML: &str = include_str!("error/error.html");
+
+/// Its stylesheet, served at `/error/error.css`.
+pub(crate) const STYLE: &str = include_str!("error/error.css");
+
+/// Its script, served at `/error/error.js`. This is where the copy for
+/// every failure lives.
+pub(crate) const SCRIPT: &str = include_str!("error/error.js");
 
 /// URL that renders `failure` for the address the user was trying to reach.
 pub fn error_url(failure: LoadFailure, attempted: &str) -> String {
@@ -84,140 +98,6 @@ fn hex(nibble: u8) -> char {
         .to_ascii_uppercase()
 }
 
-/// Error page. Reads its parameters from `location.search` and picks its own
-/// copy; `<title>` is set from script because the tab strip reads it.
-pub const ERROR_HTML: &str = r##"<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"><title>Problem loading page</title>
-<link rel="icon" type="image/svg+xml" href="/icon.svg"><style>
-  :root {
-    color-scheme: dark;
-    --bg1: #11141a; --bg2: #181d25; --line: #262d38;
-    --tx: #e9edf2; --tx2: #98a1ae; --tx3: #67707d;
-    --ice: #8fdcf0; --ice-deep: #2b7186;
-  }
-  body {
-    min-height: 100vh; margin: 0; display: flex; align-items: center;
-    justify-content: center; color: var(--tx);
-    background:
-      radial-gradient(800px 300px at 50% -60px, rgba(59, 142, 168, .12), transparent 70%),
-      var(--bg1);
-    font: 15px/1.6 system-ui, "Segoe UI", sans-serif;
-    -webkit-font-smoothing: antialiased;
-    -webkit-user-select: none; user-select: none;
-  }
-  main { width: min(460px, calc(100vw - 64px)); padding: 32px 0; }
-  svg { width: 56px; height: 56px; display: block; opacity: .9;
-        filter: drop-shadow(0 4px 14px rgba(143, 220, 240, .16)); }
-  h1 { font-size: 22px; font-weight: 650; margin: 24px 0 8px; letter-spacing: -.01em; }
-  p { margin: 0; color: var(--tx2); }
-  .target {
-    margin-top: 18px; padding: 11px 13px; border-radius: 9px;
-    border: 1px solid var(--line);
-    background: var(--bg2); color: var(--tx3); font-size: 13px;
-    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
-    word-break: break-all; -webkit-user-select: text; user-select: text;
-  }
-  button {
-    margin-top: 24px; padding: 10px 20px; border: 0; border-radius: 10px;
-    background: var(--ice-deep); color: #eaf9fd; font: inherit; font-size: 14px;
-    font-weight: 550; cursor: pointer;
-    transition: background .15s ease, transform .1s ease;
-  }
-  button:hover { background: #3b8ea8; }
-  button:active { transform: translateY(1px); }
-  button:focus-visible { outline: 2px solid var(--ice); outline-offset: 2px; }
-</style></head>
-<body>
-  <main>
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" aria-hidden="true"><defs><clipPath id="cryoMark"><path d="M76.18 69.55 L52.25 85.44 L19.82 66.72 L19.82 29.28 L52.25 10.56 L76.18 26.45 L69.46 32.5 L52.25 28.65 L37.54 39.51 L37.54 56.49 L52.25 67.35 L69.46 63.5Z"/></clipPath></defs><path d="M76.18 69.55 L52.25 85.44 L19.82 66.72 L19.82 29.28 L52.25 10.56 L76.18 26.45 L69.46 32.5 L52.25 28.65 L37.54 39.51 L37.54 56.49 L52.25 67.35 L69.46 63.5Z" fill="#17455A"/><path d="M76.34 69.5 L52.15 85.58 L52.11 67.24Z" fill="#3B8EA8"/><path d="M76.35 69.59 L52.07 67.36 L69.58 63.38Z" fill="#3B8EA8"/><path d="M52.37 85.56 L19.65 66.69 L37.56 56.32Z" fill="#3B8EA8"/><path d="M52.3 85.6 L37.44 56.35 L52.4 67.28Z" fill="#A2DEEE"/><path d="M19.78 66.89 L19.76 29.12 L37.7 39.44Z" fill="#EAF9FD"/><path d="M19.7 66.85 L37.61 39.35 L37.71 56.55Z" fill="#A2DEEE"/><path d="M19.66 29.33 L52.36 10.43 L52.4 28.73Z" fill="#EAF9FD"/><path d="M19.65 29.25 L52.41 28.6 L37.57 39.68Z" fill="#A2DEEE"/><path d="M52.12 10.44 L76.34 26.5 L69.52 32.66Z" fill="#EAF9FD"/><path d="M52.18 10.4 L69.6 32.61 L52.11 28.76Z" fill="#3B8EA8"/><path d="M19.82 29.28 L52.25 10.56 L76.18 26.45" fill="none" stroke="#EAF9FD" stroke-width="2.44" clip-path="url(#cryoMark)"/></svg>
-    <h1 id="title">Something went wrong</h1>
-    <p id="message"></p>
-    <p class="target" id="target" hidden></p>
-    <button id="retry" hidden>Try again</button>
-  </main>
-<script>
-  var KINDS = {
-    "offline": ["You are offline",
-      "cryo cannot reach the network at all. Check your Wi-Fi or cable, then try again."],
-    "host-not-found": ["This site cannot be found",
-      "Nothing answers to that address. Check the domain for a typo."],
-    "timed-out": ["The site took too long",
-      "The server accepted the connection but never finished answering."],
-    "connection-failed": ["The connection failed",
-      "The server refused the connection, or dropped it before the page arrived."],
-    "certificate-rejected": ["This connection is not private",
-      "The site security certificate does not check out, so cryo stopped before sending anything."],
-    "redirect-loop": ["Too many redirects",
-      "The site kept forwarding cryo somewhere else and never settled on a page."],
-    "malformed-response": ["cryo could not read the answer",
-      "The server replied with something that is not a web page."],
-    "render-process-gone": ["This tab crashed",
-      "The page renderer stopped and cryo shut it down. Reloading usually brings it back."],
-    "unknown": ["Something went wrong",
-      "The page did not load, and the engine did not say why."],
-    "web-store": ["This window cannot install extensions",
-      "\"Add to Chrome\" asked the engine for the package, and the address it was sent to is a placeholder that can never resolve, so retrying will not help. cryo installs from the store in an ordinary window on Windows — a private window loads no extensions, and other platforms cannot load them at all."]
-  };
-  var HTTP = {
-    "400": "The server rejected the request as malformed.",
-    "401": "This page needs credentials cryo does not have.",
-    "403": "The server understood the request and refused it.",
-    "404": "The server has no page at this address.",
-    "405": "The server does not allow that method on this address.",
-    "408": "The server gave up waiting for the request.",
-    "410": "This page was removed on purpose and is not coming back.",
-    "418": "The server is a teapot and declines to brew coffee.",
-    "429": "Too many requests, too fast. Wait a moment, then retry.",
-    "500": "The server hit an error of its own while building the page.",
-    "501": "The server does not support what was asked of it.",
-    "502": "A server upstream returned something the gateway could not use.",
-    "503": "The server is overloaded or down for maintenance.",
-    "504": "A server upstream did not answer in time."
-  };
-
-  var q = new URLSearchParams(location.search);
-  var kind = q.get("kind") || "unknown";
-  var code = q.get("code") || "";
-
-  // Only ever hand the retry button a web URL. This page sits on cryo's own
-  // origin, so a page that navigated here with `url=javascript:...` would
-  // otherwise get script execution on it.
-  var target = "";
-  try {
-    var parsed = new URL(q.get("url") || "");
-    if (parsed.protocol === "http:" || parsed.protocol === "https:") target = parsed.href;
-  } catch (e) { /* unparseable: show no address and offer no retry */ }
-
-  var copy = KINDS[kind] || KINDS["unknown"];
-  var title = copy[0];
-  var message = copy[1];
-  if (kind === "http") {
-    title = "HTTP " + code;
-    message = HTTP[code] || "The server answered with an error and no page.";
-  }
-
-  document.title = title;
-  document.getElementById("title").textContent = title;
-  document.getElementById("message").textContent = message;
-  if (target) {
-    var targetEl = document.getElementById("target");
-    targetEl.textContent = target;
-    targetEl.hidden = false;
-    // No retry for a Web Store install: the address is a placeholder, so the
-    // button could only ever fail again. Offering it would be a lie with a
-    // pointer on it.
-    if (kind !== "web-store") {
-      var retry = document.getElementById("retry");
-      retry.hidden = false;
-      retry.addEventListener("click", function () { location.replace(target); });
-    }
-  }
-</script>
-</body>
-</html>
-"##;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,9 +150,9 @@ mod tests {
         assert!(url.contains("url=https%3A%2F%2Fpermanently-removed.invalid"));
         // The copy table must hold the kind, or the page silently falls back
         // to the generic one.
-        assert!(ERROR_HTML.contains("\"web-store\": ["));
+        assert!(SCRIPT.contains("\"web-store\": ["));
         // Retrying a placeholder address can only fail again.
-        assert!(ERROR_HTML.contains("kind !== \"web-store\""));
+        assert!(SCRIPT.contains("kind !== \"web-store\""));
     }
 
     #[test]
@@ -294,20 +174,29 @@ mod tests {
         assert_eq!(slugs.len(), before, "two failures share a slug");
     }
 
-    /// The template is the only place the copy lives, so a slug missing from
+    /// The script is the only place the copy lives, so a slug missing from
     /// its table renders the generic page by accident.
     #[test]
-    fn template_has_copy_for_every_slug() {
+    fn script_has_copy_for_every_slug() {
         for failure in ALL {
             if matches!(failure, LoadFailure::Http(_)) {
                 continue; // keyed by status code, not by slug
             }
             let key = format!("\"{}\":", slug(failure));
-            assert!(ERROR_HTML.contains(&key), "template has no copy for {key}");
+            assert!(SCRIPT.contains(&key), "script has no copy for {key}");
         }
         assert!(
-            ERROR_HTML.contains("kind === \"http\""),
-            "template never branches on http status codes"
+            SCRIPT.contains("kind === \"http\""),
+            "script never branches on http status codes"
         );
+    }
+
+    /// The copy table is script, not markup: the document holds only the
+    /// shape the script fills in.
+    #[test]
+    fn the_document_carries_no_copy() {
+        assert!(!HTML.contains("KINDS"));
+        assert!(HTML.contains("id=\"title\""));
+        assert!(HTML.contains("id=\"retry\""));
     }
 }

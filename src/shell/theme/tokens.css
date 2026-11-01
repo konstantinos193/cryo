@@ -1,0 +1,314 @@
+/* The shell's palette, one block per theme. Every shell document links
+   this before its own sheet, so a colour has exactly one definition.
+   Page sheets spend the tokens; they never declare one, and they never
+   write a literal colour — a literal is a colour one theme cannot
+   change, which is how a light theme ends up with white-on-white.
+
+   The three blocks declare the same token names, in the same order:
+   `theme.rs` holds that to a test, because a token a theme forgets
+   falls back to nothing and paints the element away.
+
+   `glacier` is the default and the shipped look — `:root` carries it so
+   a document renders it before any script runs. `light` and `lilac` are
+   the two light themes; `[data-theme]` is written by `theme.js` from the
+   stored pick, in the head, ahead of first paint.
+
+   Naming: `--accent*` is the theme's accent, not "ice" — lilac has no
+   ice in it. `*-rgb` tokens are bare channel triples, so a sheet can
+   spend one at the alpha that element needs
+   (`rgba(var(--accent-rgb), .12)`) without the palette carrying a token
+   per alpha. `--hair-rgb` is the overlay that draws hairlines and hover
+   washes — white over a dark theme, near-black over a light one, which
+   is why it is a token and not a literal `255, 255, 255`. `--sheen-rgb`
+   is the light source for inset highlights and stays white in every
+   theme. */
+:root,
+:root[data-theme="glacier"] {
+  color-scheme: dark;
+
+  /* Surfaces, recessed to raised: wells and canvas, chrome, cards,
+     hover/raised. */
+  --bg0: #0b0e12;
+  --bg1: #11141a;
+  --bg2: #181d25;
+  --bg3: #202631;
+  --tab-active: #262d3a;
+  --panel-bg: #12151c;
+  --rail-bg: #0e1116;
+  --pop-bg: rgba(24, 29, 37, .92);
+  --card-bg: linear-gradient(145deg, rgba(29, 37, 47, .97), rgba(17, 21, 28, .97));
+  --bar-grad: linear-gradient(180deg, #161a21 0%, var(--bg1) 100%);
+
+  /* Channels the sheets spend at their own alpha. */
+  --hair-rgb: 255, 255, 255;
+  --sheen-rgb: 255, 255, 255;
+  --shade-rgb: 0, 0, 0;
+  --glass-rgb: 24, 29, 37;
+  --glass-hi-rgb: 32, 38, 49;
+
+  /* Lines: structural, barely-there, hover, and the one popups wear. */
+  --line: #262d38;
+  --line-soft: rgba(255, 255, 255, .06);
+  --line-strong: #3a4250;
+  --line-pop: rgba(255, 255, 255, .09);
+
+  /* Text, brightest to faintest, then the two it does not cover. */
+  --tx: #e9edf2;
+  --tx-strong: #ffffff;
+  --tx2: #98a1ae;
+  --tx3: #67707d;
+  --tx-mute: #4a515d;
+  --frozen-tx: #9db4c0;
+
+  /* Accent: bright for text and glyphs, deep for fills, soft for chips
+     and badges, `--on-accent` for whatever sits on a deep fill. */
+  --accent: #8fdcf0;
+  --accent-rgb: 143, 220, 240;
+  --accent-deep: #2b7186;
+  --accent-deep-hover: #3b8ea8;
+  --accent-soft: #17455a;
+  --accent-soft-hover: #1d5770;
+  --accent-line: #397f92;
+  --accent-tx: #7fb6c9;
+  --accent-tx-dim: #55717a;
+  --on-accent: #eaf9fd;
+
+  /* Verdicts. */
+  --ok: #5fcf8f;
+  --ok-rgb: 95, 207, 143;
+  --bad: #e07b7b;
+  --bad-rgb: 224, 123, 123;
+  --bad-tx: #e3a9a9;
+  --star: #f0c65e;
+  --star-rgb: 240, 198, 94;
+
+  /* The square badges a card wears beside its title. */
+  --badge-accent: linear-gradient(145deg, #1b4356, #14202a);
+  --badge-key: linear-gradient(145deg, #1d6073, #123b49);
+  --badge-ok: linear-gradient(145deg, #1d3f2e, #16211b);
+  --badge-bad: linear-gradient(145deg, #402323, #211718);
+
+  /* The crystal itself: the plate it sits on and its four facet shades,
+     darkest first. `theme.rs` reads these five out of this file to build
+     the served mark and favicon, and `assets/gen-theme-icons.ps1` reads
+     them to recolour the window icon — so the logo's colours live here,
+     with every other colour, instead of inside three copies of an SVG. */
+  --mark-plate: #0c2433;
+  --mark-core: #17455a;
+  --mark-mid: #3b8ea8;
+  --mark-hi: #a2deee;
+  --mark-lit: #eaf9fd;
+  /* The flat crystal as page art — the hero on the new-tab page and the
+     error page. A theme's art follows its palette through this token, so
+     those pages need no script to swap an image. */
+  --mark-url: url("/theme/mark-glacier.svg");
+
+  /* The new-tab page: the word, and the three lobes behind it. */
+  --brand-grad: linear-gradient(100deg, #86b9cc 0%, #c6ebf7 34%, #ffffff 46%,
+                #d6f2fb 58%, #6fb5cc 100%);
+  --lobe-a-rgb: 59, 142, 168;
+  --lobe-b-rgb: 43, 113, 134;
+  --lobe-c-rgb: 58, 79, 138;
+
+  /* A site's own tint, as the saturation and lightness to give its hue.
+     The hue is the site's (the scripts derive it from the host); these
+     two say how a theme wears it, on the new-tab tiles and the library's
+     site marks. They are halves of a colour, so they live here with the
+     whole ones rather than inside a script. */
+  --tint-bg: 44% 17%;
+  --tint-fg: 70% 72%;
+
+  --scroll-thumb: #2c333f;
+  --scroll-thumb-hover: #39414f;
+
+  /* The veil behind a modal, and the shadows. Each shadow is one token
+     rather than channels, because a light theme needs its own spread
+     and alpha, not the dark theme's at a different colour. */
+  --veil: rgba(5, 7, 10, .62);
+  --shadow: 0 18px 50px rgba(0, 0, 0, .55), 0 2px 10px rgba(0, 0, 0, .4);
+  --shadow-panel: 0 32px 90px rgba(0, 0, 0, .7), 0 0 0 1px rgba(0, 0, 0, .3);
+  --shadow-card: 0 22px 65px rgba(0, 0, 0, .62), 0 0 0 1px rgba(0, 0, 0, .2);
+  --shadow-perm: 0 12px 40px rgba(0, 0, 0, .53);
+  --shadow-box: 0 10px 34px rgba(0, 0, 0, .35);
+  --shadow-box-focus: 0 0 0 4px rgba(143, 220, 240, .12), 0 18px 48px rgba(0, 0, 0, .45);
+  --shadow-tile-hover: 0 16px 34px rgba(0, 0, 0, .42), 0 0 0 1px rgba(143, 220, 240, .08);
+  --shadow-editor: 0 32px 80px rgba(0, 0, 0, .6), 0 0 0 1px rgba(143, 220, 240, .05);
+  --shadow-tab-btn: 0 1px 3px rgba(0, 0, 0, .5), inset 0 1px 0 rgba(255, 255, 255, .06);
+}
+
+/* Light: paper and ink, same cold accent pulled down until it holds its
+   contrast on white. */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg0: #f4f6fa;
+  --bg1: #e7ebf2;
+  --bg2: #eff2f7;
+  --bg3: #dce2ec;
+  --tab-active: #f6f8fb;
+  --panel-bg: #f4f6fa;
+  --rail-bg: #ecf0f5;
+  --pop-bg: rgba(244, 246, 250, .96);
+  --card-bg: linear-gradient(145deg, rgba(246, 248, 251, .98), rgba(236, 240, 246, .98));
+  --bar-grad: linear-gradient(180deg, #edf1f6 0%, var(--bg1) 100%);
+
+  --hair-rgb: 16, 26, 40;
+  --sheen-rgb: 255, 255, 255;
+  --shade-rgb: 24, 38, 58;
+  --glass-rgb: 244, 246, 250;
+  --glass-hi-rgb: 236, 240, 246;
+
+  --line: #d5dbe5;
+  --line-soft: rgba(16, 26, 40, .08);
+  --line-strong: #b4bfcd;
+  --line-pop: rgba(16, 26, 40, .12);
+
+  --tx: #232b36;
+  --tx-strong: #121922;
+  --tx2: #566172;
+  --tx3: #7b8595;
+  --tx-mute: #a8b1be;
+  --frozen-tx: #5b7d8c;
+
+  --accent: #1a6a85;
+  --accent-rgb: 26, 106, 133;
+  --accent-deep: #2b7186;
+  --accent-deep-hover: #1f5d70;
+  --accent-soft: #dcedf4;
+  --accent-soft-hover: #c9e3ee;
+  --accent-line: #a7ccda;
+  --accent-tx: #4a7f93;
+  --accent-tx-dim: #7797a4;
+  --on-accent: #ffffff;
+
+  --ok: #1a8650;
+  --ok-rgb: 26, 134, 80;
+  --bad: #c0463e;
+  --bad-rgb: 192, 70, 62;
+  --bad-tx: #a63a33;
+  --star: #b9810f;
+  --star-rgb: 185, 129, 15;
+
+  --badge-accent: linear-gradient(145deg, #e3f1f7, #c9e3ee);
+  --badge-key: linear-gradient(145deg, #dff0f6, #bfdeeb);
+  --badge-ok: linear-gradient(145deg, #ddf2e6, #c4e8d4);
+  --badge-bad: linear-gradient(145deg, #fbe4e2, #f2cdc9);
+
+  --mark-plate: #eaf0f6;
+  --mark-core: #15506a;
+  --mark-mid: #2e7b96;
+  --mark-hi: #58a8c2;
+  --mark-lit: #9ed3e4;
+  --mark-url: url("/theme/mark-light.svg");
+
+  --brand-grad: linear-gradient(100deg, #1d5f76 0%, #2f88a3 34%, #5fb4cd 46%,
+                #2b7a94 58%, #17546a 100%);
+  --lobe-a-rgb: 148, 199, 216;
+  --lobe-b-rgb: 176, 210, 224;
+  --lobe-c-rgb: 170, 186, 228;
+
+  --tint-bg: 62% 90%;
+  --tint-fg: 58% 30%;
+
+  --scroll-thumb: #c6cedb;
+  --scroll-thumb-hover: #aab4c4;
+
+  --veil: rgba(22, 32, 46, .46);
+  --shadow: 0 18px 44px rgba(24, 38, 58, .16), 0 2px 8px rgba(24, 38, 58, .1);
+  --shadow-panel: 0 32px 80px rgba(24, 38, 58, .22), 0 0 0 1px rgba(24, 38, 58, .08);
+  --shadow-card: 0 22px 58px rgba(24, 38, 58, .2), 0 0 0 1px rgba(24, 38, 58, .07);
+  --shadow-perm: 0 12px 36px rgba(24, 38, 58, .18);
+  --shadow-box: 0 10px 28px rgba(24, 38, 58, .12);
+  --shadow-box-focus: 0 0 0 4px rgba(26, 106, 133, .16), 0 18px 40px rgba(24, 38, 58, .16);
+  --shadow-tile-hover: 0 16px 30px rgba(24, 38, 58, .14), 0 0 0 1px rgba(26, 106, 133, .12);
+  --shadow-editor: 0 32px 70px rgba(24, 38, 58, .2), 0 0 0 1px rgba(26, 106, 133, .08);
+  --shadow-tab-btn: 0 1px 3px rgba(24, 38, 58, .14), inset 0 1px 0 rgba(255, 255, 255, .9);
+}
+
+/* Lilac: the same light structure over a warmer, violet paper. */
+:root[data-theme="lilac"] {
+  color-scheme: light;
+
+  --bg0: #f5f1fc;
+  --bg1: #eae3f6;
+  --bg2: #f1ecfa;
+  --bg3: #e0d7f2;
+  --tab-active: #f7f4fd;
+  --panel-bg: #f5f1fc;
+  --rail-bg: #efe9f9;
+  --pop-bg: rgba(245, 241, 252, .96);
+  --card-bg: linear-gradient(145deg, rgba(247, 244, 253, .98), rgba(238, 232, 249, .98));
+  --bar-grad: linear-gradient(180deg, #efe9fa 0%, var(--bg1) 100%);
+
+  --hair-rgb: 46, 26, 74;
+  --sheen-rgb: 255, 255, 255;
+  --shade-rgb: 50, 28, 82;
+  --glass-rgb: 245, 241, 252;
+  --glass-hi-rgb: 238, 232, 249;
+
+  --line: #ddd3f0;
+  --line-soft: rgba(46, 26, 74, .08);
+  --line-strong: #c1b1e2;
+  --line-pop: rgba(46, 26, 74, .12);
+
+  --tx: #2d2440;
+  --tx-strong: #1d1430;
+  --tx2: #625879;
+  --tx3: #857b9c;
+  --tx-mute: #b0a7c4;
+  --frozen-tx: #6e5f90;
+
+  --accent: #6b3fc0;
+  --accent-rgb: 107, 63, 192;
+  --accent-deep: #6b3fc0;
+  --accent-deep-hover: #5a31a8;
+  --accent-soft: #eadff9;
+  --accent-soft-hover: #ddcdf4;
+  --accent-line: #bfa5e8;
+  --accent-tx: #6f5f93;
+  --accent-tx-dim: #8e83a8;
+  --on-accent: #ffffff;
+
+  --ok: #1f8158;
+  --ok-rgb: 31, 129, 88;
+  --bad: #be4053;
+  --bad-rgb: 190, 64, 83;
+  --bad-tx: #a3374a;
+  --star: #b07b1c;
+  --star-rgb: 176, 123, 28;
+
+  --badge-accent: linear-gradient(145deg, #ece1fa, #d8c6f3);
+  --badge-key: linear-gradient(145deg, #e8dcfa, #d2bdf0);
+  --badge-ok: linear-gradient(145deg, #ddf1e7, #c3e7d6);
+  --badge-bad: linear-gradient(145deg, #fbe2e7, #f1c9d2);
+
+  --mark-plate: #efe8fa;
+  --mark-core: #44248a;
+  --mark-mid: #7247c6;
+  --mark-hi: #a98ae4;
+  --mark-lit: #d9c9f5;
+  --mark-url: url("/theme/mark-lilac.svg");
+
+  --brand-grad: linear-gradient(100deg, #4e2a90 0%, #7a4fcb 34%, #a382e3 46%,
+                #6b3fc0 58%, #452380 100%);
+  --lobe-a-rgb: 186, 158, 234;
+  --lobe-b-rgb: 206, 184, 240;
+  --lobe-c-rgb: 166, 178, 236;
+
+  --tint-bg: 66% 91%;
+  --tint-fg: 56% 32%;
+
+  --scroll-thumb: #cfc3e6;
+  --scroll-thumb-hover: #b7a7d8;
+
+  --veil: rgba(38, 22, 62, .46);
+  --shadow: 0 18px 44px rgba(50, 28, 82, .16), 0 2px 8px rgba(50, 28, 82, .1);
+  --shadow-panel: 0 32px 80px rgba(50, 28, 82, .22), 0 0 0 1px rgba(50, 28, 82, .08);
+  --shadow-card: 0 22px 58px rgba(50, 28, 82, .2), 0 0 0 1px rgba(50, 28, 82, .07);
+  --shadow-perm: 0 12px 36px rgba(50, 28, 82, .18);
+  --shadow-box: 0 10px 28px rgba(50, 28, 82, .12);
+  --shadow-box-focus: 0 0 0 4px rgba(107, 63, 192, .16), 0 18px 40px rgba(50, 28, 82, .16);
+  --shadow-tile-hover: 0 16px 30px rgba(50, 28, 82, .14), 0 0 0 1px rgba(107, 63, 192, .12);
+  --shadow-editor: 0 32px 70px rgba(50, 28, 82, .2), 0 0 0 1px rgba(107, 63, 192, .08);
+  --shadow-tab-btn: 0 1px 3px rgba(50, 28, 82, .14), inset 0 1px 0 rgba(255, 255, 255, .9);
+}

@@ -172,13 +172,7 @@ const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,\
 /// in favour of our own tab). Middle-click off a link keeps its engine
 /// default (autoscroll); javascript: and non-http(s) hrefs stay in the
 /// page's hands.
-const AUX_CLICK_JS: &str = r#"addEventListener('auxclick',e=>{
-if(e.button!==1)return;
-const a=e.target&&e.target.closest?e.target.closest('a[href]'):null;
-if(!a||!/^https?:/.test(a.href))return;
-e.preventDefault();
-window.open(a.href,'_blank');
-},true);"#;
+const AUX_CLICK_JS: &str = include_str!("aux_click.js");
 
 #[cfg(target_os = "windows")]
 fn browser_args() -> String {
@@ -320,7 +314,14 @@ impl Engine for WryEngine {
             .extensions_dir
             .as_ref()
             .filter(|_| access != crate::engine::ViewAccess::Chrome)
-            .filter(|_| !self.extensions_loaded.get());
+            .filter(|_| !self.extensions_loaded.get())
+            // Nothing installed is nothing to load, not a failure. wry
+            // enumerates the directory with `read_dir` and hands the error
+            // back out of the build, so a profile that has never installed
+            // an extension loses its first content view, and with it the
+            // first tab and the window. The flag stays unset here, so the
+            // first view after an install still loads what was added.
+            .filter(|dir| dir.is_dir());
         #[cfg(target_os = "windows")]
         let builder = match load_extensions {
             Some(dir) => builder

@@ -85,6 +85,12 @@ What exists today:
   become tabs instead of a second browser.
 - Self-update on Windows: check the release feed, verify the checksum, run the
   installer.
+- Three themes, picked in **Settings → Appearance**: Glacier (the dark
+  original), Light and Lilac. The pick restyles every open cryo page, the tab
+  strip included, as soon as it is made, and the window and taskbar icons
+  follow it. Every colour in the shell comes from one block per theme in
+  `src/shell/theme/tokens.css` — no page stylesheet writes a colour of its
+  own, so a fourth theme is one block.
 - The shell UI itself (chrome strip, new-tab page, settings) is rendered by the
   same engine it manages, served from `http://cryo.localhost`.
 
@@ -196,11 +202,41 @@ Two things worth more than the dialog:
 
 Matching hash, then **More info → Run anyway**.
 
-The pipeline signs both `cryo.exe` and `cryo-setup.exe` the moment a real
-code-signing certificate lands in repo secrets; no workflow change needed
-(see [CONTRIBUTING.md](CONTRIBUTING.md)). A self-signed one proves
-integrity and clears nothing — SmartScreen trades in reputation, not
-homework.
+The pipeline signs both `cryo.exe` and `cryo-setup.exe` as soon as a real
+code-signing certificate is configured, and refuses to publish a signature
+Windows would reject (see [CONTRIBUTING.md](CONTRIBUTING.md)). A self-signed
+one proves integrity and clears nothing — SmartScreen trades in reputation,
+not homework.
+
+### Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/),
+certificate by [SignPath Foundation](https://signpath.org/).
+
+cryo has one maintainer,
+[konstantinos193](https://github.com/konstantinos193), who is author,
+reviewer and approver. Changes land in the open on `main`; a signing
+request is approved only for an artifact that
+[the release workflow](.github/workflows/release.yml) built from a pushed
+version tag, and the tag must match `version` in `Cargo.toml` or the build
+fails before it can ask.
+
+**Privacy.** cryo is a browser: it fetches what you navigate to, because
+that is the request. Everything else it touches is listed here.
+
+- Omnibox suggestions are computed on your own machine from your history,
+  bookmarks and dial list. Keystrokes never leave it — there is no remote
+  suggest service to send them to.
+- One request is not yours to make: release builds fetch
+  `releases/latest/download/latest.json` from this repository at launch to
+  notice a newer version, carrying no identifier beyond what an HTTP GET
+  implies. The ⋮ badge is the only thing it can cause.
+- If your profile already holds Google cookies, cryo sends them to
+  `accounts.google.com/ListAccounts` to label the account button with the
+  account you are signed into. Incognito windows never ask.
+- Installing an extension fetches it from the Chrome Web Store, when you
+  ask for it.
+- No telemetry, no analytics, no crash reporting.
 
 Or build it. Rust stable:
 

@@ -88,7 +88,10 @@
         const site = host(b.url);
         const mark = node('div', 'site-mark');
         const hue = [...site].reduce((n, c) => n + c.charCodeAt(0), 0) % 360;
-        mark.style.background = 'hsl(' + hue + ' 28% 25%)';
+        // The hue is the site's; how light the theme wears it is the
+        // palette's, so a letter stays legible on a light page too.
+        mark.style.background = 'hsl(' + hue + ' var(--tint-bg))';
+        mark.style.color = 'hsl(' + hue + ' var(--tint-fg))';
         // The site's icon on the tile when one has arrived; the letter
         // stays for pages never visited (or visited before v2).
         if (b.favicon) {

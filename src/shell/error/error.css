@@ -1,0 +1,34 @@
+  body {
+    min-height: 100vh; margin: 0; display: flex; align-items: center;
+    justify-content: center; color: var(--tx);
+    background:
+      radial-gradient(800px 300px at 50% -60px, rgba(var(--lobe-a-rgb), .12), transparent 70%),
+      var(--bg1);
+    font: 15px/1.6 system-ui, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -webkit-user-select: none; user-select: none;
+  }
+  main { width: min(460px, calc(100vw - 64px)); padding: 32px 0; }
+  /* The crystal, painted from the palette — the theme's own mark, with
+     no copy of its geometry in this document. */
+  .mark { width: 56px; height: 56px; opacity: .9;
+          background: var(--mark-url) center / contain no-repeat;
+          filter: drop-shadow(0 4px 14px rgba(var(--accent-rgb), .16)); }
+  h1 { font-size: 22px; font-weight: 650; margin: 24px 0 8px; letter-spacing: -.01em; }
+  p { margin: 0; color: var(--tx2); }
+  .target {
+    margin-top: 18px; padding: 11px 13px; border-radius: 9px;
+    border: 1px solid var(--line);
+    background: var(--bg2); color: var(--tx3); font-size: 13px;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    word-break: break-all; -webkit-user-select: text; user-select: text;
+  }
+  button {
+    margin-top: 24px; padding: 10px 20px; border: 0; border-radius: 10px;
+    background: var(--accent-deep); color: var(--on-accent); font: inherit; font-size: 14px;
+    font-weight: 550; cursor: pointer;
+    transition: background .15s ease, transform .1s ease;
+  }
+  button:hover { background: var(--accent-deep-hover); }
+  button:active { transform: translateY(1px); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

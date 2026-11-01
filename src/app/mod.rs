@@ -54,6 +54,7 @@ use crate::shell;
 use crate::shell::chrome::{normalize_nav_input, ChromeCommand};
 use crate::shell::pages::{self, NEW_TAB_URL};
 use crate::shell::search::SearchEngine;
+use crate::shell::theme::Theme;
 use crate::tabs::{Clock, TabId, TabRegistry, ViewKey};
 use crate::update::{Outcome, Update};
 use crate::vault::Vault;
@@ -120,6 +121,11 @@ pub enum ViewEvent {
     /// A download started, progressed, or settled — the shelf.
     Download(DownloadUpdate),
     DownloadFolder(bool),
+    /// The settings page picked a theme. The documents have already
+    /// restyled themselves from storage; this is what the app needs it
+    /// for — the window icon, and the colour the next view paints
+    /// before its first frame.
+    ThemePicked(Theme),
     /// A trusted message from the main document.
     PageMessage(PageMessage),
 }
@@ -206,6 +212,15 @@ pub struct App {
     /// document reports it on its `/cmd` wire and `note_search_engine`
     /// keeps this copy — the storage area itself never reaches the app.
     search_engine: SearchEngine,
+    /// Which palette the shell is wearing. The documents read the pick
+    /// from the same localStorage the engine pick lives in; this copy
+    /// exists for the two things no document can do — the window and
+    /// taskbar icons, and the colour a view paints before its first
+    /// frame.
+    theme: Theme,
+    /// File the theme pick is written to when it changes — `None` in
+    /// incognito, which paints the default and leaves nothing behind.
+    theme_state: Option<PathBuf>,
     /// Typed inputs and visited URLs — the omnibox's memory. `None` in
     /// incognito windows: forgetting is their whole point.
     recorder: Option<Recorder>,
@@ -285,10 +300,18 @@ pub struct Profile {
     pub vault: Vault,
     pub extensions: Option<Catalogue>,
     pub incognito: bool,
+    /// The palette this window opens in, loaded from `theme_state` by
+    /// the composition root.
+    pub theme: Theme,
+    /// Where a new pick is remembered for the next launch.
+    pub theme_state: Option<PathBuf>,
 }
 
 impl Profile {
     /// Everything forgotten at close — incognito, and the test seam.
+    /// The theme goes with it: an incognito window has its own storage,
+    /// so its documents find no pick there and paint the default. The
+    /// window would otherwise wear a palette its own pages do not.
     pub fn session_only() -> Self {
         Self {
             recorder: None,
@@ -296,6 +319,8 @@ impl Profile {
             vault: Vault::session_only(),
             extensions: None,
             incognito: true,
+            theme: Theme::DEFAULT,
+            theme_state: None,
         }
     }
 }
@@ -330,14 +355,22 @@ impl App {
             _ => (DEFAULT_URL.to_string(), NEW_TAB_URL.to_string()),
         };
         let first = registry.create_with(domain, |key| {
-            Self::spawn_content_view(&*engine, &proxy, content_rect, key, &load, true)
+            Self::spawn_content_view(
+                &*engine,
+                &proxy,
+                content_rect,
+                key,
+                &load,
+                true,
+                profile.theme,
+            )
         })?;
         if let Some(tab) = registry.get_mut(first) {
             tab.set_title("New tab".to_string());
         }
         registry.set_active(first)?;
 
-        let chrome = Self::spawn_chrome(&*engine, &proxy, chrome_rect)?;
+        let chrome = Self::spawn_chrome(&*engine, &proxy, chrome_rect, profile.theme)?;
 
         let memory_budget = crate::memory::BudgetEnforcer::new(Default::default(), clock.now());
         Ok(Self {
@@ -356,6 +389,8 @@ impl App {
             page_fullscreen: false,
             overlay_open: false,
             search_engine: SearchEngine::DEFAULT,
+            theme: profile.theme,
+            theme_state: profile.theme_state,
             recorder: profile.recorder,
             bookmarks: profile.bookmarks,
             vault: profile.vault,
@@ -513,6 +548,7 @@ impl App {
             ViewEvent::LoadFailed(failure) => self.show_error(id, failure),
             ViewEvent::Download(update) => self.download_update(key, update, control_flow),
             ViewEvent::DownloadFolder(choose) => self.download_folder_setting(id, choose),
+            ViewEvent::ThemePicked(picked) => self.theme_setting(id, picked),
             ViewEvent::PageMessage(message) => self.on_page_message(id, message),
         }
     }
