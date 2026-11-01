@@ -6,10 +6,10 @@
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   IgnorableNamespaces="uap uap3 rescap">
 
-  <!-- pack.ps1 fills the @-marked slots: @IDENTITY@ and @PUBLISHER@ are
-       the values Partner Center's "Product identity" panel assigns once
-       the name is reserved, @VERSION@ is the 4-part MSIX version the
-       Store requires. -->
+  <!-- pack.ps1 fills the four @-marked slots: the identity name and
+       publisher are the values Partner Center's "Product identity"
+       panel assigns once the name is reserved, the version is the
+       4-part MSIX version the Store requires. -->
   <Identity Name="@IDENTITY@"
             Publisher="@PUBLISHER@"
             Version="@VERSION@"
