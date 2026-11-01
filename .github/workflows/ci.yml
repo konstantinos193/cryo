@@ -7,6 +7,19 @@ on:
     branches: [main]
 
 jobs:
+  required-check:
+    name: check
+    runs-on: ubuntu-latest
+    needs: [fmt, check, chrome, signing, live-probes]
+    if: ${{ always() }}
+    steps:
+      - name: Require every CI gate
+        shell: bash
+        run: |
+          for result in ${{ join(needs.*.result, ' ') }}; do
+            test "$result" = success || exit 1
+          done
+
   fmt:
     runs-on: windows-latest
     steps:
