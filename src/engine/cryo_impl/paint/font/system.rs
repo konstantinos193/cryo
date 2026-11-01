@@ -89,6 +89,9 @@ static GENERICS: &[(&str, &[&str])] = &[
         &[
             "consola",
             "cour",
+            "Courier New",
+            "Monaco",
+            "Menlo",
             "DejaVuSansMono",
             "LiberationMono-Regular",
         ],
@@ -97,7 +100,16 @@ static GENERICS: &[(&str, &[&str])] = &[
     ("fantasy", &["impact", "Impact", "DejaVuSans"]),
     ("ui-sans-serif", &["segoeui", "arial", "DejaVuSans"]),
     ("ui-serif", &["times", "DejaVuSerif"]),
-    ("ui-monospace", &["consola", "DejaVuSansMono"]),
+    (
+        "ui-monospace",
+        &[
+            "consola",
+            "Monaco",
+            "Menlo",
+            "Courier New",
+            "DejaVuSansMono",
+        ],
+    ),
 ];
 
 /// The families tried when a page's whole stack is unavailable.
@@ -401,6 +413,8 @@ mod tests {
         assert!(candidates("sans-serif").contains(&"arial"));
         assert!(candidates("serif").contains(&"times"));
         assert!(candidates("monospace").contains(&"consola"));
+        assert!(candidates("monospace").contains(&"Courier New"));
+        assert!(candidates("ui-monospace").contains(&"Monaco"));
         assert!(candidates("cursive").contains(&"comic"));
     }
 
