@@ -29,6 +29,9 @@ pub struct ChromeState {
     /// A downloaded, verified installer is staged — the menu shows
     /// "Restart to update" and the ⋮ button gets a badge.
     pub update_version: Option<String>,
+    /// The Store owns this build's updates — the menu hides "Check for
+    /// updates" and no badge can ever be staged.
+    pub store_managed: bool,
     /// The download shelf, newest first. The ⬇ button hides while empty.
     pub downloads: Vec<ChromeDownload>,
     /// The bookmarks bar: kept pages with no folder, in the order they

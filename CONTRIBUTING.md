@@ -91,31 +91,46 @@ FIPS-certified hardware, so CAs no longer issue an exportable PFX. A PFX
 secret suits a pre-2023 certificate or a test one; anything bought today
 arrives as a USB token or a cloud HSM.
 
-**SignPath Foundation is the chosen route** — free for open source, and cryo
-fits the stated bar: MIT throughout, public repo, real release history. The
-publisher string users see becomes the Foundation's rather than ours, which is
-the price of a free certificate. In order:
+**The Microsoft Store is the chosen route** — SignPath Foundation declined
+the free application on 1 November 2026 (insufficient public adoption;
+reapplication invited), Azure Artifact Signing is ~$10/month and limited to
+US/Canada individuals, and a CA certificate is a paid USB token. The Store
+signs the package itself at submission, costs nothing for an individual
+developer account, and a Store install never meets SmartScreen.
 
-1. The code signing policy is published — see
-   [README](README.md#code-signing-policy). Their terms require the exact term
-   "Code signing policy" on the home and download pages, the attribution
-   sentence, the author/reviewer/approver roles, and a privacy statement.
-2. Apply at [signpath.org](https://signpath.org/). Every team member needs MFA
-   on their accounts before signing is enabled.
-3. Approval issues the organization id, project slug, signing policy slug and
-   an API token. None of them can be guessed, which is why no SignPath step is
-   committed yet.
-4. Then wire it: signing moves off `signtool` onto
-   `signpath/github-action-submit-signing-request`, which takes an uploaded
-   GitHub artifact, signs it on their service and hands back the signed file.
-   That is two round trips for a release, because `cryo.exe` must be signed
-   *before* Inno packs it and `cryo-setup.exe` only exists afterwards. Write
-   that step against the real account and prove it on a prerelease tag — the
-   one thing `sign.tests.ps1` cannot cover is someone else's service.
+`installer\msix\` owns the package: `Package.appxmanifest` with
+`@PLACEHOLDER@` slots, `gen-assets.ps1` regenerating the tile PNGs from
+`assets/icon.png` (commit the results), and `pack.ps1` staging the layout
+and running `makeappx`. Identity comes from Partner Center's "Product
+identity" panel after the app name is reserved, and reaches the script
+through repo variables, never command lines:
+
+| variable | source |
+| --- | --- |
+| `CRYO_MSIX_IDENTITY` | package identity name, e.g. `12345Publisher.cryo` |
+| `CRYO_MSIX_PUBLISHER` | publisher `CN=` the same panel assigns |
+| `CRYO_MSIX_PUBLISHER_DISPLAY` | Store publisher name; defaults to `konstantinos193` |
+| `CRYO_MAKEAPPX` / `CRYO_SIGNTOOL` | explicit SDK tool paths, for a box with no SDK |
+
+With no identity set `pack.ps1` says so and exits 0 — the same contract as
+`sign.ps1`, so the release step stays exercised every run. `-DevSign` packs
+a self-signed package trusted in `CurrentUser\TrustedPeople` for local
+install, and `powershell -File installer\msix\pack.tests.ps1` covers the
+pack-and-substitute path in CI.
+
+Two behaviours change inside a package, by policy not accident:
+`update::store_managed()` probes `GetCurrentPackageId` once — a packaged
+build updates through the Store, so the launch check and the ⋮ menu item
+stay out of its way — and profile data lands in the package's private
+storage instead of the shared `%LOCALAPPDATA%\cryo`.
+
+What is left is on the account, not the tree: finish Partner Center
+registration, reserve the name, copy the product identity into the repo
+variables above, and the next tagged release emits `cryo.msix` alongside
+`cryo-setup.exe`. Uploading it and answering the listing questionnaire is
+the human half of a submission.
 
 `sign.ps1` stays either way: `CRYO_CERT_THUMBPRINT` is the path for a CA
 certificate on a USB token (Certum's open-source offering, Sectigo), which a
 GitHub-hosted runner cannot reach — that route means a self-hosted runner or
-signing locally. Azure Artifact Signing (formerly Trusted Signing) is the
-other alternative, about $10/month and Microsoft-rooted, but individual
-sign-up is limited to the USA and Canada.
+signing locally.

@@ -294,8 +294,10 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
     };
     // Update checks only make sense for installed release builds — a dev
     // binary would just offer to replace itself with a tagged release.
+    // A Store install updates through the Store: asking the feed from a
+    // packaged process would stage an installer the package can't apply.
     #[cfg(all(windows, not(debug_assertions)))]
-    {
+    if !update::store_managed() {
         let update_proxy = proxy.clone();
         update::spawn_check(move |outcome| {
             app::post(&update_proxy, AppEvent::UpdateChecked(outcome));

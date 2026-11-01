@@ -84,7 +84,8 @@ What exists today:
 - On Windows, external links reach the running window over a named pipe and
   become tabs instead of a second browser.
 - Self-update on Windows: check the release feed, verify the checksum, run the
-  installer.
+  installer. A Store-installed build leaves updates to the Store — the feed
+  check and the menu item stay out of a package's way.
 - Find in page on Windows: `Ctrl+F` opens a private find field with native
   highlighting, match counts, case matching and next/previous controls.
   `Enter` / `Shift+Enter`, `F3` / `Shift+F3` and `Ctrl+G` / `Ctrl+Shift+G`
@@ -185,6 +186,10 @@ free).
 
 ### Windows will warn you
 
+The Microsoft Store build is the path without this section — the package
+Microsoft signs never meets SmartScreen. It is being set up; until the
+listing is live the GitHub installer below is the build that exists.
+
 The installer is unsigned, so SmartScreen opens with "Windows protected
 your PC" the first time you run it. That is not a verdict on the file.
 It means the binary carries no code-signing certificate and no download
@@ -218,8 +223,11 @@ not homework.
 
 ### Code signing policy
 
-Free code signing provided by [SignPath.io](https://about.signpath.io/),
-certificate by [SignPath Foundation](https://signpath.org/).
+Trusted signing arrives through the Microsoft Store: the MSIX the release
+workflow packs is submitted unsigned and Microsoft signs the package it
+publishes. The free-certificate route was tried first — SignPath
+Foundation declined the application on 1 November 2026 for insufficient
+public adoption; reapplication is invited once that changes.
 
 cryo has one maintainer,
 [konstantinos193](https://github.com/konstantinos193), who is author,

@@ -77,12 +77,26 @@ jobs:
           [IO.File]::WriteAllText("$pwd\installer\output\latest.json", $manifest)
           Get-Content installer\output\latest.json
 
+      # The Store artefact: Microsoft re-signs the package at submission,
+      # so this ships unsigned — what Partner Center asks for. The identity
+      # strings are repo variables, not secrets: they are the same values
+      # the Store page publishes. Absent them the step says so and exits 0,
+      # mirroring the signing steps.
+      - name: Package MSIX
+        shell: powershell
+        env:
+          CRYO_MSIX_IDENTITY: ${{ vars.CRYO_MSIX_IDENTITY }}
+          CRYO_MSIX_PUBLISHER: ${{ vars.CRYO_MSIX_PUBLISHER }}
+          CRYO_MSIX_PUBLISHER_DISPLAY: ${{ vars.CRYO_MSIX_PUBLISHER_DISPLAY }}
+        run: .\installer\msix\pack.ps1 -Exe target\release\cryo.exe -Version "${{ steps.v.outputs.version }}.0" -Out installer\output\cryo.msix
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           files: |
             installer/output/cryo-setup.exe
+            installer/output/cryo.msix
             installer/output/latest.json
 
   linux:

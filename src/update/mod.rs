@@ -63,6 +63,39 @@ pub enum UpdateError {
     Launch(#[source] std::io::Error),
 }
 
+/// Whether the Store owns this build's updates: the process carries
+/// MSIX package identity only when it launched from an installed
+/// package, and a packaged build updates through the Store, never the
+/// release feed. Process-constant — probed once, like the other
+/// derived facts this tree keeps in a `OnceLock`.
+pub fn store_managed() -> bool {
+    #[cfg(windows)]
+    {
+        static MANAGED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *MANAGED.get_or_init(package::has_identity)
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// MSIX package identity, in the terms `kernel32` reports it.
+#[cfg(windows)]
+mod package {
+    /// `GetCurrentPackageId` answers two questions with one call: it
+    /// fails `APPMODEL_ERROR_NO_PACKAGE` when the process has no
+    /// package identity and `ERROR_INSUFFICIENT_BUFFER` when it does —
+    /// the id itself is never needed, only which answer came back.
+    pub(super) fn has_identity() -> bool {
+        use windows::Win32::Storage::Packaging::Appx::GetCurrentPackageId;
+        const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+        let mut len = 0u32;
+        let error = unsafe { GetCurrentPackageId(&mut len, None) };
+        error.0 == ERROR_INSUFFICIENT_BUFFER
+    }
+}
+
 /// Check for an update on a worker thread; exactly one `notify` call
 /// fires with the outcome. If a newer version exists the installer is
 /// downloaded and verified before `Ready` is reported, so applying it

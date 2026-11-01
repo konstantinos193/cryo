@@ -261,7 +261,7 @@
     {label: 'Settings', cmd: {cmd: 'settings'}},
     {label: 'Extensions — not supported (needs Chromium)', off: true},
     'sep',
-    {label: 'Check for updates', cmd: {cmd: 'check_updates'}},
+    {label: 'Check for updates', cmd: {cmd: 'check_updates'}, updateCheck: true},
   ];
   // The update item lives outside MENU: it only exists while a verified
   // installer is staged, and its label carries the version. __cryo_update
@@ -269,6 +269,9 @@
   let updateItem = document.createElement('div');
   updateItem.className = 'mi upd';
   updateItem.onclick = () => { setMenu(false); ipc({cmd: 'update_apply'}); };
+  // The check item is hidden when the state says the Store owns
+  // updates — the element is kept so __cryo_update can toggle it.
+  let updateCheckEl = null;
   for (const item of MENU) {
     if (item === 'sep') {
       const s = document.createElement('div');
@@ -279,6 +282,7 @@
     const el = document.createElement('div');
     el.className = 'mi' + (item.off ? ' off' : '');
     el.textContent = item.label;
+    if (item.updateCheck) updateCheckEl = el;
     if (!item.off) el.onclick = () => {
       setMenu(false);
       // Items can refuse at click time when the state forbids them —

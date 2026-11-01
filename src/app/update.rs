@@ -27,6 +27,11 @@ impl App {
     /// asked (menu item) — the outcome gets a dialog; silent checks only
     /// surface the ⋮ badge once an installer is downloaded and verified.
     pub(super) fn request_update_check(&mut self, prompt: bool) {
+        // A packaged build updates through the Store — the menu item is
+        // hidden, and a stray command must not reach the feed anyway.
+        if update::store_managed() {
+            return;
+        }
         self.update_prompt = prompt;
         let proxy = self.proxy.clone();
         update::spawn_check(move |outcome| {

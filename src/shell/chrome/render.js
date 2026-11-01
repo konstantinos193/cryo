@@ -83,6 +83,7 @@
     } else {
       updateItem.remove();
     }
+    if (updateCheckEl) updateCheckEl.hidden = !!state.store_managed;
     renderDl(state.downloads || [], prev);
     // The bar shows kept pages once there are any, the dial list until
     // then; the ★ fills in while this page is one of them.

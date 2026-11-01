@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap3 rescap">
+
+  <!-- pack.ps1 fills the @-marked slots: @IDENTITY@ and @PUBLISHER@ are
+       the values Partner Center's "Product identity" panel assigns once
+       the name is reserved, @VERSION@ is the 4-part MSIX version the
+       Store requires. -->
+  <Identity Name="@IDENTITY@"
+            Publisher="@PUBLISHER@"
+            Version="@VERSION@"
+            ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>cryo</DisplayName>
+    <PublisherDisplayName>@PUBLISHER_DISPLAY@</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <Description>A memory-obsessed browser shell. Tabs freeze. Budgets hold.</Description>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop"
+                        MinVersion="10.0.17763.0"
+                        MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="cryo"
+                 Executable="cryo.exe"
+                 EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements DisplayName="cryo"
+                          Description="A memory-obsessed browser shell. Tabs freeze. Budgets hold."
+                          Square150x150Logo="Assets\Square150x150Logo.png"
+                          Square44x44Logo="Assets\Square44x44Logo.png"
+                          BackgroundColor="#0C2433">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
+        <uap:SplashScreen Image="Assets\SplashScreen.png" />
+      </uap:VisualElements>
+      <Extensions>
+        <!-- http/https so the package can be chosen as the default
+             browser; the URI arrives as a command-line argument, which
+             is already how an external link opens. -->
+        <!-- One Extension element per protocol — the schema allows a
+             single child each. http/https so the package can be chosen
+             as the default browser; the URI arrives as a command-line
+             argument, which is already how an external link opens. -->
+        <uap3:Extension Category="windows.protocol"
+                        Executable="cryo.exe"
+                        EntryPoint="Windows.FullTrustApplication">
+          <uap3:Protocol Name="http" />
+        </uap3:Extension>
+        <uap3:Extension Category="windows.protocol"
+                        Executable="cryo.exe"
+                        EntryPoint="Windows.FullTrustApplication">
+          <uap3:Protocol Name="https" />
+        </uap3:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <Capability Name="internetClient" />
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>
