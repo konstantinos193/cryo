@@ -18,6 +18,10 @@ impl App {
         control_flow: &mut ControlFlow,
     ) -> anyhow::Result<()> {
         match cmd {
+            ChromeCommand::FindOpen => self.open_find(),
+            ChromeCommand::FindQuery { query, match_case } => self.search_page(query, match_case),
+            ChromeCommand::FindNext { backwards } => self.next_match(backwards),
+            ChromeCommand::FindClose => self.dismiss_find(),
             ChromeCommand::PermissionAnswer { token, allow } => {
                 self.answer_permission_prompt(token, allow)
             }
@@ -152,6 +156,7 @@ impl App {
     }
 
     pub(super) fn activate(&mut self, id: TabId) -> anyhow::Result<()> {
+        self.close_find()?;
         self.dismiss_overlays()?;
         let prev = self.registry.active_id();
         if prev == Some(id) {

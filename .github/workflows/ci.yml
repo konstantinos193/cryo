@@ -97,5 +97,7 @@ jobs:
         run: cargo test live_freeze_memory -- --ignored --nocapture
         env:
           CRYO_FREEZE_CASE: heap
+      - name: live find probe
+        run: cargo test live_find_in_page -- --ignored --nocapture
       - name: live budget + restore probe
         run: cargo test live_ram_budget -- --ignored --nocapture

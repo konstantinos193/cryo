@@ -16,6 +16,8 @@ mod events;
 #[cfg(target_os = "windows")]
 mod extensions;
 #[cfg(target_os = "windows")]
+mod find;
+#[cfg(target_os = "windows")]
 mod ops;
 #[cfg(target_os = "windows")]
 mod permission_profile;

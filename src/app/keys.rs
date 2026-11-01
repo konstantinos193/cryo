@@ -70,6 +70,8 @@ enum KeyCommand {
     /// Ctrl+H: the library panel's history pane. History is private —
     /// never a fetchable page — so it lives in the chrome overlay.
     History,
+    Find,
+    FindNext(bool),
 }
 
 /// Map a key to the browser command it triggers, plus whether the key is
@@ -141,6 +143,10 @@ fn key_command(acc: Accelerator) -> Option<(KeyCommand, bool)> {
         (true, false, true, Character('a')) => (KeyCommand::TabSearch, true),
         (true, false, true, Character('o')) => (KeyCommand::Library, true),
         (true, false, false, Character('h')) => (KeyCommand::History, true),
+        (true, false, false, Character('f')) => (KeyCommand::Find, true),
+        (false, false, shift, F(3)) | (true, false, shift, Character('g')) => {
+            (KeyCommand::FindNext(shift), true)
+        }
         (true, false, true, Delete) => (KeyCommand::ClearBrowsingData, true),
         _ => return None,
     };
@@ -170,6 +176,7 @@ fn tao_accelerator(event: &KeyEvent, modifiers: ModifiersState) -> Option<Accele
         Key::End => AcceleratorKey::End,
         Key::Delete => AcceleratorKey::Delete,
         Key::Escape => AcceleratorKey::Escape,
+        Key::F3 => AcceleratorKey::F(3),
         Key::F4 => AcceleratorKey::F(4),
         Key::F5 => AcceleratorKey::F(5),
         Key::F6 => AcceleratorKey::F(6),
@@ -258,7 +265,7 @@ impl App {
             KeyCommand::HardReload => self.hard_reload_active(),
             KeyCommand::Back => self.back_active(),
             KeyCommand::Forward => self.forward_active(),
-            KeyCommand::Stop => self.stop_active(),
+            KeyCommand::Stop => self.stop_or_close_find(),
             KeyCommand::ToggleFullscreen => self.toggle_fullscreen(),
             KeyCommand::DevTools => self.devtools_active(),
             KeyCommand::Print => self.print_active(),
@@ -273,6 +280,8 @@ impl App {
             KeyCommand::TabSearch => self.toggle_tab_search(),
             KeyCommand::Library => self.toggle_library(),
             KeyCommand::History => self.toggle_history(),
+            KeyCommand::Find => self.open_find(),
+            KeyCommand::FindNext(backwards) => self.next_match(backwards),
             KeyCommand::FreezeActive => match self.registry.active_id() {
                 Some(id) => self.freeze_tab(id),
                 None => Ok(()),

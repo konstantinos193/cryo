@@ -117,6 +117,9 @@ impl App {
 
     /// A view's loading signal flipped — the spinner's data.
     pub(super) fn on_load_changed(&mut self, id: TabId, loading: bool) -> anyhow::Result<()> {
+        if loading && self.registry.active_id() == Some(id) {
+            self.close_find()?;
+        }
         if let Some(tab) = self.registry.get_mut(id) {
             tab.set_loading(loading);
         }

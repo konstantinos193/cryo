@@ -23,6 +23,8 @@ pub(crate) const STYLE: &str = concat!(
     include_str!("chrome/chrome.css"),
     "\n",
     include_str!("chrome/library.css"),
+    "\n",
+    include_str!("chrome/find.css"),
 );
 
 /// Its script, served at `/chrome/chrome.js`. One execution unit preserves
@@ -30,6 +32,8 @@ pub(crate) const STYLE: &str = concat!(
 /// files while the document is still loading.
 pub(crate) const SCRIPT: &str = concat!(
     include_str!("chrome/bootstrap.js"),
+    "\n",
+    include_str!("chrome/find.js"),
     "\n",
     include_str!("chrome/permissions.js"),
     "\n",

@@ -243,6 +243,7 @@
   let lastState = {tabs: []};
   const hasNeighbour = () => lastState.tabs.length > 1;
   const MENU = [
+    {label: 'Find in page (Ctrl+F)', cmd: {cmd: 'find_open'}},
     {label: 'Freeze tab (Ctrl+Shift+F)', cmd: {cmd: 'freeze'}, ok: hasNeighbour},
     {label: 'Discard tab', cmd: {cmd: 'discard'}, ok: hasNeighbour},
     'sep',

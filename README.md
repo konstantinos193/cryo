@@ -85,6 +85,12 @@ What exists today:
   become tabs instead of a second browser.
 - Self-update on Windows: check the release feed, verify the checksum, run the
   installer.
+- Find in page on Windows: `Ctrl+F` opens a private find field with native
+  highlighting, match counts, case matching and next/previous controls.
+  `Enter` / `Shift+Enter`, `F3` / `Shift+F3` and `Ctrl+G` / `Ctrl+Shift+G`
+  move between matches; Escape closes and clears the query. Searches stay
+  on the active document and never restore a frozen background tab. Older
+  WebView2 runtimes and other backends show an explicit unavailable message.
 - Three themes, picked in **Settings → Appearance**: Glacier (the dark
   original), Light and Lilac. The pick restyles every open cryo page, the tab
   strip included, as soon as it is made, and the window and taskbar icons
@@ -126,6 +132,8 @@ behave the same whether the page or the chrome owns focus.
 | `F5` / `Ctrl+R` | Reload |
 | `Ctrl+F5` / `Ctrl+Shift+R` / `Shift+F5` | Hard reload (DevTools-protocol cache bypass) |
 | `Esc` | Stop loading (still reaches the page for dialogs and menus) |
+| `Ctrl+F` | Find in the active page (Windows) |
+| `F3` / `Shift+F3` | Next / previous page match |
 | `Ctrl+P` / `Ctrl+S` / `Ctrl+O` | Print / save-as / open file into `file://` |
 | `Ctrl+U` | `view-source:` in a new tab |
 | `Ctrl+=`/`+` / `Ctrl+-` / `Ctrl+0` | Zoom in / out / reset (×1.25 steps, 25 to 500%) |
@@ -297,7 +305,7 @@ there is no longer a 24-live-view cap.
   toolbar action surface, per-extension enable/disable, and incognito grants.
 - [ ] Phase 5: evaluate Servo as a second engine backend. If it earns the slot.
 
-Known gaps by design: find-in-page, a browsable history surface (the store
+Known gaps by design: native find-in-page on Linux/macOS, a browsable history surface (the store
 exists, the page doesn't), a task manager. They go in issues, not in
 half-built code.
 
