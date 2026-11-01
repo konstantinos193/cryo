@@ -80,10 +80,7 @@ pub fn decode(bytes: &[u8]) -> Result<Image, ImageError> {
     let mut restart_interval = 0usize;
 
     let mut at = SIGNATURE.len();
-    loop {
-        let Some(marker) = next_marker(bytes, &mut at) else {
-            break;
-        };
+    while let Some(marker) = next_marker(bytes, &mut at) {
         match marker {
             // End of image.
             0xd9 => break,

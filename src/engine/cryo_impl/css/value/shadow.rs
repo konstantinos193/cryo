@@ -89,13 +89,12 @@ impl Shadow {
                             // A percentage is not valid in a shadow.
                             LengthPercentage::Percentage(_) => return None,
                         });
-                    } else if let Some(specified) = color::parse(single) {
+                    } else {
+                        let specified = color::parse(single)?;
                         color = Some(match specified {
                             color::SpecifiedColor::Absolute(value) => value,
                             color::SpecifiedColor::Current => current,
                         });
-                    } else {
-                        return None;
                     }
                 }
             }

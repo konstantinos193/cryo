@@ -332,7 +332,7 @@ impl RuleSet {
 
         // Ascending, so the winner sorts last. A stable sort keeps two
         // equally-ranked inline declarations in source order.
-        candidates.sort_by(|left, right| left.rank.cmp(&right.rank));
+        candidates.sort_by_key(|candidate| candidate.rank);
 
         let mut values: BTreeMap<String, Won> = BTreeMap::new();
         for candidate in candidates {

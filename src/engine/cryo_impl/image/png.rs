@@ -131,10 +131,7 @@ pub fn decode(bytes: &[u8]) -> Result<Image, ImageError> {
         match &kind {
             b"IHDR" => header = Some(parse_header(chunk)?),
             b"PLTE" => {
-                palette = chunk
-                    .chunks_exact(3)
-                    .map(|entry| [entry[0], entry[1], entry[2]])
-                    .collect();
+                palette = chunk.as_chunks::<3>().0.to_vec();
             }
             // Per-palette-entry alpha, or a single transparent colour
             // for the non-palette types. Only the palette form is read.
