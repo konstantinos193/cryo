@@ -13,9 +13,8 @@ use std::time::{Duration, Instant};
 
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2Environment, ICoreWebView2Environment13, ICoreWebView2Environment8,
-    ICoreWebView2FrameInfo2, ICoreWebView2ProcessExtendedInfo,
-    ICoreWebView2ProcessExtendedInfoCollection, COREWEBVIEW2_PROCESS_KIND,
-    COREWEBVIEW2_PROCESS_KIND_BROWSER, COREWEBVIEW2_PROCESS_KIND_GPU,
+    ICoreWebView2ProcessExtendedInfo, ICoreWebView2ProcessExtendedInfoCollection,
+    COREWEBVIEW2_PROCESS_KIND, COREWEBVIEW2_PROCESS_KIND_BROWSER, COREWEBVIEW2_PROCESS_KIND_GPU,
     COREWEBVIEW2_PROCESS_KIND_RENDERER,
 };
 use windows::core::Interface;
@@ -143,27 +142,15 @@ fn collect_rows(collection: ICoreWebView2ProcessExtendedInfoCollection) -> Vec<P
     rows
 }
 
-/// Every frame id a process hosts — a view's main frame plus any
-/// subframes. Attribution stays conservative: a process whose set is
-/// larger than the views it serves our window reads shared, and a tab
-/// with a cross-origin subframe reads shared too — never a figure it
-/// cannot defend.
-fn frame_ids(info: &ICoreWebView2ProcessExtendedInfo) -> windows::core::Result<Vec<u32>> {
-    unsafe {
-        let iterator = info.AssociatedFrameInfos()?.GetIterator()?;
-        let mut frames = Vec::new();
-        let mut current = windows::core::BOOL::default();
-        while iterator.HasCurrent(&mut current).is_ok() && current.as_bool() {
-            let frame = iterator.GetCurrent()?.cast::<ICoreWebView2FrameInfo2>()?;
-            let mut id = 0;
-            frame.FrameId(&mut id)?;
-            if id != 0 {
-                frames.push(id);
-            }
-            iterator.MoveNext(&mut current)?;
-        }
-        Ok(frames)
-    }
+/// Every frame id a process hosts. Currently a stub: iterating the
+/// runtime's `ICoreWebView2FrameInfoCollectionIterator` faults inside
+/// its vtable under webview2-com-sys 0.39.1 — the generated slot
+/// order does not match the shipping runtime, and both the wrapper
+/// methods and raw-slot calls AV in the first call. Until that is
+/// root-caused under a native debugger, the rows carry no frames and
+/// the pane says `unattributed` — the honest answer, not a guess.
+fn frame_ids(_info: &ICoreWebView2ProcessExtendedInfo) -> windows::core::Result<Vec<u32>> {
+    Ok(Vec::new())
 }
 
 /// The pre-Environment13 enumeration — the rows it knows are pids and
