@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.18.1
+
+### Fixed
+
+- The IMAP client moves to `imap` 3.0.0-alpha.15, which drops `nom` 5
+  and with it `lexical-core` 0.7 (RUSTSEC-2024-0377, Dependabot alert
+  2). Special-use folder roles now come from the typed RFC 6154
+  attributes; Gmail's `\Inbox` and `\Spam` still match as extensions.
+
 ## 0.18.0
 
 ### Added

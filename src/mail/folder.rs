@@ -2,6 +2,8 @@
 //! inbox. `Role` is how the UI groups specials without trusting their
 //! display names — a server may call trash "Deleted Items".
 
+use imap_proto::NameAttribute;
+
 /// What a folder is for. Detection prefers the server's own
 /// special-use attributes; name matching is the fallback for servers
 /// that don't send any.
@@ -42,20 +44,21 @@ impl Folder {
 
 /// The flags `LIST` answers carry for specials — RFC 6154 plus the
 /// names Gmail actually sends.
-pub(super) fn role_of(attrs: &[imap::types::NameAttribute<'_>], name: &str) -> Role {
+pub(super) fn role_of(attrs: &[NameAttribute<'_>], name: &str) -> Role {
     for attr in attrs {
-        // Special-use flags arrive as Custom atoms — the enum's own
-        // variants are structural (\Noselect and friends).
-        let imap::types::NameAttribute::Custom(c) = attr else {
-            continue;
-        };
-        let role = match c.as_ref() {
-            "\\Inbox" => Some(Role::Inbox),
-            "\\Drafts" => Some(Role::Drafts),
-            "\\Sent" => Some(Role::Sent),
-            "\\Junk" | "\\Spam" => Some(Role::Junk),
-            "\\All" | "\\Archive" => Some(Role::Archive),
-            "\\Trash" => Some(Role::Trash),
+        // RFC 6154 specials are typed; Gmail's `\Inbox` and the older
+        // `\Spam` arrive as extension atoms.
+        let role = match attr {
+            NameAttribute::Drafts => Some(Role::Drafts),
+            NameAttribute::Sent => Some(Role::Sent),
+            NameAttribute::Junk => Some(Role::Junk),
+            NameAttribute::All | NameAttribute::Archive => Some(Role::Archive),
+            NameAttribute::Trash => Some(Role::Trash),
+            NameAttribute::Extension(c) => match c.as_ref() {
+                "\\Inbox" => Some(Role::Inbox),
+                "\\Spam" => Some(Role::Junk),
+                _ => None,
+            },
             _ => None,
         };
         if let Some(role) = role {
@@ -109,5 +112,26 @@ mod tests {
         assert_eq!(role_of(&[], "Trash"), Role::Trash);
         assert_eq!(role_of(&[], "All Mail"), Role::Archive);
         assert_eq!(role_of(&[], "Receipts"), Role::Other);
+    }
+
+    #[test]
+    fn special_use_attributes_beat_names() {
+        assert_eq!(
+            role_of(&[NameAttribute::Trash], "Deleted Items"),
+            Role::Trash
+        );
+        assert_eq!(
+            role_of(&[NameAttribute::All], "[Gmail]/All Mail"),
+            Role::Archive
+        );
+        assert_eq!(
+            role_of(&[NameAttribute::Extension("\\Inbox".into())], "Whatever"),
+            Role::Inbox
+        );
+        assert_eq!(
+            role_of(&[NameAttribute::Extension("\\Spam".into())], "Bulk"),
+            Role::Junk
+        );
+        assert_eq!(role_of(&[NameAttribute::NoSelect], "[Gmail]"), Role::Other);
     }
 }

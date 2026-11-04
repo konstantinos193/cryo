@@ -6,8 +6,6 @@
 //! words, and mail-parser already on the tree decodes them properly —
 //! one parse here means "=?UTF-8?B?…?=" subjects never reach the list.
 
-use std::net::TcpStream;
-
 use imap::types::Flag as ImapFlag;
 
 use super::account::{Account, Tls};
@@ -17,7 +15,7 @@ use super::message::{header_text, show_list};
 use super::{Envelope, MailError};
 use crate::vault::Secret;
 
-type Session = imap::Session<native_tls::TlsStream<TcpStream>>;
+type Session = imap::Session<imap::Connection>;
 
 /// The header block a listing needs — one field-set fetch per window,
 /// parsed by mail-parser for correct encoding and charset handling.
@@ -25,15 +23,17 @@ const ENVELOPE_QUERY: &str = "(UID FLAGS RFC822.SIZE BODY.PEEK[HEADER.FIELDS (FR
 
 pub(super) fn connect(account: &Account, secret: &Secret) -> Result<Box<dyn Client>, MailError> {
     let spec = account.imap();
-    let connector = native_tls::TlsConnector::new().map_err(|e| MailError::imap("tls-init", e))?;
-    let client = match spec.tls() {
-        Tls::Wrapper => imap::connect((spec.host(), spec.port()), spec.host(), &connector)
-            .map_err(|e| MailError::imap("connect", e))?,
-        Tls::StartTls => {
-            imap::connect_starttls((spec.host(), spec.port()), spec.host(), &connector)
-                .map_err(|e| MailError::imap("starttls", e))?
-        }
+    // The mode is the account's, never `Auto`: a guessed downgrade to
+    // plaintext is exactly what a hostile network would want.
+    let (mode, step) = match spec.tls() {
+        Tls::Wrapper => (imap::ConnectionMode::Tls, "connect"),
+        Tls::StartTls => (imap::ConnectionMode::StartTls, "starttls"),
     };
+    let client = imap::ClientBuilder::new(spec.host(), spec.port())
+        .mode(mode)
+        .tls_kind(imap::TlsKind::Native)
+        .connect()
+        .map_err(|e| MailError::imap(step, e))?;
     let session = client
         .login(account.username(), secret.expose())
         .map_err(|(e, _)| MailError::imap("login", e))?;
@@ -199,7 +199,9 @@ impl Client for ImapClient {
 
     fn append(&mut self, folder: &str, rfc822: &[u8]) -> Result<(), MailError> {
         self.session
-            .append_with_flags(folder, rfc822, &[ImapFlag::Seen])
+            .append(folder, rfc822)
+            .flags([ImapFlag::Seen])
+            .finish()
             .map_err(|e| MailError::imap("append", e))?;
         Ok(())
     }
