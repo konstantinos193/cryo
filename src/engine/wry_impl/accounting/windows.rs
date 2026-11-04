@@ -142,13 +142,14 @@ fn collect_rows(collection: ICoreWebView2ProcessExtendedInfoCollection) -> Vec<P
     rows
 }
 
-/// Every frame id a process hosts. Currently a stub: iterating the
-/// runtime's `ICoreWebView2FrameInfoCollectionIterator` faults inside
-/// its vtable under webview2-com-sys 0.39.1 — the generated slot
-/// order does not match the shipping runtime, and both the wrapper
-/// methods and raw-slot calls AV in the first call. Until that is
-/// root-caused under a native debugger, the rows carry no frames and
-/// the pane says `unattributed` — the honest answer, not a guess.
+/// Every frame id a process hosts. Currently a stub: the runtime's
+/// `ICoreWebView2FrameInfoCollectionIterator` answers `HasCurrent`
+/// and `MoveNext` correctly, but `GetCurrent` faults *inside the
+/// runtime's own frame materialization* on WebView2 156.x — an AV,
+/// not an HRESULT (past-end positions error cleanly as
+/// `ERROR_INVALID_INDEX`, and the bindings match the shipped
+/// `WebView2.h` exactly). A runtime defect, not ours — until fixed
+/// upstream, rows carry no frames and the pane says `unattributed`.
 fn frame_ids(_info: &ICoreWebView2ProcessExtendedInfo) -> windows::core::Result<Vec<u32>> {
     Ok(Vec::new())
 }
