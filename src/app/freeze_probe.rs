@@ -527,8 +527,10 @@ fn live_tasks_attribution() -> anyhow::Result<()> {
         "no renderer carried its served frames"
     );
     anyhow::ensure!(
-        rows.iter()
-            .any(|(_, a)| matches!(a, crate::memory::Attribution::Sole(_) | crate::memory::Attribution::Shared)),
+        rows.iter().any(|(_, a)| matches!(
+            a,
+            crate::memory::Attribution::Sole(_) | crate::memory::Attribution::Shared
+        )),
         "attribution billed no view at all"
     );
     Ok(())

@@ -57,8 +57,16 @@ pub(in crate::engine::wry_impl) fn measure(
     let started_at = Instant::now();
     let (tx, rx) = std::sync::mpsc::channel();
     let source = match environment {
-        Some(environment) => match environment.cast::<ICoreWebView2Environment13>() {
-            Ok(env13) => {
+        // The extended-infos walk faults inside the collection on at
+        // least one in-the-wild runtime — opt-in while it is
+        // investigated; the legacy path enumerates the same processes
+        // without frames, and rows honestly say `unattributed`.
+        Some(environment) => match std::env::var_os("CRYO_EXTENDED_ENUM")
+            .is_some()
+            .then(|| environment.cast::<ICoreWebView2Environment13>().ok())
+            .flatten()
+        {
+            Some(env13) => {
                 let handler = webview2_com::GetProcessExtendedInfosCompletedHandler::create(
                     Box::new(move |error, collection| {
                         let rows = if error.is_ok() {
@@ -78,7 +86,7 @@ pub(in crate::engine::wry_impl) fn measure(
                     .map_err(|e| EngineError::ReadStats(e.to_string()))?;
                 Source::Extended
             }
-            Err(_) => Source::Basic(enumerate_basic(environment)?),
+            None => Source::Basic(enumerate_basic(environment)?),
         },
         None => Source::Empty,
     };
@@ -128,41 +136,34 @@ fn collect_rows(collection: ICoreWebView2ProcessExtendedInfoCollection) -> Vec<P
             rows.push((
                 ProcessId(pid as u32),
                 process_kind(kind),
-                top_level_frames(&info).unwrap_or_default(),
+                frame_ids(&info).unwrap_or_default(),
             ));
         }
     }
     rows
 }
 
-/// The top-level frame ids a process hosts — one per served view.
-/// A `FrameInfo` with no parent is a hosted view's main frame; a
-/// subframe's presence must not count a tab's own process as shared,
-/// and a foreign top-level frame must, so only the top level counts.
-fn top_level_frames(info: &ICoreWebView2ProcessExtendedInfo) -> windows::core::Result<Vec<u32>> {
+/// Every frame id a process hosts — a view's main frame plus any
+/// subframes. Attribution stays conservative: a process whose set is
+/// larger than the views it serves our window reads shared, and a tab
+/// with a cross-origin subframe reads shared too — never a figure it
+/// cannot defend.
+fn frame_ids(info: &ICoreWebView2ProcessExtendedInfo) -> windows::core::Result<Vec<u32>> {
     unsafe {
         let iterator = info.AssociatedFrameInfos()?.GetIterator()?;
         let mut frames = Vec::new();
         let mut current = windows::core::BOOL::default();
         while iterator.HasCurrent(&mut current).is_ok() && current.as_bool() {
             let frame = iterator.GetCurrent()?.cast::<ICoreWebView2FrameInfo2>()?;
-            if top_level(&frame) {
-                let mut id = 0;
-                frame.FrameId(&mut id)?;
-                if id != 0 {
-                    frames.push(id);
-                }
+            let mut id = 0;
+            frame.FrameId(&mut id)?;
+            if id != 0 {
+                frames.push(id);
             }
             iterator.MoveNext(&mut current)?;
         }
         Ok(frames)
     }
-}
-
-/// A frame with no parent is a hosted view's main frame. A null
-/// `ParentFrameInfo` surfaces as an error here, not `Ok`.
-fn top_level(frame: &ICoreWebView2FrameInfo2) -> bool {
-    unsafe { frame.ParentFrameInfo().is_err() }
 }
 
 /// The pre-Environment13 enumeration — the rows it knows are pids and
