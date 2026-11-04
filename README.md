@@ -62,8 +62,8 @@ What exists today:
   at 5000 entries. Incognito windows keep none, and none of it is fetchable.
   Any origin could read a `/history` endpoint, so there isn't one.
 - Bookmarks: `Ctrl+D` keeps the page, a bar under the toolbar shows the kept
-  pages, `Ctrl+Shift+O` opens the library panel (kept pages, saved passwords,
-  import, export).
+  pages, `Ctrl+Shift+O` opens the library panel (kept pages, history, saved
+  passwords, import, export). `Ctrl+H` goes straight to the history pane.
 - A password vault sealed by DPAPI on Windows, the OS keychain elsewhere. Copy
   the file to another account and it decrypts to nothing.
 - A download shelf (`Ctrl+J`): pause, resume, retry, cancel, show in folder,
@@ -120,6 +120,8 @@ behave the same whether the page or the chrome owns focus.
 | `Ctrl+M` | Mute / unmute tab |
 | `Ctrl+Shift+F` | Freeze tab: drops the view, keeps a snapshot. Click to restore |
 | `Ctrl+D` / `Ctrl+Shift+O` | Keep page / open the library |
+| `Ctrl+H` | The library's history pane: browse, search, forget |
+| `Shift+Esc` | Tasks pane: per-tab state, honest memory figures, freeze/discard/close |
 | `Ctrl+J` | Download shelf |
 | `Ctrl+N` / `Ctrl+Shift+N` | New window / new incognito window |
 | `Ctrl+Shift+W` / `Ctrl+Shift+Q` / `Alt+F4` | Close window / quit |
@@ -186,9 +188,10 @@ free).
 
 ### Windows will warn you
 
-The Microsoft Store build is the path without this section — the package
-Microsoft signs never meets SmartScreen. It is being set up; until the
-listing is live the GitHub installer below is the build that exists.
+The Microsoft Store build is the path without this section —
+[cryo browser on the Store](https://apps.microsoft.com/detail/9NJX3SR7G6M0) —
+the package Microsoft signs never meets SmartScreen. The GitHub installer
+below is the unsigned path.
 
 The installer is unsigned, so SmartScreen opens with "Windows protected
 your PC" the first time you run it. That is not a verdict on the file.
@@ -313,9 +316,8 @@ there is no longer a 24-live-view cap.
   toolbar action surface, per-extension enable/disable, and incognito grants.
 - [ ] Phase 5: evaluate Servo as a second engine backend. If it earns the slot.
 
-Known gaps by design: native find-in-page on Linux/macOS, a browsable history surface (the store
-exists, the page doesn't), a task manager. They go in issues, not in
-half-built code.
+Known gaps by design: native find-in-page on Linux/macOS.
+They go in issues, not in half-built code.
 
 ## Contributing
 

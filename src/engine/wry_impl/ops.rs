@@ -4,8 +4,8 @@
 //! dispatches each `ContentView` method that needs one here.
 
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-    ICoreWebView2Profile2, ICoreWebView2_13, ICoreWebView2_2, ICoreWebView2_25, ICoreWebView2_3,
-    ICoreWebView2_8, COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
+    ICoreWebView2Profile2, ICoreWebView2_13, ICoreWebView2_2, ICoreWebView2_20, ICoreWebView2_25,
+    ICoreWebView2_3, ICoreWebView2_8, COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
 };
 use windows::core::{Interface, PWSTR};
 use wry::{WebView, WebViewExtWindows};
@@ -175,6 +175,16 @@ pub(super) fn playing_audio(view: &WebView) -> Option<bool> {
     let mut playing = windows::core::BOOL::default();
     unsafe { wv.IsDocumentPlayingAudio(&mut playing) }.ok()?;
     Some(playing.as_bool())
+}
+
+/// `FrameId` (_20): this view's main-frame id — the handle memory
+/// attribution pairs with a renderer's `AssociatedFrameInfos` to say
+/// which views share a process. `None` where the runtime can't answer.
+pub(super) fn frame_id(view: &WebView) -> Option<u32> {
+    let wv = view.webview().cast::<ICoreWebView2_20>().ok()?;
+    let mut id = 0;
+    unsafe { wv.FrameId(&mut id) }.ok()?;
+    (id != 0).then_some(id)
 }
 
 /// CapturePreview streams PNG bytes into an in-memory IStream; the

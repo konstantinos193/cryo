@@ -100,6 +100,7 @@
     if (libPane === 'bookmarks') paintBookmarks();
     else if (libPane === 'passwords') paintPasswords();
     else if (libPane === 'history') paintHistory();
+    else if (libPane === 'tasks') paintTasks();
     else if (libPane === 'downloads') paintDownloads();
     else if (libPane === 'extensions') paintExtensions();
     else if (libPane === 'import') paintImport();
@@ -110,6 +111,16 @@
     libData = data;
     libPane = data.pane;
     paintLib();
+  };
+
+  // The tasks pane's rows ride their own push: a fresh memory sample
+  // lands without the panel's other data changing, so `__cryo_tasks`
+  // repaints only when the tasks pane is the one showing.
+  let taskData = {tasks: [], measured: false};
+  window.__cryo_tasks = (data) => {
+    taskData = data;
+    taskData.measured = true;
+    if (libOpen && libPane === 'tasks') paintLib();
   };
 
   // One password, for one click. The app has already asked the user.

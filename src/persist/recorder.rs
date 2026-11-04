@@ -128,6 +128,16 @@ impl Recorder {
         self.flush()
     }
 
+    /// Forget everything last seen at or after `cutoff` and flush —
+    /// same reasoning as `remove`.
+    pub fn remove_since(&mut self, cutoff: u64) -> Result<usize, PersistError> {
+        let forgotten = self.history.remove_since(cutoff);
+        if forgotten > 0 {
+            self.flush()?;
+        }
+        Ok(forgotten)
+    }
+
     /// Fold an imported history in and flush once — an explicit user
     /// action earns an immediate write, unlike routine recording.
     /// The caller has already built valid entries through `Entry::new`.

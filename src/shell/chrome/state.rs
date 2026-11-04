@@ -231,3 +231,44 @@ pub struct ChromeTab {
     /// spinner and the reload button for ✕.
     pub loading: bool,
 }
+
+/// One tab row in the tasks pane — what the last sample could honestly
+/// bill to it. `bytes` carries sole-owner private memory only; `reason`
+/// names why there is no figure, in the pane's own words.
+#[derive(Debug, Serialize)]
+pub struct ChromeTask {
+    pub id: u64,
+    pub title: String,
+    pub url: String,
+    /// "active" | "frozen" | "discarded" — frozen and discarded rows
+    /// show their state instead of a figure; there is no process to bill.
+    pub state: &'static str,
+    /// The foreground tab — the pane marks the row rather than
+    /// pretending it is a background one.
+    pub current: bool,
+    /// Sole-owner private bytes — `None` whenever no figure is honest.
+    pub bytes: Option<u64>,
+    /// Why `bytes` is empty on a live row: "shared" | "unattributed" |
+    /// "unreadable". `None` when `bytes` carries the figure.
+    pub reason: Option<&'static str>,
+    pub favicon: Option<String>,
+}
+
+/// The tasks pane payload, pushed by `__cryo_tasks` apart from
+/// `__cryo_library`: a fresh sample lands without the panel's other
+/// data changing, and resending a thousand history rows per sample
+/// would cost more than the sample did.
+#[derive(Debug, Serialize)]
+pub struct ChromeTasks {
+    pub tasks: Vec<ChromeTask>,
+    /// Browser, GPU and utility processes — reported once, never
+    /// divided across tabs.
+    pub overhead: u64,
+    /// Renderer private bytes no single tab owns.
+    pub shared: u64,
+    /// A stats read failed somewhere — every figure here is partial.
+    pub partial: bool,
+    /// Unix seconds when the snapshot landed — stale numbers say when
+    /// they are from.
+    pub sampled_at: u64,
+}

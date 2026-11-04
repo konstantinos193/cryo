@@ -1,12 +1,20 @@
 //! Enumerates the shared WebView2 environment on its COM thread and samples OS memory on a worker.
+//!
+//! `GetProcessExtendedInfos` (Environment13) carries each process's
+//! associated top-level frames — the link between a renderer and the
+//! views it hosts. Runtimes older than Environment13 fall back to the
+//! `GetProcessInfos` enumeration: pids and kinds only, no frames, and
+//! attribution honestly reports nothing per view.
 
 use std::collections::BTreeMap;
 use std::mem::size_of;
 use std::os::windows::io::{FromRawHandle, OwnedHandle};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-    ICoreWebView2Environment, ICoreWebView2Environment8, COREWEBVIEW2_PROCESS_KIND,
+    ICoreWebView2Environment, ICoreWebView2Environment13, ICoreWebView2Environment8,
+    ICoreWebView2FrameInfo2, ICoreWebView2ProcessExtendedInfo,
+    ICoreWebView2ProcessExtendedInfoCollection, COREWEBVIEW2_PROCESS_KIND,
     COREWEBVIEW2_PROCESS_KIND_BROWSER, COREWEBVIEW2_PROCESS_KIND_GPU,
     COREWEBVIEW2_PROCESS_KIND_RENDERER,
 };
@@ -21,19 +29,72 @@ use crate::engine::accounting::{
 };
 use crate::engine::EngineError;
 
+/// One enumerated process: who it is, what kind, and which top-level
+/// frames it hosts. Frames ride with the row so the snapshot is
+/// self-contained — no second pass can re-associate it later.
+type ProcessRow = (ProcessId, ProcessKind, Vec<u32>);
+
+/// How long the worker waits for the extended-infos callback before it
+/// samples nothing. An enumeration that never lands must not strand
+/// the measurement — an empty process list is the honest result.
+const ENUMERATE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Which enumeration answered — the extended call replies on a
+/// channel, the legacy one already holds its rows.
+enum Source {
+    /// `GetProcessExtendedInfos` is in flight; the rows arrive on rx.
+    Extended,
+    /// Runtimes older than Environment13: pid+kind only, no frames.
+    Basic(Vec<ProcessRow>),
+    /// No environment at all.
+    Empty,
+}
+
 pub(in crate::engine::wry_impl) fn measure(
     environment: Option<&ICoreWebView2Environment>,
     complete: MemoryCallback,
 ) -> Result<(), EngineError> {
     let started_at = Instant::now();
-    let processes = environment.map(enumerate).transpose()?.unwrap_or_default();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let source = match environment {
+        Some(environment) => match environment.cast::<ICoreWebView2Environment13>() {
+            Ok(env13) => {
+                let handler = webview2_com::GetProcessExtendedInfosCompletedHandler::create(
+                    Box::new(move |error, collection| {
+                        let rows = if error.is_ok() {
+                            collection.map(collect_rows).unwrap_or_default()
+                        } else {
+                            Vec::new()
+                        };
+                        // A failed send means the worker already
+                        // timed out — nothing is left to signal.
+                        if tx.send(rows).is_err() {
+                            crate::report!("process enumeration arrived with no receiver");
+                        }
+                        Ok(())
+                    }),
+                );
+                unsafe { env13.GetProcessExtendedInfos(&handler) }
+                    .map_err(|e| EngineError::ReadStats(e.to_string()))?;
+                Source::Extended
+            }
+            Err(_) => Source::Basic(enumerate_basic(environment)?),
+        },
+        None => Source::Empty,
+    };
     std::thread::Builder::new()
         .name("cryo-memory".into())
         .spawn(move || {
-            let processes = processes
+            let rows = match source {
+                Source::Extended => rx.recv_timeout(ENUMERATE_TIMEOUT).unwrap_or_default(),
+                Source::Basic(rows) => rows,
+                Source::Empty => Vec::new(),
+            };
+            let processes = rows
                 .into_iter()
-                .map(|(id, kind)| {
+                .map(|(id, kind, frames)| {
                     ProcessMemory::new(id, kind, read_stats(id).map_err(|e| e.to_string()))
+                        .with_frames(frames)
                 })
                 .collect();
             complete(MemorySnapshot::new(started_at, Instant::now(), processes));
@@ -42,10 +103,72 @@ pub(in crate::engine::wry_impl) fn measure(
     Ok(())
 }
 
-fn enumerate(
-    environment: &ICoreWebView2Environment,
-) -> Result<BTreeMap<ProcessId, ProcessKind>, EngineError> {
-    let enumerate = || -> windows::core::Result<_> {
+/// Walk the extended-infos collection into plain rows on the COM
+/// thread — only pid, kind and frame ids cross to the worker.
+fn collect_rows(collection: ICoreWebView2ProcessExtendedInfoCollection) -> Vec<ProcessRow> {
+    let mut rows = Vec::new();
+    unsafe {
+        let mut count = 0;
+        if collection.Count(&mut count).is_err() {
+            return rows;
+        }
+        for index in 0..count {
+            let Ok(info) = collection.GetValueAtIndex(index) else {
+                continue;
+            };
+            let Ok(process) = info.ProcessInfo() else {
+                continue;
+            };
+            let mut pid = 0;
+            let mut kind = COREWEBVIEW2_PROCESS_KIND::default();
+            if process.ProcessId(&mut pid).is_err() || process.Kind(&mut kind).is_err() || pid == 0
+            {
+                continue;
+            }
+            rows.push((
+                ProcessId(pid as u32),
+                process_kind(kind),
+                top_level_frames(&info).unwrap_or_default(),
+            ));
+        }
+    }
+    rows
+}
+
+/// The top-level frame ids a process hosts — one per served view.
+/// A `FrameInfo` with no parent is a hosted view's main frame; a
+/// subframe's presence must not count a tab's own process as shared,
+/// and a foreign top-level frame must, so only the top level counts.
+fn top_level_frames(info: &ICoreWebView2ProcessExtendedInfo) -> windows::core::Result<Vec<u32>> {
+    unsafe {
+        let iterator = info.AssociatedFrameInfos()?.GetIterator()?;
+        let mut frames = Vec::new();
+        let mut current = windows::core::BOOL::default();
+        while iterator.HasCurrent(&mut current).is_ok() && current.as_bool() {
+            let frame = iterator.GetCurrent()?.cast::<ICoreWebView2FrameInfo2>()?;
+            if top_level(&frame) {
+                let mut id = 0;
+                frame.FrameId(&mut id)?;
+                if id != 0 {
+                    frames.push(id);
+                }
+            }
+            iterator.MoveNext(&mut current)?;
+        }
+        Ok(frames)
+    }
+}
+
+/// A frame with no parent is a hosted view's main frame. A null
+/// `ParentFrameInfo` surfaces as an error here, not `Ok`.
+fn top_level(frame: &ICoreWebView2FrameInfo2) -> bool {
+    unsafe { frame.ParentFrameInfo().is_err() }
+}
+
+/// The pre-Environment13 enumeration — the rows it knows are pids and
+/// kinds, so frames stay empty and attribution reports nothing.
+fn enumerate_basic(environment: &ICoreWebView2Environment) -> Result<Vec<ProcessRow>, EngineError> {
+    let enumerate = || -> windows::core::Result<BTreeMap<ProcessId, ProcessKind>> {
         let environment = environment.cast::<ICoreWebView2Environment8>()?;
         let infos = unsafe { environment.GetProcessInfos()? };
         let mut count = 0;
@@ -65,7 +188,11 @@ fn enumerate(
         }
         Ok(processes)
     };
-    enumerate().map_err(|e| EngineError::ReadStats(e.to_string()))
+    let processes = enumerate().map_err(|e| EngineError::ReadStats(e.to_string()))?;
+    Ok(processes
+        .into_iter()
+        .map(|(id, kind)| (id, kind, Vec::new()))
+        .collect())
 }
 
 fn process_kind(kind: COREWEBVIEW2_PROCESS_KIND) -> ProcessKind {

@@ -55,11 +55,28 @@ pub struct ProcessMemory {
     id: ProcessId,
     kind: ProcessKind,
     stats: Result<MemoryStats, String>,
+    /// Top-level frame ids this process hosts — what links a renderer
+    /// to the views it serves. Empty where the engine cannot say (unix,
+    /// fakes, runtimes older than `ICoreWebView2Environment13`), which
+    /// attribution reads as "cannot tell who shares this".
+    frames: Vec<u32>,
 }
 
 impl ProcessMemory {
     pub fn new(id: ProcessId, kind: ProcessKind, stats: Result<MemoryStats, String>) -> Self {
-        Self { id, kind, stats }
+        Self {
+            id,
+            kind,
+            stats,
+            frames: Vec::new(),
+        }
+    }
+
+    /// Attach the process's served top-level frames — the association
+    /// that turns a process list into per-view attribution.
+    pub fn with_frames(mut self, frames: Vec<u32>) -> Self {
+        self.frames = frames;
+        self
     }
 
     pub fn id(&self) -> ProcessId {
@@ -72,6 +89,12 @@ impl ProcessMemory {
 
     pub fn stats(&self) -> Result<MemoryStats, &str> {
         self.stats.as_ref().copied().map_err(String::as_str)
+    }
+
+    /// The top-level frames this process hosts — subframes do not make
+    /// a view, so the collector drops them here.
+    pub fn frames(&self) -> &[u32] {
+        &self.frames
     }
 }
 

@@ -1,7 +1,9 @@
 //! Resource policy: choose background tabs to freeze and decide when an
 //! idle renderer may sleep. The app gathers observations and executes decisions.
 
+mod attribution;
 mod budget;
+pub(crate) use attribution::{attribute, Attribution, LiveView, Pools};
 pub(crate) use budget::{BudgetEnforcer, ByteBudget, Candidate};
 
 use std::time::{Duration, Instant};

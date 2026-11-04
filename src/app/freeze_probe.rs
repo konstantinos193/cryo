@@ -467,3 +467,69 @@ fn wait_for_matches(
         Ok(false)
     })
 }
+
+#[test]
+#[ignore = "opens a live WebView2 window and verifies per-tab memory attribution"]
+fn live_tasks_attribution() -> anyhow::Result<()> {
+    let (mut event_loop, mut app, tabs) = fixture_app("shared")?;
+    pump_until(&mut event_loop, &mut app, |app| {
+        Ok(tabs.iter().all(|id| {
+            app.registry
+                .get(*id)
+                .is_some_and(|t| t.title() == "probe-ready" && !t.is_loading())
+        }))
+    })?;
+    let (tx, rx) = channel();
+    app.engine.measure_memory(Box::new(move |snapshot| {
+        if tx.send(snapshot).is_err() {
+            crate::report!("attribution probe receiver closed");
+        }
+    }))?;
+    let mut snapshot = None;
+    pump_until(&mut event_loop, &mut app, |_| {
+        if let Ok(s) = rx.try_recv() {
+            snapshot = Some(s);
+            return Ok(true);
+        }
+        Ok(false)
+    })?;
+    let snapshot = snapshot.expect("pump_until returned with a snapshot");
+    let live: Vec<crate::memory::LiveView> = app
+        .registry
+        .views()
+        .map(|(tab, view)| crate::memory::LiveView {
+            id: tab.id(),
+            frame: view.frame_id(),
+        })
+        .collect();
+    let framed = live.iter().filter(|v| v.frame.is_some()).count();
+    let renderer_frames: usize = snapshot
+        .processes()
+        .iter()
+        .filter(|p| p.kind() == crate::engine::accounting::ProcessKind::Renderer)
+        .map(|p| p.frames().len())
+        .sum();
+    let (rows, pools) = crate::memory::attribute(&snapshot, &live);
+    crate::report!(
+        "TASK_PROBE {}",
+        serde_json::json!({
+            "views": live.len(), "views_with_frame_id": framed,
+            "renderer_top_level_frames": renderer_frames,
+            "rows": rows.iter().map(|(id, a)| serde_json::json!({"tab": id.get(), "attribution": format!("{a:?}")})).collect::<Vec<_>>(),
+            "overhead_mib": pools.overhead as f64 / 1048576.0,
+            "shared_renderers_mib": pools.shared_renderers as f64 / 1048576.0,
+            "partial": pools.partial,
+        })
+    );
+    anyhow::ensure!(framed == live.len(), "a live view reported no frame id");
+    anyhow::ensure!(
+        renderer_frames >= live.len(),
+        "no renderer carried its served frames"
+    );
+    anyhow::ensure!(
+        rows.iter()
+            .any(|(_, a)| matches!(a, crate::memory::Attribution::Sole(_) | crate::memory::Attribution::Shared)),
+        "attribution billed no view at all"
+    );
+    Ok(())
+}

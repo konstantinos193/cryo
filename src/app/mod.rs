@@ -32,6 +32,7 @@ mod resources;
 mod suggest;
 mod surfaces;
 mod tabfind;
+mod tasks;
 mod transfer;
 mod update;
 mod window;
@@ -259,6 +260,11 @@ pub struct App {
     /// repaints after a change. `None` means the panel is shut and
     /// there is nothing to push.
     library_pane: Option<String>,
+    /// The last memory snapshot the engine produced, with the unix
+    /// second it landed — the tasks pane's rows bill from it, and the
+    /// pane says when the numbers are from. `None` before the first
+    /// sample.
+    last_memory: Option<(u64, crate::engine::accounting::MemorySnapshot)>,
     /// Browser profiles the last discovery found. The `import_profile`
     /// command indexes this list, so a path never travels through the
     /// chrome document.
@@ -409,6 +415,7 @@ impl App {
             permission_seq: 0,
             incognito: profile.incognito,
             library_pane: None,
+            last_memory: None,
             import_sources: None,
             download_archive: Vec::new(),
             download_seq: 0,

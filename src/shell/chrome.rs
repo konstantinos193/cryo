@@ -4,7 +4,7 @@ mod command;
 mod navigation;
 mod state;
 mod suggestions;
-pub use command::ChromeCommand;
+pub use command::{ChromeCommand, ClearRange};
 pub use navigation::{canonize_nav_input, normalize_nav_input};
 pub use state::*;
 pub use suggestions::{completion_for, SuggestReply, Suggestion};
@@ -48,6 +48,8 @@ pub(crate) const SCRIPT: &str = concat!(
     include_str!("chrome/passwords.js"),
     "\n",
     include_str!("chrome/history.js"),
+    "\n",
+    include_str!("chrome/tasks.js"),
     "\n",
     include_str!("chrome/extensions.js"),
     "

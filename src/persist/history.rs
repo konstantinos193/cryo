@@ -121,6 +121,16 @@ impl History {
         self.entries.clear();
     }
 
+    /// Forget every entry last seen at or after `cutoff` — the history
+    /// pane's range forget. The store keeps only the latest visit, so a
+    /// destination touched inside the range is forgotten whole, earlier
+    /// visits with it. Returns how many entries went.
+    pub fn remove_since(&mut self, cutoff: u64) -> usize {
+        let before = self.entries.len();
+        self.entries.retain(|e| e.last_seen < cutoff);
+        before - self.entries.len()
+    }
+
     /// Fold an imported history into this one.
     ///
     /// Counts take the stronger of the two rather than adding: importing
@@ -227,6 +237,26 @@ mod tests {
         assert_eq!(h.entries()[0].text, "https://b");
         h.clear();
         assert!(h.entries().is_empty());
+    }
+
+    #[test]
+    fn remove_since_forgets_the_range_and_keeps_the_rest() {
+        let mut h = History::default();
+        h.record("https://old", None, 10);
+        h.record("https://edge-before", None, 99);
+        h.record("https://recent", None, 100);
+        h.record("https://newest", None, 500);
+        assert_eq!(h.remove_since(100), 2, "the cutoff itself is forgotten");
+        assert_eq!(
+            h.entries()
+                .iter()
+                .map(|e| e.text.as_str())
+                .collect::<Vec<_>>(),
+            ["https://old", "https://edge-before"]
+        );
+        assert_eq!(h.remove_since(0), 2, "a zero cutoff forgets everything");
+        assert!(h.entries().is_empty());
+        assert_eq!(h.remove_since(0), 0, "an empty history forgets nothing");
     }
 
     #[test]

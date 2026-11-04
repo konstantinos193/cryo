@@ -202,10 +202,22 @@ pub enum ChromeCommand {
     HistoryRemove {
         text: String,
     },
-    /// "Clear history" — forgets every recorded visit and typed input.
-    /// A struct variant so a stray `{"cmd":"history_clear","x":…}`
-    /// fails `deny_unknown_fields` rather than parsing anyway.
-    HistoryClear {},
+    /// "Clear history" — forgets visits and typed input over `range`,
+    /// a named span the pane's picker sends. Absent means everything,
+    /// so the old bare `{"cmd":"history_clear"}` still parses.
+    HistoryClear {
+        #[serde(default)]
+        range: ClearRange,
+    },
+    /// The tasks pane's Freeze on a row — the same operation the strip
+    /// applies to the tab under it, by tab id.
+    TabFreeze {
+        id: u64,
+    },
+    /// The tasks pane's Discard on a row.
+    TabDiscard {
+        id: u64,
+    },
     /// Show one saved password in the clear. The app asks the user to
     /// confirm before it answers — a click in this document is not on
     /// its own enough to put a secret on screen.
@@ -248,4 +260,46 @@ pub enum ChromeCommand {
     Export {
         what: String,
     },
+}
+
+/// The span a history clear covers. Only the values the pane's picker
+/// offers reach the wire — a document cannot ask for an arbitrary
+/// cutoff. `All` is the default so a bare `history_clear` keeps
+/// meaning everything.
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClearRange {
+    /// The last hour.
+    Hour,
+    /// The last 24 hours.
+    Day,
+    /// The last week.
+    Week,
+    /// Every recorded visit and typed input.
+    #[default]
+    All,
+}
+
+impl ClearRange {
+    /// Seconds back from now the range covers — `None` when it covers
+    /// the whole history rather than a cutoff.
+    pub fn seconds(self) -> Option<u64> {
+        match self {
+            Self::Hour => Some(60 * 60),
+            Self::Day => Some(24 * 60 * 60),
+            Self::Week => Some(7 * 24 * 60 * 60),
+            Self::All => None,
+        }
+    }
+
+    /// How the confirm dialog names the span. Phrasing stays on this
+    /// side; the document only picks a wire value.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Hour => "the last hour",
+            Self::Day => "the last 24 hours",
+            Self::Week => "the last week",
+            Self::All => "everything",
+        }
+    }
 }
