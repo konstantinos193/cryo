@@ -72,7 +72,6 @@
   var resetButton = document.getElementById("reset");
   var shipped = [];
   var dials = [];
-  var painted = false;
 
   // An entry is only ever stored once it survives this: a name, and an
   // http or https address the URL parser agrees with.
@@ -142,7 +141,6 @@
   function slotFor(d, i) {
     var slot = document.createElement("div");
     slot.className = "slot";
-    slot.style.animationDelay = (0.24 + i * 0.045).toFixed(2) + "s";
 
     var a = document.createElement("a");
     a.className = "tile";
@@ -186,7 +184,6 @@
     var b = document.createElement("button");
     b.type = "button";
     b.className = "tile add";
-    b.style.animationDelay = (0.24 + dials.length * 0.045).toFixed(2) + "s";
     b.setAttribute("aria-label", "Add a tile");
     var dot = document.createElement("span");
     dot.className = "dot";
@@ -206,9 +203,6 @@
     var reachable = Math.min(dials.length, 9);
     document.getElementById("dial-max").textContent = reachable;
     document.getElementById("dial-hint").hidden = reachable < 2;
-    // Only the arrival is worth staging; later repaints are edits.
-    if (painted) dialWrap.classList.add("settled");
-    painted = true;
   }
 
   // The editor is a dialog over the page. It opens empty, closes on the
@@ -276,6 +270,58 @@
     }
   }).catch(function () { if (!own) paint(); });
 
+  // ---- Mail at a glance ----------------------------------------------
+  // The card is a link to /mail whatever happens. What the app evals in
+  // is counts and status only — this page is a content surface and
+  // learns nothing else about the mailbox. The ask goes over the same
+  // window.ipc the autofill bridge uses; the app answers only a home
+  // tab, and only with this.
+  var mailCard = document.getElementById("mail");
+  var mailCount = document.getElementById("mail-n");
+  var mailTitle = document.getElementById("mail-title");
+  var mailSub = document.getElementById("mail-sub");
+
+  function plural(n, word) { return n + " " + word + (n === 1 ? "" : "s"); }
+
+  window.__cryo_mail_glance = function (g) {
+    if (!g || g.incognito) {
+      mailCard.hidden = true;
+      return;
+    }
+    mailCard.hidden = false;
+    var accounts = g.accounts || [];
+    var unseen = Number(g.unseen) || 0;
+    var syncing = accounts.some(function (a) { return a.status === "syncing"; });
+    var failed = accounts.filter(function (a) {
+      return a.status && a.status !== "syncing";
+    })[0];
+    mailCard.classList.toggle("syncing", syncing);
+    mailCard.classList.toggle("bad", !!failed);
+    mailCard.classList.toggle("unread", unseen > 0);
+    mailCount.hidden = unseen === 0;
+    mailCount.textContent = unseen > 99 ? "99+" : String(unseen);
+    if (!accounts.length) {
+      mailTitle.textContent = "Mail";
+      mailSub.textContent = "Set up your inbox";
+      mailCard.setAttribute("aria-label", "Set up mail");
+      return;
+    }
+    var where = accounts.length === 1
+      ? accounts[0].email
+      : "across " + plural(accounts.length, "account");
+    mailTitle.textContent = unseen ? plural(unseen, "unread message") : "Inbox";
+    mailSub.textContent = failed
+      ? failed.email + " — " + failed.status
+      : syncing
+        ? "Syncing " + where
+        : unseen ? where : "All caught up · " + where;
+    mailCard.setAttribute("aria-label",
+      "Open mail, " + (unseen ? plural(unseen, "unread message") : "nothing unread"));
+  };
+  try {
+    window.ipc.postMessage(JSON.stringify({kind: "mail_glance"}));
+  } catch (err) {}
+
   // ---- Clock, keys, frost ---------------------------------------------
   // The clock shows seconds, so it re-reads the time on the second
   // rather than every 1000ms from whenever the page happened to load,
@@ -298,9 +344,10 @@
     document.body.classList.toggle("still", document.hidden);
   });
 
-  // Keyboard: "/" reaches the box from anywhere, Escape backs out of
-  // whatever is open, and a digit opens that tile. Modified keys belong
-  // to the chrome's accelerators, so they pass straight through.
+  // Keyboard: "/" reaches the box from anywhere, "m" opens mail, Escape
+  // backs out of whatever is open, and a digit opens that tile.
+  // Modified keys belong to the chrome's accelerators, so they pass
+  // straight through.
   document.addEventListener("keydown", function (e) {
     if (e.ctrlKey || e.altKey || e.metaKey) return;
     var typing = e.target.tagName === "INPUT";
@@ -323,6 +370,10 @@
       box.focus();
       return;
     }
+    if (e.key === "m" && !mailCard.hidden) {
+      location.href = mailCard.href;
+      return;
+    }
     if (e.key >= "1" && e.key <= "9") {
       var pick = dials[Number(e.key) - 1];
       if (pick) location.href = pick.url;
@@ -331,7 +382,9 @@
 
   // The pointer drags the ice field along and blooms frost under itself.
   // One rAF per frame of movement, and nothing at all when the pointer is
-  // still or motion is turned down.
+  // still or motion is turned down. Both are transforms: the field slides
+  // as a whole, and the frost disc is positioned by --mx/--my (its
+  // stylesheet slides the pattern back so the lines stay put).
   if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
     var field = document.getElementById("field");
     var lattice = document.getElementById("lattice");

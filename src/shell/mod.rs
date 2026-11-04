@@ -5,6 +5,7 @@ pub mod chrome;
 pub mod dial;
 pub mod error;
 pub mod geometry;
+pub mod mail;
 pub mod newtab;
 pub mod pages;
 pub mod search;

@@ -61,6 +61,14 @@
     background: var(--tab-active); border-color: var(--line);
     box-shadow: inset 0 1px 0 rgba(var(--sheen-rgb), .05);
   }
+  /* Reorder in flight: neighbours slide aside, the lifted tab tracks the
+     pointer without easing and paints over them. */
+  #tabs.reordering .tab { transition: transform .12s ease; }
+  .tab.dragging {
+    position: relative; z-index: 2; transition: none;
+    background: var(--tab-active); border-color: var(--line);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, .3);
+  }
   .tab .title { overflow: hidden; text-overflow: ellipsis; }
   .tab .x { color: var(--tx3); padding: 0 3px; border-radius: 4px; }
   .tab .x:hover { background: rgba(var(--bad-rgb), .18); color: var(--bad-tx); }
@@ -118,10 +126,13 @@
     animation: tabspin .7s linear infinite;
   }
   @keyframes tabspin { to { transform: rotate(360deg); } }
+  /* The address field and the site button share one pill; the button
+     sits inside the field's left edge like Chrome's lock. */
+  #omni { flex: 1 1 auto; min-width: 120px; position: relative; display: flex; }
   #url {
-    flex: 1 1 auto; min-width: 120px; height: 30px;
+    flex: 1 1 auto; min-width: 0; height: 30px;
     background: var(--bg2); border: 1px solid var(--line-soft); border-radius: 15px;
-    color: var(--tx); padding: 0 14px; font: inherit; outline: none;
+    color: var(--tx); padding: 0 14px 0 34px; font: inherit; outline: none;
     transition: border-color .12s ease, box-shadow .12s ease, background .12s ease;
     -webkit-user-select: text; user-select: text;
   }
@@ -130,6 +141,55 @@
     background: var(--bg0); border-color: var(--accent-deep);
     box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .14);
   }
+  #site {
+    position: absolute; left: 5px; top: 3px; width: 24px; height: 24px;
+    border: 0; border-radius: 12px; background: transparent; color: var(--tx3);
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    padding: 0; transition: background .1s ease, color .1s ease;
+  }
+  #site:hover { background: rgba(var(--hair-rgb), .1); color: var(--tx); }
+  #site svg { width: 14px; height: 14px; display: none; }
+  #site.secure .ic-lock, #site.insecure .ic-info, #site.internal .ic-cryo { display: block; }
+  #site.insecure { color: var(--bad-tx); }
+  #site-pop {
+    display: none; position: fixed; top: 40px; z-index: 10;
+    width: 320px; padding: 6px;
+    background: var(--pop-bg); border: 1px solid var(--line-pop);
+    border-radius: 12px; box-shadow: var(--shadow); color: var(--tx);
+  }
+  #site-pop.open { display: block; }
+  .site-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 10px 6px; font-size: 14px;
+  }
+  .site-head strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .site-close {
+    border: 0; background: transparent; color: var(--tx3); font-size: 16px;
+    width: 24px; height: 24px; border-radius: 12px; cursor: pointer;
+  }
+  .site-close:hover { background: rgba(var(--hair-rgb), .1); color: var(--tx); }
+  .site-row {
+    display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+    border-radius: 8px; font-size: 12px;
+  }
+  .site-row::before {
+    content: ''; width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%;
+    background: var(--tx3);
+  }
+  .site-secure::before { background: var(--accent); }
+  .site-insecure::before { background: var(--bad-tx); }
+  .site-detail { color: var(--tx3); font-size: 11px; margin-top: 2px; }
+  .site-perms { border-top: 1px solid var(--line-soft); margin-top: 4px; padding: 8px 10px 6px; }
+  .site-perms-title { font-size: 11px; color: var(--tx3); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
+  .site-perm { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 12px; }
+  .site-perm-state { margin-left: auto; font-size: 11px; color: var(--tx3); }
+  .site-perm-state.allowed { color: var(--accent); }
+  .site-perm-state.blocked { color: var(--bad-tx); }
+  .site-reset {
+    border: 1px solid var(--line); background: transparent; color: var(--tx2);
+    font: inherit; font-size: 11px; padding: 2px 8px; border-radius: 8px; cursor: pointer;
+  }
+  .site-reset:hover { background: rgba(var(--hair-rgb), .08); color: var(--tx); }
   #url::placeholder { color: var(--tx3); }
   #signin {
     flex: 0 0 auto; height: 26px; padding: 0 12px;

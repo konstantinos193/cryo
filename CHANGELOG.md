@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.18.0
+
+### Added
+
+- A mail client at `/mail` (`Ctrl+Shift+M`): IMAP folders, threaded
+  envelopes, a reading pane and SMTP send, with provider autoconfig and
+  a guess for the rest. Everything on the wire lives on one worker
+  thread that connects per batch and drops its sessions after an idle
+  spell; bodies are sanitized (`ammonia`) before they reach the page,
+  inline `cid:` images become data URLs, and the engine never sees a
+  socket. The home page shows a mail-at-a-glance card with unread
+  counts and sync status; incognito windows hide it.
+- Site information popup behind the lock in the address bar: what the
+  page is, whether the connection is secure, its cookie count, and the
+  permission decisions remembered for it, each resettable there.
+- Permission decisions are remembered per origin in `permissions.json`
+  (an explicit Allow or Block answers the next request without asking;
+  a dismissed prompt denies once). Notifications join the permission
+  kinds. Incognito keeps grants in memory only.
+- Tabs reorder by drag, Chrome-style: a horizontal pull picks the tab
+  up, the drop relocates it.
+- A warm keeper (`--warm`, `CRYO_WARM_MINUTES`, default 30) holds
+  WebView2's browser process open after the last window closes, so the
+  next launch attaches in ~200 ms instead of booting it in ~650 ms.
+
+### Changed
+
+- The window shows right after placement, before the first view exists,
+  so a launch no longer looks hung while WebView2 boots.
+- History is read on a worker thread and hydrated when it arrives; a
+  multi-megabyte file the antivirus is still scanning no longer blocks
+  the launch. Clears and removals made before it arrives replay over it.
+
 ## 0.16.1
 
 ### Fixed

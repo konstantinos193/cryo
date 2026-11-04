@@ -9,36 +9,59 @@
 
 use std::sync::mpsc::Receiver;
 
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{InvalidateRect, ValidateRect};
+use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetMessageW, PeekMessageW, SendMessageW, TranslateMessage, MSG, PM_REMOVE,
-    WM_PAINT, WM_SETREDRAW,
+    DispatchMessageW, GetMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE, WM_PAINT,
 };
 
-/// Toggle `WM_SETREDRAW` on the host window around a WebView2 spawn.
+/// Swallow the host window's `WM_PAINT` around a WebView2 spawn.
 /// `clear_pending_paints` drains paints already queued; it cannot stop a
 /// NEW one being generated while wry's `build_as_child` waits inside its
 /// own pump — an occlusion change, a resize, a sibling painting. That
 /// paint dispatches into tao's runner mid-handler and panics it (#23).
-/// `WM_SETREDRAW false` means none is generated for the wait's duration;
-/// re-enabling plus `InvalidateRect` repaints what was suppressed.
-pub(crate) fn suppress_redraw(handle: &raw_window_handle::RawWindowHandle, suppress: bool) {
-    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+///
+/// A subclass on the window answers `WM_PAINT` itself while `on` —
+/// validating the region, so tao's own proc (and the re-entrant
+/// `RedrawRequested` it would raise) never runs. Off again, the window
+/// is invalidated once to repaint what was swallowed. This is a
+/// subclass and not `WM_SETREDRAW` on purpose: redraw-off strips the
+/// window's `WS_VISIBLE`, and WebView2 holds a controller's creation
+/// on a window it cannot see — the same spawn took ~1.7 s that way and
+/// ~0.6 s with the window left visible.
+///
+/// `SetWindowSubclass` with the same proc and id updates the reference
+/// data, so the flag rides on the window itself — no static.
+pub(crate) fn swallow_paints(handle: &raw_window_handle::RawWindowHandle, on: bool) {
     let raw_window_handle::RawWindowHandle::Win32(win32) = handle else {
         return;
     };
     let hwnd = HWND(win32.hwnd.get() as _);
     unsafe {
-        SendMessageW(
-            hwnd,
-            WM_SETREDRAW,
-            Some(WPARAM(suppress as usize)),
-            Some(LPARAM(0)),
-        );
-        if !suppress {
+        let _ = SetWindowSubclass(hwnd, Some(paint_gate), PAINT_GATE_ID, usize::from(on));
+        if !on {
             let _ = InvalidateRect(Some(hwnd), None, true);
         }
     }
+}
+
+/// The one subclass id this module installs on the host window.
+const PAINT_GATE_ID: usize = 0x6372_796f; // "cryo"
+
+unsafe extern "system" fn paint_gate(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    swallowing: usize,
+) -> LRESULT {
+    if msg == WM_PAINT && swallowing != 0 {
+        let _ = ValidateRect(Some(hwnd), None);
+        return LRESULT(0);
+    }
+    DefSubclassProc(hwnd, msg, wparam, lparam)
 }
 
 /// Drop queued paints and clear their windows' update regions. Run before

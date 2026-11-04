@@ -94,6 +94,10 @@ pub struct WryEngine {
     #[cfg(target_os = "windows")]
     extension_profile:
         RefCell<Option<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Profile7>>,
+    /// The browser process the first view booted — every later view in
+    /// this environment shares it. Read once, from that view.
+    #[cfg(target_os = "windows")]
+    browser_process: std::cell::Cell<Option<u32>>,
 }
 
 impl WryEngine {
@@ -119,6 +123,8 @@ impl WryEngine {
             extensions_loaded: std::cell::Cell::new(false),
             #[cfg(target_os = "windows")]
             extension_profile: RefCell::new(None),
+            #[cfg(target_os = "windows")]
+            browser_process: std::cell::Cell::new(None),
         }
     }
 
@@ -138,7 +144,7 @@ impl WryEngine {
         if let Some(env) = &*self.environment.borrow() {
             return Ok(env.clone());
         }
-        let env = create_environment(self.extensions_dir.is_some())?;
+        let env = create_environment()?;
         *self.environment.borrow_mut() = Some(env.clone());
         Ok(env)
     }
@@ -191,13 +197,20 @@ fn browser_args() -> String {
 /// Null executable folder and user-data folder mean WebView2's defaults,
 /// which is what a wry view with no custom context already gets.
 #[cfg(target_os = "windows")]
-/// `extensions` turns on `AreBrowserExtensionsEnabled`. It has to be decided
-/// here rather than on the builder: wry sets the same option during *its*
-/// environment creation, which `with_environment` replaces, so a builder
-/// flag alone would leave the environment refusing installs. WebView2
-/// requires runtime 120.0.2210.55 or newer for this; older runtimes ignore
-/// the option and extensions simply never appear.
-fn create_environment(extensions: bool) -> Result<ICoreWebView2Environment, EngineError> {
+/// `AreBrowserExtensionsEnabled` is set here rather than on the builder:
+/// wry sets the same option during *its* environment creation, which
+/// `with_environment` replaces, so a builder flag alone would leave the
+/// environment refusing installs. WebView2 requires runtime 120.0.2210.55
+/// or newer for this; older runtimes ignore the option and extensions
+/// simply never appear.
+///
+/// It is on for every cryo process, incognito included: WebView2 runs one
+/// browser process per user data folder and refuses a second environment
+/// whose options differ (`ERROR_INVALID_STATE`, 0x8007139F) — an incognito
+/// window built without the option could not open beside a normal one,
+/// nor attach to the warm keeper. Whether a *view* loads extensions is
+/// still the builder's `with_extensions_path`, which incognito never sets.
+fn create_environment() -> Result<ICoreWebView2Environment, EngineError> {
     use std::sync::mpsc::channel;
     use webview2_com::{
         CoreWebView2EnvironmentOptions, CreateCoreWebView2EnvironmentCompletedHandler,
@@ -214,7 +227,7 @@ fn create_environment(extensions: bool) -> Result<ICoreWebView2Environment, Engi
     let options = CoreWebView2EnvironmentOptions::default();
     unsafe {
         options.set_additional_browser_arguments(browser_args());
-        options.set_are_browser_extensions_enabled(extensions);
+        options.set_are_browser_extensions_enabled(true);
         let lcid = GetUserDefaultUILanguage();
         let mut lang = [0u16; MAX_LOCALE_NAME as usize];
         LCIDToLocaleName(lcid as u32, Some(&mut lang), LOCALE_ALLOW_NEUTRAL_NAMES);
@@ -246,6 +259,13 @@ fn create_environment(extensions: bool) -> Result<ICoreWebView2Environment, Engi
 }
 
 impl Engine for WryEngine {
+    #[cfg(target_os = "windows")]
+    fn browser_process(&self) -> Option<crate::engine::accounting::ProcessId> {
+        self.browser_process
+            .get()
+            .map(crate::engine::accounting::ProcessId)
+    }
+
     /// Nothing is loaded before the first content view exists, and an empty
     /// list is the true answer then — not a failure.
     #[cfg(target_os = "windows")]
@@ -426,12 +446,13 @@ impl Engine for WryEngine {
 
         // `build_as_child` waits on its own pump; clear queued paints or a
         // mid-spawn WM_PAINT re-enters tao's handler (see `pump`), and
-        // suppress redraw so no NEW paint can be generated during the
-        // wait — the re-entrancy panic seen in CI (#23).
+        // gate the host window's paints so a NEW one generated during the
+        // wait is answered without tao — the re-entrancy panic seen in
+        // CI (#23).
         #[cfg(target_os = "windows")]
         {
             pump::clear_pending_paints();
-            pump::suppress_redraw(&self.parent, true);
+            pump::swallow_paints(&self.parent, true);
         }
 
         // SAFETY: `parent` is the handle of the window `App` owns for the
@@ -441,8 +462,21 @@ impl Engine for WryEngine {
             .build_as_child(&parent)
             .map_err(|e| EngineError::Spawn(e.to_string()));
         #[cfg(target_os = "windows")]
-        pump::suppress_redraw(&self.parent, false);
+        pump::swallow_paints(&self.parent, false);
         let view = view?;
+        #[cfg(target_os = "windows")]
+        if self.browser_process.get().is_none() {
+            use wry::WebViewExtWindows;
+            let mut pid = 0u32;
+            let read = unsafe { view.controller().CoreWebView2() }
+                .and_then(|webview| unsafe { webview.BrowserProcessId(&mut pid) });
+            match read {
+                Ok(()) => self.browser_process.set(Some(pid)),
+                // The keeper then boots without waiting — the next launch
+                // may be cold, which is the state before keepers existed.
+                Err(e) => crate::report!("browser process id unavailable: {e}"),
+            }
+        }
         // Only now: a spawn that failed loaded nothing, and the next
         // content view should still get the chance to.
         #[cfg(target_os = "windows")]

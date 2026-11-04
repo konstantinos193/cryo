@@ -70,6 +70,8 @@ enum KeyCommand {
     /// Ctrl+H: the library panel's history pane. History is private —
     /// never a fetchable page — so it lives in the chrome overlay.
     History,
+    /// Ctrl+Shift+M: the mail client — focuses its tab if one exists.
+    Mail,
     /// Shift+Esc: the tasks pane — every tab, its state, and what the
     /// last memory sample could honestly bill to it.
     Tasks,
@@ -105,6 +107,7 @@ fn key_command(acc: Accelerator) -> Option<(KeyCommand, bool)> {
         (true, false, true, End) => (KeyCommand::MoveTabTo(usize::MAX), true),
         (true, false, true, Character('k')) => (KeyCommand::DuplicateTab, true),
         (true, false, false, Character('m')) => (KeyCommand::MuteTab, true),
+        (true, false, true, Character('m')) => (KeyCommand::Mail, true),
         (true, false, true, Character('q')) => (KeyCommand::Quit, true),
         (false, true, false, Home) => (KeyCommand::GoHome, true),
         (false, false, false, F(6)) => (KeyCommand::CycleFocus, true),
@@ -285,6 +288,7 @@ impl App {
             KeyCommand::Library => self.toggle_library(),
             KeyCommand::History => self.toggle_history(),
             KeyCommand::Tasks => self.toggle_tasks(),
+            KeyCommand::Mail => self.open_mail(),
             KeyCommand::Find => self.open_find(),
             KeyCommand::FindNext(backwards) => self.next_match(backwards),
             KeyCommand::FreezeActive => match self.registry.active_id() {

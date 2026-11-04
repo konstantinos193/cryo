@@ -31,11 +31,18 @@ pub(super) fn allowed(access: ViewAccess, internal: bool, path: &str) -> bool {
         ViewAccess::Content if internal => {
             path.starts_with("/newtab/")
                 || path.starts_with("/settings/")
+                || path.starts_with("/mail/")
                 || path.starts_with("/error/")
                 || theme
                 || matches!(
                     path,
-                    "/newtab" | "/settings" | "/error" | "/dials" | "/engines" | "/themes"
+                    "/newtab"
+                        | "/settings"
+                        | "/mail"
+                        | "/error"
+                        | "/dials"
+                        | "/engines"
+                        | "/themes"
                 )
         }
         _ => false,
@@ -208,7 +215,12 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
-        for page in ["/newtab", "/settings", crate::shell::error::ERROR_PATH] {
+        for page in [
+            "/newtab",
+            "/settings",
+            "/mail",
+            crate::shell::error::ERROR_PATH,
+        ] {
             for asset in links(page) {
                 assert!(
                     allowed(ViewAccess::Content, true, &asset),

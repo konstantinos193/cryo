@@ -14,8 +14,15 @@
     <button class="nav" id="reload" title="Reload (F5)"><svg class="ic-reload" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 3.5v4h-4"/></svg><svg class="ic-stop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg></button>
     <div id="tabs"></div>
     <button id="new-tab" title="New tab (Ctrl+T)">+</button>
-    <input id="url" type="text" spellcheck="false"
-           placeholder="Search or enter address">
+    <div id="omni">
+      <button id="site" title="View site information" aria-label="View site information">
+        <svg class="ic-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+        <svg class="ic-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+        <svg class="ic-cryo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9M12 3l-2.5 2.5M12 3l2.5 2.5M12 21l-2.5-2.5M12 21l2.5-2.5"/></svg>
+      </button>
+      <input id="url" type="text" spellcheck="false"
+             placeholder="Search or enter address">
+    </div>
     <button class="nav" id="star" title="Bookmark this page (Ctrl+D)">★</button>
     <button id="signin" title="Sign in with your Google account">Sign in</button>
     <button class="nav" id="dl" title="Downloads" hidden><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 1.5v6.8"/><path d="M3.8 5.2 7 8.4l3.2-3.2"/><path d="M2 11.5h10"/></svg><svg class="ring" viewBox="0 0 24 24" aria-hidden="true"><circle class="ring-track" cx="12" cy="12" r="9.5"/><circle class="ring-prog" cx="12" cy="12" r="9.5"/></svg></button>
@@ -26,6 +33,7 @@
   <div id="menu-pop"></div>
   <div id="acct-pop"></div>
   <div id="omni-pop"></div>
+  <div id="site-pop" role="dialog" aria-label="Site information"></div>
   <div id="dl-pop"></div>
   <div id="lib">
     <div class="panel">

@@ -221,6 +221,23 @@ mod tests {
         assert!(matches!(cmd, ChromeCommand::Ready { engine: None }));
         let cmd: ChromeCommand = serde_json::from_str(r#"{"cmd":"activate","id":3}"#).unwrap();
         assert!(matches!(cmd, ChromeCommand::Activate { id: 3 }));
+        let cmd: ChromeCommand =
+            serde_json::from_str(r#"{"cmd":"relocate","id":3,"index":0}"#).unwrap();
+        assert!(matches!(cmd, ChromeCommand::Relocate { id: 3, index: 0 }));
+        let cmd: ChromeCommand =
+            serde_json::from_str(r#"{"cmd":"permission_dismiss","token":4}"#).unwrap();
+        assert!(matches!(cmd, ChromeCommand::PermissionDismiss { token: 4 }));
+        let cmd: ChromeCommand = serde_json::from_str(r#"{"cmd":"site_info"}"#).unwrap();
+        assert!(matches!(cmd, ChromeCommand::SiteInfo));
+        let cmd: ChromeCommand = serde_json::from_str(
+            r#"{"cmd":"permission_reset","origin":"https://meet.test","capability":"camera"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            cmd,
+            ChromeCommand::PermissionReset { origin, capability }
+                if origin == "https://meet.test" && capability == "camera"
+        ));
         // Freeze/discard carry an optional id — absent means active tab.
         let cmd: ChromeCommand = serde_json::from_str(r#"{"cmd":"freeze","id":3}"#).unwrap();
         assert!(matches!(cmd, ChromeCommand::Freeze { id: Some(3) }));

@@ -114,6 +114,53 @@ test('restoring drops the stored list back to the shipped one', async (t) => {
   assert.ok(reset.hidden);
 });
 
+test('the mail card asks the app for a glance and paints what comes back', async (t) => {
+  const window = home(t);
+  await settle();
+  const card = window.document.getElementById('mail');
+  assert.equal(card.getAttribute('href'), '/mail');
+  assert.ok(!card.hidden, 'the card is a link before any push lands');
+  assert.equal(window.document.getElementById('mail-title').textContent, 'Mail');
+
+  window.__cryo_mail_glance({ incognito: false, unseen: 0, accounts: [] });
+  assert.equal(window.document.getElementById('mail-sub').textContent, 'Set up your inbox');
+  assert.ok(window.document.getElementById('mail-n').hidden);
+
+  window.__cryo_mail_glance({
+    incognito: false, unseen: 3,
+    accounts: [{ email: 'ann@example.com', display: 'Ann', unseen: 3, status: '' }],
+  });
+  assert.equal(window.document.getElementById('mail-title').textContent, '3 unread messages');
+  assert.equal(window.document.getElementById('mail-sub').textContent, 'ann@example.com');
+  assert.equal(window.document.getElementById('mail-n').textContent, '3');
+  assert.ok(!window.document.getElementById('mail-n').hidden);
+
+  window.__cryo_mail_glance({
+    incognito: false, unseen: 0,
+    accounts: [{ email: 'ann@example.com', display: 'Ann', unseen: 0, status: 'syncing' }],
+  });
+  assert.ok(card.classList.contains('syncing'));
+  assert.equal(window.document.getElementById('mail-sub').textContent, 'Syncing ann@example.com');
+
+  window.__cryo_mail_glance({ incognito: true, unseen: 0, accounts: [] });
+  assert.ok(card.hidden, 'incognito has no mail to glance at');
+});
+
+test('the home page sends exactly one question over the page channel', async (t) => {
+  const sent = [];
+  const { window } = new JSDOM(HOME, {
+    url: 'http://cryo.localhost/newtab',
+    runScripts: 'outside-only',
+  });
+  t.after(() => window.close());
+  window.fetch = () => Promise.resolve({ json: () => Promise.resolve([]) });
+  window.matchMedia = () => ({ matches: false });
+  window.ipc = { postMessage: (body) => sent.push(JSON.parse(body)) };
+  window.eval(HOME_JS);
+  await settle();
+  assert.deepEqual(sent, [{ kind: 'mail_glance' }]);
+});
+
 test('stored junk is dropped instead of painted', async (t) => {
   const window = home(t, [
     { name: 'Evil', url: 'javascript:alert(1)' },

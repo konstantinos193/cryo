@@ -38,9 +38,97 @@
   // is reported so the bounds stay in sync. Clicks anywhere outside a
   // popup land on this document and dismiss.
   let menuOpen = false, omniOpen = false, dlOpen = false, libOpen = false,
-      acctOpen = false, passwordOpen = false;
+      acctOpen = false, passwordOpen = false, siteOpen = false;
   const reportOverlay = () =>
-    ipc({cmd: 'overlay', open: menuOpen || omniOpen || dlOpen || libOpen || acctOpen || passwordOpen || permissionOpen || tabfindOpen || installOpen});
+    ipc({cmd: 'overlay', open: menuOpen || omniOpen || dlOpen || libOpen || acctOpen || passwordOpen || permissionOpen || tabfindOpen || installOpen || siteOpen});
+  // The lock in the address bar: what this page is, whether the
+  // connection is secure, and the permission decisions remembered for
+  // it. The popup asks the app on open and paints the `__cryo_site`
+  // reply; a reset repaints through the same push.
+  const siteBtn = document.getElementById('site');
+  const sitePop = document.getElementById('site-pop');
+  const setSite = (open) => {
+    if (open === siteOpen) return;
+    siteOpen = open;
+    sitePop.classList.toggle('open', open);
+    if (open) {
+      sitePop.innerHTML = '';
+      sitePop.style.left = siteBtn.getBoundingClientRect().left + 'px';
+      ipc({cmd: 'site_info'});
+    }
+    reportOverlay();
+  };
+  siteBtn.onclick = (e) => {
+    e.stopPropagation();
+    setMenu(false); setOmni(false); setDl(false); setAcct(false);
+    setSite(!siteOpen);
+  };
+  sitePop.onclick = (e) => e.stopPropagation();
+  const SITE_LINES = {
+    secure: ['Connection is secure', 'Your information is private when it is sent to this site.'],
+    insecure: ['Not secure', 'Information you send to this site could be seen by others.'],
+    internal: ['Cryo page', 'A page that belongs to the browser itself.'],
+  };
+  const CAPABILITY_LABELS = {
+    camera: 'Camera', microphone: 'Microphone', location: 'Location',
+    notifications: 'Notifications', clipboard: 'Clipboard',
+  };
+  window.__cryo_site = (info) => {
+    if (!siteOpen) return;
+    sitePop.innerHTML = '';
+    const head = document.createElement('div');
+    head.className = 'site-head';
+    const host = document.createElement('strong');
+    host.textContent = info.host;
+    const close = document.createElement('button');
+    close.className = 'site-close'; close.textContent = '×'; close.title = 'Close';
+    close.onclick = () => setSite(false);
+    head.append(host, close);
+    const conn = document.createElement('div');
+    conn.className = 'site-row site-' + info.security;
+    const [line, detail] = SITE_LINES[info.security] || SITE_LINES.insecure;
+    const connCopy = document.createElement('div');
+    const connTitle = document.createElement('div'); connTitle.textContent = line;
+    const connDetail = document.createElement('div');
+    connDetail.className = 'site-detail'; connDetail.textContent = detail;
+    connCopy.append(connTitle, connDetail);
+    conn.appendChild(connCopy);
+    sitePop.append(head, conn);
+    if (info.security !== 'internal') {
+      const cookies = document.createElement('div');
+      cookies.className = 'site-row';
+      cookies.textContent = info.cookies === 1 ? '1 cookie in use'
+        : info.cookies + ' cookies in use';
+      sitePop.appendChild(cookies);
+    }
+    const perms = document.createElement('div');
+    perms.className = 'site-perms';
+    const permsTitle = document.createElement('div');
+    permsTitle.className = 'site-perms-title'; permsTitle.textContent = 'Permissions';
+    perms.appendChild(permsTitle);
+    if (!info.grants.length) {
+      const none = document.createElement('div');
+      none.className = 'site-detail';
+      none.textContent = 'This site will ask before using your camera, microphone or location.';
+      perms.appendChild(none);
+    }
+    for (const g of info.grants) {
+      const row = document.createElement('div');
+      row.className = 'site-perm';
+      const name = document.createElement('span');
+      name.textContent = CAPABILITY_LABELS[g.capability] || g.capability;
+      const state = document.createElement('span');
+      state.className = 'site-perm-state ' + (g.allowed ? 'allowed' : 'blocked');
+      state.textContent = g.allowed ? 'Allowed' : 'Blocked';
+      const reset = document.createElement('button');
+      reset.className = 'site-reset'; reset.textContent = 'Reset';
+      reset.title = 'Ask again next time';
+      reset.onclick = () => ipc({cmd: 'permission_reset', origin: info.origin, capability: g.capability});
+      row.append(name, state, reset);
+      perms.appendChild(row);
+    }
+    sitePop.appendChild(perms);
+  };
   // Signed in, the avatar opens a dropdown of every account in the jar;
   // signed out, the same spot is still the sign-in pill.
   const setAcct = (open) => {
@@ -159,7 +247,7 @@
   // the view. One list, so a new overlay joins it in one place.
   const dismissOverlays = () => {
     setMenu(false); setOmni(false); setDl(false); setLib(false); setAcct(false);
-    setTabfind(false);
+    setTabfind(false); setSite(false);
   };
   // Ctrl+Shift+O lands here.
   window.__cryo_library_toggle = (pane) => {
@@ -253,6 +341,8 @@
     {label: 'Saved passwords', lib: 'passwords'},
     {label: 'Import browser data…', lib: 'import'},
     {label: 'Export browser data…', lib: 'export'},
+    'sep',
+    {label: 'Mail (Ctrl+Shift+M)', cmd: {cmd: 'mail'}},
     'sep',
     {label: 'New incognito window (Ctrl+Shift+N)', cmd: {cmd: 'new_incognito'}},
     {label: 'DevTools (F12)', cmd: {cmd: 'devtools'}},

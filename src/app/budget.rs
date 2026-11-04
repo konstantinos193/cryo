@@ -18,6 +18,7 @@ impl App {
             return;
         }
         self.suspend_idle_views();
+        self.mail_tick();
         if !cfg!(any(
             target_os = "windows",
             target_os = "linux",

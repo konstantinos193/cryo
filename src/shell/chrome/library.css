@@ -7,6 +7,10 @@
   #permission-pop.open { display: block; }
   #permission-pop p { overflow-wrap: anywhere; }
   #permission-pop button { margin-right: 10px; padding: 8px; cursor: pointer; }
+  #permission-pop .perm-note { color: var(--tx3); font-size: 11px; }
+  #permission-pop .perm-allow {
+    background: var(--accent-deep); color: var(--on-accent); border: 0; border-radius: 8px;
+  }
   /* The library panel. Fills the window while it is open — the app has
      stretched this view over everything by then — and dims what is
      behind it so the page does not read as interactive. */

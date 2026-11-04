@@ -27,8 +27,10 @@ mod find;
 mod freeze_probe;
 mod keys;
 mod library;
+mod mail;
 mod permissions;
 mod resources;
+mod site_info;
 mod suggest;
 mod surfaces;
 mod tabfind;
@@ -177,6 +179,12 @@ pub enum AppEvent {
     /// A backend that drives its own loop inside ours asked for a turn —
     /// Servo's `EventLoopWaker` posts these; wry never does.
     EngineWake,
+    /// The mail worker finished a request — a listing, a body, a flag
+    /// write or a failure the page should hear about.
+    Mail(crate::mail::Outcome),
+    /// A worker finished reading the history file the recorder was
+    /// opened `pending` on — the rows, or why there are none.
+    HistoryLoaded(Result<Vec<crate::persist::Entry>, crate::persist::PersistError>),
 }
 
 /// The registry as the app holds it: every tab owns its engine surface.
@@ -250,7 +258,8 @@ pub struct App {
     /// A fetch is in flight and the prompt is showing it. Progress that
     /// arrives after the prompt is gone is dropped rather than reopening it.
     installing: bool,
-    /// Explicit consent decisions, scoped to this window and web origin.
+    /// Remembered consent decisions per web origin — on disk for a
+    /// normal window, in memory for incognito.
     permission_grants: permissions::Grants,
     permission_seq: u64,
     /// This window forgets everything when it closes. Imports refuse,
@@ -294,6 +303,9 @@ pub struct App {
     /// The one in-flight session check and whether a second request
     /// folded into it (see `account::SessionCheck`).
     google_check: account::SessionCheck,
+    /// The mail slice — accounts, folders, the worker handle. `None` in
+    /// incognito: an account there would leak the profile it shouldn't.
+    mail: Option<mail::Mail>,
     /// The window has begun shutting down. WebView2 rejects every call
     /// after controller disposal starts, while tao may still deliver
     /// queued resize and view events.
@@ -317,6 +329,12 @@ pub struct Profile {
     pub theme: Theme,
     /// Where a new pick is remembered for the next launch.
     pub theme_state: Option<PathBuf>,
+    /// `data_dir()/mail` for a normal window — accounts file plus the
+    /// cache root. `None` in incognito, which gets no mail at all.
+    pub mail_dir: Option<PathBuf>,
+    /// `permissions.json` for a normal window — remembered Allow/Block
+    /// decisions per site. `None` keeps them for the window only.
+    pub permissions: Option<PathBuf>,
 }
 
 impl Profile {
@@ -333,6 +351,8 @@ impl Profile {
             incognito: true,
             theme: Theme::DEFAULT,
             theme_state: None,
+            mail_dir: None,
+            permissions: None,
         }
     }
 }
@@ -385,6 +405,10 @@ impl App {
         let chrome = Self::spawn_chrome(&*engine, &proxy, chrome_rect, profile.theme)?;
 
         let memory_budget = crate::memory::BudgetEnforcer::new(Default::default(), clock.now());
+        let mail = profile.mail_dir.map(|dir| {
+            let out = proxy.clone();
+            mail::Mail::new(dir, move |o| post(&out, AppEvent::Mail(o)))
+        });
         Ok(Self {
             find: find::FindSession::default(),
             memory_budget,
@@ -411,7 +435,10 @@ impl App {
             pending_install: None,
             install_seq: 0,
             installing: false,
-            permission_grants: permissions::Grants::default(),
+            permission_grants: profile
+                .permissions
+                .map(permissions::Grants::open)
+                .unwrap_or_default(),
             permission_seq: 0,
             incognito: profile.incognito,
             library_pane: None,
@@ -424,6 +451,7 @@ impl App {
             google: None,
             active_account: 0,
             google_check: account::SessionCheck::Idle,
+            mail,
             exiting: false,
         })
     }
@@ -509,6 +537,11 @@ impl App {
                 self.engine.spin_event_loop();
                 Ok(())
             }
+            AppEvent::Mail(outcome) => self.on_mail(outcome),
+            AppEvent::HistoryLoaded(loaded) => match &mut self.recorder {
+                Some(recorder) => recorder.hydrate(loaded).map_err(Into::into),
+                None => Ok(()),
+            },
             AppEvent::FilesDropped(paths) => self.files_dropped(&paths),
             AppEvent::Imported(outcome) => self.on_imported(outcome),
             AppEvent::ImportSources(sources) => self.on_import_sources(sources),
@@ -606,6 +639,20 @@ impl App {
     /// `id`'s live engine surface — `None` while frozen or discarded.
     pub(super) fn view_of(&self, id: TabId) -> Option<&dyn ContentView> {
         self.registry.get(id).and_then(|t| t.view()).map(|v| &**v)
+    }
+
+    /// Whether `id` is showing `url` — by what the engine reports its
+    /// surface has loaded, or by the tab's own address while it has no
+    /// surface. The guards on shell-page requests use this rather than
+    /// the recorded address alone: the engine's word is what a page
+    /// cannot forge.
+    pub(super) fn tab_shows(&self, id: TabId, url: &str) -> bool {
+        self.registry
+            .get(id)
+            .is_some_and(|t| match t.view().and_then(|v| v.url()) {
+                Some(live) => live == url,
+                None => content_url_for(t.url()) == url,
+            })
     }
 
     fn resize(&mut self, width_px: u32, height_px: u32) {

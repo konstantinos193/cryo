@@ -66,6 +66,20 @@ impl App {
         id: TabId,
         mut message: PageMessage,
     ) -> anyhow::Result<()> {
+        // The /mail tab owns its own command family — route by the
+        // tab's address, not the payload, so a web page guessing the
+        // mail wire still lands in the autofill parser and dies there.
+        if self.is_mail_tab(id) {
+            self.on_mail_command(id, message);
+            return Ok(());
+        }
+        // The home page asks for its mail glance over the same channel
+        // the autofill bridge uses; anything else it sends stays on the
+        // autofill path below.
+        if self.is_home_tab(id) && self.on_home_message(id, &message) {
+            message.body.zeroize();
+            return Ok(());
+        }
         if message.body.len() > MAX_MESSAGE_BYTES {
             message.body.zeroize();
             return Ok(());
@@ -187,7 +201,7 @@ impl App {
         }
     }
 
-    fn message_origin(&self, id: TabId, source: &str) -> Option<SiteOrigin> {
+    pub(super) fn message_origin(&self, id: TabId, source: &str) -> Option<SiteOrigin> {
         let source = SiteOrigin::parse(source)?;
         let tab = self.registry.get(id)?;
         let current = SiteOrigin::parse(tab.url())?;

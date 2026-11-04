@@ -9,7 +9,7 @@ use crate::shell::chrome::{canonize_nav_input, normalize_nav_input, ChromeComman
 use crate::shell::pages;
 use crate::tabs::TabId;
 
-use super::{content_url_for, downloads, App};
+use super::{content_url_for, downloads, permissions, App};
 
 impl App {
     pub(super) fn on_chrome(
@@ -22,8 +22,20 @@ impl App {
             ChromeCommand::FindQuery { query, match_case } => self.search_page(query, match_case),
             ChromeCommand::FindNext { backwards } => self.next_match(backwards),
             ChromeCommand::FindClose => self.dismiss_find(),
-            ChromeCommand::PermissionAnswer { token, allow } => {
-                self.answer_permission_prompt(token, allow)
+            ChromeCommand::PermissionAnswer { token, allow } => self.answer_permission_prompt(
+                token,
+                if allow {
+                    permissions::Answer::Allow
+                } else {
+                    permissions::Answer::Block
+                },
+            ),
+            ChromeCommand::PermissionDismiss { token } => {
+                self.answer_permission_prompt(token, permissions::Answer::Dismiss)
+            }
+            ChromeCommand::SiteInfo => self.push_site_info(),
+            ChromeCommand::PermissionReset { origin, capability } => {
+                self.reset_permission(&origin, &capability)
             }
             ChromeCommand::Ready { engine } => {
                 self.note_search_engine(engine);
@@ -35,6 +47,7 @@ impl App {
             ChromeCommand::NewTab => self.new_tab(),
             ChromeCommand::Activate { id } => self.activate(TabId::from_raw(id)),
             ChromeCommand::Close { id } => self.close_tab(TabId::from_raw(id), control_flow),
+            ChromeCommand::Relocate { id, index } => self.relocate_tab(TabId::from_raw(id), index),
             ChromeCommand::Navigate {
                 input,
                 ctrl,
@@ -58,6 +71,7 @@ impl App {
             ChromeCommand::DevTools => self.devtools_active(),
             ChromeCommand::ClearData => self.clear_data(),
             ChromeCommand::Settings => self.spawn_tab(pages::SETTINGS_URL, true),
+            ChromeCommand::Mail => self.open_mail(),
             ChromeCommand::CheckUpdates => {
                 self.request_update_check(true);
                 Ok(())
@@ -302,12 +316,16 @@ impl App {
 
     pub(super) fn move_active_tab_to(&mut self, index: usize) -> anyhow::Result<()> {
         match self.registry.active_id() {
-            Some(id) => {
-                self.registry.relocate(id, index)?;
-                self.sync_chrome()
-            }
+            Some(id) => self.relocate_tab(id, index),
             None => Ok(()),
         }
+    }
+
+    /// Put `id` at `index` in strip order — the strip's drag-and-drop
+    /// drop and the keyboard's Home/End moves both land here.
+    pub(super) fn relocate_tab(&mut self, id: TabId, index: usize) -> anyhow::Result<()> {
+        self.registry.relocate(id, index)?;
+        self.sync_chrome()
     }
 
     pub(super) fn duplicate_active(&mut self) -> anyhow::Result<()> {

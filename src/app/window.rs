@@ -18,11 +18,7 @@ impl App {
     /// has: a web page that guessed the route must not be able to
     /// restyle the browser.
     pub(super) fn theme_setting(&mut self, id: TabId, picked: Theme) -> anyhow::Result<()> {
-        if self
-            .registry
-            .get(id)
-            .is_none_or(|tab| tab.url() != crate::shell::pages::SETTINGS_URL)
-        {
+        if !self.tab_shows(id, crate::shell::pages::SETTINGS_URL) {
             return Ok(());
         }
         self.theme = picked;

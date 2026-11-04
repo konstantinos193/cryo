@@ -103,9 +103,7 @@
      those pages need no script to swap an image. */
   --mark-url: url("/theme/mark-glacier.svg");
 
-  /* The new-tab page: the word, and the three lobes behind it. */
-  --brand-grad: linear-gradient(100deg, #86b9cc 0%, #c6ebf7 34%, #ffffff 46%,
-                #d6f2fb 58%, #6fb5cc 100%);
+  /* The new-tab page: the three lobes behind the column. */
   --lobe-a-rgb: 59, 142, 168;
   --lobe-b-rgb: 43, 113, 134;
   --lobe-c-rgb: 58, 79, 138;
@@ -201,8 +199,6 @@
   --mark-lit: #9ed3e4;
   --mark-url: url("/theme/mark-light.svg");
 
-  --brand-grad: linear-gradient(100deg, #1d5f76 0%, #2f88a3 34%, #5fb4cd 46%,
-                #2b7a94 58%, #17546a 100%);
   --lobe-a-rgb: 148, 199, 216;
   --lobe-b-rgb: 176, 210, 224;
   --lobe-c-rgb: 170, 186, 228;
@@ -289,8 +285,6 @@
   --mark-lit: #d9c9f5;
   --mark-url: url("/theme/mark-lilac.svg");
 
-  --brand-grad: linear-gradient(100deg, #4e2a90 0%, #7a4fcb 34%, #a382e3 46%,
-                #6b3fc0 58%, #452380 100%);
   --lobe-a-rgb: 186, 158, 234;
   --lobe-b-rgb: 206, 184, 240;
   --lobe-c-rgb: 166, 178, 236;

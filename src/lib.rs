@@ -20,6 +20,7 @@ pub mod bookmarks;
 pub mod engine;
 pub mod extensions;
 pub mod instance;
+pub mod mail;
 mod memory;
 pub mod persist;
 pub mod shell;
@@ -209,10 +210,12 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
     // The window itself paints the content colour: whatever shows through
     // between one view hiding and the next painting is then the same dark
     // the pages use, not the system's white.
-    // Hidden until the views exist: WebView2 controllers take a beat to
-    // come up, and watching them appear one after another reads as
-    // flicker — showing the window after `App::new` means the first
-    // frame the user sees is already the finished layout.
+    // Built hidden so placement (position, maximized) is applied before
+    // the first frame, then shown at once — before the views exist. The
+    // first WebView2 controller takes the better part of a second to come
+    // up (the browser process boots inside that wait), and a launch that
+    // shows nothing for that long reads as a hang. A window in the pages'
+    // own colour, filled in a moment later, reads as a browser opening.
     // Where the last window closed is where this one opens — size,
     // position and maximized come back from `window.json`. Incognito
     // still gets the size but never writes it: its closing shape isn't
@@ -268,6 +271,7 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
         // on a desktop monitor.
         window.set_maximized(true);
     }
+    window.set_visible(true);
 
     #[cfg(not(feature = "servo-engine"))]
     // The composition root names the path (AGENTS §5). An incognito window
@@ -312,21 +316,37 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
     let mut profile = if incognito {
         app::Profile::session_only()
     } else {
+        // The history file is read on a worker: it is megabytes, the
+        // last window rewrote it on its way out, and reading a file the
+        // antivirus is still scanning blocks for seconds (3.7 s measured
+        // against 15 ms once the scan is done). The recorder starts
+        // empty and is hydrated when the rows arrive.
+        let recorder =
+            persist::Recorder::pending(persist::JsonFile::new(persist::JsonFile::default_path()));
+        let history_proxy = proxy.clone();
+        std::thread::Builder::new()
+            .name("cryo-history-load".into())
+            .spawn(move || {
+                use persist::Store;
+                let loaded = persist::JsonFile::new(persist::JsonFile::default_path()).load();
+                app::post(&history_proxy, AppEvent::HistoryLoaded(loaded));
+            })?;
+        let bookmarks =
+            bookmarks::Keeper::open(bookmarks::JsonFile::new(bookmarks::JsonFile::default_path()));
+        let vault = vault::Vault::open(vault::SealedFile::new(
+            vault::SealedFile::default_path(),
+            vault_protector(),
+        ));
         app::Profile {
-            recorder: Some(persist::Recorder::open(persist::JsonFile::new(
-                persist::JsonFile::default_path(),
-            ))),
-            bookmarks: bookmarks::Keeper::open(bookmarks::JsonFile::new(
-                bookmarks::JsonFile::default_path(),
-            )),
-            vault: vault::Vault::open(vault::SealedFile::new(
-                vault::SealedFile::default_path(),
-                vault_protector(),
-            )),
+            recorder: Some(recorder),
+            bookmarks,
+            vault,
             extensions: Some(extensions::Catalogue::new(extensions_root())),
             incognito: false,
             theme,
             theme_state,
+            mail_dir: Some(data_dir().join("mail")),
+            permissions: Some(data_dir().join("permissions.json")),
         }
     };
     let mut writers = Vec::new();
@@ -349,6 +369,13 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
                 .background(move |e| app::post(&vault_proxy, AppEvent::StoreFailed(e)))?,
         );
     }
+    // Outlives the app: the keeper spawned at exit needs the browser
+    // process the engine booted, after the views that used it are gone.
+    let engine_for_keeper = engine.clone();
+    // A settled keeper is attached to below; one still booting is
+    // dismissed first, since a view created against it would be slower
+    // than the cold boot this window then does itself.
+    instance::warm::prepare_launch();
     let mut app = App::new(
         window.clone(),
         engine,
@@ -359,8 +386,9 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
         state_path,
     )?;
     app.set_memory_budget(memory_budget);
-    // Views are spawned and navigating — reveal once, complete.
-    window.set_visible(true);
+    // The views exist, so the browser process has a holder of its own —
+    // a keeper left by the last window may let go now.
+    instance::warm::signal_launched();
     let mut next_tick = std::time::Instant::now() + app::IDLE_TICK;
 
     event_loop.run_return(move |event, _target, control_flow| {
@@ -376,6 +404,106 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
         app.handle_event(event, control_flow);
     });
     drop(writers);
+    // The window is gone; leave a keeper so the next one finds a browser
+    // process already booted (`instance::warm`). After the stores drain,
+    // so a keeper never races a flush for the disk.
+    instance::warm::keep_alive_after_exit(engine_for_keeper.browser_process());
+    Ok(())
+}
+
+/// The `--warm` process: one hidden view on the normal profile's
+/// environment, held until a window launches or the keeper times out
+/// (`instance::warm` explains why this exists). It opens no window the
+/// user can see, claims no single-instance mutex and touches no store —
+/// it exists to keep a WebView2 browser process alive, nothing else.
+/// `old_browser` is the closing window's browser process: the keeper
+/// boots its own only once that one has ended.
+pub fn run_warm(old_browser: Option<u32>) -> anyhow::Result<()> {
+    #[cfg(all(windows, not(feature = "servo-engine")))]
+    {
+        let keep = instance::warm::keep_for();
+        if keep.is_zero() {
+            return Ok(());
+        }
+        // Claimed first, so a window launching during the boot below
+        // finds the ready flag to wait on, and one signalling during it
+        // lands on a handle this process holds.
+        let Some(keeper) = instance::warm::Keeper::claim() else {
+            return Ok(());
+        };
+        if let Some(pid) = old_browser {
+            instance::warm::wait_for_process_end(engine::accounting::ProcessId(pid));
+        }
+        let mut event_loop = EventLoopBuilder::<()>::with_user_event().build();
+        let proxy = event_loop.create_proxy();
+        // Hidden, and it has to stay hidden: WebView2 is slower to create
+        // a controller on a window it cannot see, which a keeper can
+        // afford — but a keeper whose view was *shown*, off-screen or as
+        // one pixel on it, made the next window's attach slower than a
+        // cold boot (1.6–2.7 s measured against 0.3 s with it hidden).
+        // What the keeper holds is the browser process; it must not
+        // hold a live surface beside it.
+        let window = WindowBuilder::new()
+            .with_title("cryo")
+            .with_visible(false)
+            .build(&event_loop)?;
+        // The environment options are the same as a window's whatever
+        // is passed here (`create_environment`), so the keeper loads no
+        // extensions of its own: a window attaching while a browser
+        // process was still registering them took seconds, and the
+        // window's first view registers them anyway.
+        let engine: Rc<dyn Engine> = Rc::new(WryEngine::new(
+            window.window_handle()?.as_raw(),
+            shell::pages::internal_page,
+            false,
+            None,
+        ));
+        let _held = engine.spawn(engine::ViewSpec {
+            access: engine::ViewAccess::Web,
+            visible: false,
+            bounds: engine::Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+            },
+            ..engine::ViewSpec::url("about:blank")
+        })?;
+        // A window that arrived during the boot and ran out of patience
+        // has dismissed this keeper already; otherwise the flag goes up
+        // and the keeper waits to be told a window has attached.
+        let dismissed = keeper.launch_signalled();
+        if !dismissed {
+            keeper.announce();
+            let waiting = std::sync::Arc::new(keeper);
+            std::thread::spawn(move || {
+                waiting.wait_for_launch(keep);
+                // A failed send means the loop is already gone.
+                let _ = proxy.send_event(());
+            });
+            event_loop.run_return(|event, _target, control_flow| {
+                *control_flow = match event {
+                    tao::event::Event::UserEvent(()) => ControlFlow::Exit,
+                    _ => ControlFlow::Wait,
+                };
+            });
+        }
+        // Dismissed: leave the user data folder free before the ready
+        // flag goes with this process, since the dismissing window boots
+        // the moment the flag is gone and must not meet a browser process
+        // still ending. Attached to instead, the window owns that process
+        // now — waiting for it to end would be waiting for the window to
+        // close, with the stale signal held open the whole time.
+        if dismissed {
+            drop(_held);
+            if let Some(pid) = engine.browser_process() {
+                instance::warm::wait_for_process_end(pid);
+            }
+        }
+        drop(engine);
+        drop(window);
+        drop(event_loop);
+    }
     Ok(())
 }
 

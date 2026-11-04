@@ -469,6 +469,15 @@ pub trait Engine {
     /// app dispatches an event or a waker-posted `EngineWake` arrives.
     fn spin_event_loop(&self) {}
 
+    /// The browser process this window's views share — the one WebView2
+    /// boots for the first view — if the backend has one yet. The warm
+    /// keeper (`instance::warm`) waits for it to end before booting its
+    /// own: a keeper that attaches to a browser process its creator is
+    /// leaving holds nothing worth having.
+    fn browser_process(&self) -> Option<accounting::ProcessId> {
+        None
+    }
+
     fn measure_memory(&self, _complete: accounting::MemoryCallback) -> Result<(), EngineError> {
         Err(EngineError::ReadStats(
             "Memory accounting is unavailable on this backend".into(),

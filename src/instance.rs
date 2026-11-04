@@ -9,6 +9,10 @@
 //! never steal each other's links. Off Windows there is no handoff:
 //! `forwarded` never delivers and `claim` never wins.
 
+pub mod warm;
+
+#[cfg(windows)]
+use win::object_name;
 #[cfg(windows)]
 pub use win::{claim, forwarded, Primary};
 
@@ -168,10 +172,10 @@ mod win {
         (!message.is_empty()).then_some(message)
     }
 
-    /// Pipe and mutex names hang off the exe path's hash: two installs
-    /// are separate browsers, and a dev build never crosses an installed
-    /// copy's links.
-    fn object_name(kind: &str) -> String {
+    /// Pipe, mutex and keeper-event names hang off the exe path's hash:
+    /// two installs are separate browsers, and a dev build never crosses
+    /// an installed copy's links (or keeps its browser process warm).
+    pub(super) fn object_name(kind: &str) -> String {
         let exe = std::env::current_exe()
             .map(|p| p.to_string_lossy().to_lowercase())
             .unwrap_or_default();

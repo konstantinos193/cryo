@@ -17,6 +17,31 @@ pub struct ChromeDownload {
     pub state: &'static str,
 }
 
+/// What the site-info popup (the lock in the address bar) shows for the
+/// active page — pushed on request and after a permission reset.
+#[derive(Debug, Serialize)]
+pub struct ChromeSiteInfo {
+    /// The origin the grants are keyed by, serialized ASCII.
+    pub origin: String,
+    /// What the popup titles itself with — the host, or the page's own
+    /// name for a shell document.
+    pub host: String,
+    /// "secure" (https) | "insecure" (http) | "internal" (a shell page)
+    pub security: &'static str,
+    /// Cookies the profile would send to this page.
+    pub cookies: usize,
+    /// Remembered permission decisions for this origin.
+    pub grants: Vec<ChromeSiteGrant>,
+}
+
+/// One remembered decision as the site-info popup lists it.
+#[derive(Debug, Serialize)]
+pub struct ChromeSiteGrant {
+    /// The capability's wire name — `permission_reset` sends it back.
+    pub capability: &'static str,
+    pub allowed: bool,
+}
+
 /// State pushed to the chrome UI after every change.
 #[derive(Debug, Serialize)]
 pub struct ChromeState {

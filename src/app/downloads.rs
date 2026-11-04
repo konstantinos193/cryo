@@ -98,11 +98,7 @@ impl App {
     }
 
     pub(super) fn download_folder_setting(&self, id: TabId, choose: bool) -> anyhow::Result<()> {
-        if self
-            .registry
-            .get(id)
-            .is_none_or(|tab| tab.url() != crate::shell::pages::SETTINGS_URL)
-        {
+        if !self.tab_shows(id, crate::shell::pages::SETTINGS_URL) {
             return Ok(());
         }
         let Some(view) = self.view_of(id) else {

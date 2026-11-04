@@ -10,9 +10,12 @@
   }
 
   /* ---- Ice field -------------------------------------------------- */
-  /* Three blurred lobes over a cold base. Everything that moves here is
-     transform or opacity on four elements, so the compositor carries it
-     and an idle new tab costs nothing worth measuring. */
+  /* Three soft lobes over a cold base. They are plain radial gradients,
+     rasterized once: a `filter: blur()` on an animated element is
+     re-blurred by the GPU every frame, and three screen-sized ones under
+     a stack of backdrop-filters is what made this page stutter. The one
+     thing that moves is the field's transform (pointer parallax), which
+     the compositor carries for free. */
   #field {
     position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none;
     background: radial-gradient(1100px 480px at 50% -160px, rgba(var(--lobe-a-rgb), .18), transparent 72%);
@@ -20,21 +23,18 @@
     transform: translate3d(var(--px, 0px), var(--py, 0px), 0);
     transition: transform .7s cubic-bezier(.2, .6, .2, 1);
   }
-  .lobe { position: absolute; border-radius: 50%; filter: blur(88px); }
+  .lobe { position: absolute; border-radius: 50%; }
   .l1 {
-    width: 620px; height: 420px; left: 10%; top: -16%;
-    background: radial-gradient(closest-side, rgba(var(--lobe-a-rgb), .5), transparent);
-    animation: drift1 44s ease-in-out infinite;
+    width: 820px; height: 620px; left: 4%; top: -28%;
+    background: radial-gradient(closest-side, rgba(var(--lobe-a-rgb), .42), rgba(var(--lobe-a-rgb), .12) 55%, transparent);
   }
   .l2 {
-    width: 540px; height: 380px; right: 4%; top: 4%;
-    background: radial-gradient(closest-side, rgba(var(--lobe-b-rgb), .42), transparent);
-    animation: drift2 58s ease-in-out infinite;
+    width: 740px; height: 580px; right: -2%; top: -8%;
+    background: radial-gradient(closest-side, rgba(var(--lobe-b-rgb), .34), rgba(var(--lobe-b-rgb), .1) 55%, transparent);
   }
   .l3 {
-    width: 760px; height: 300px; left: 50%; bottom: -20%; margin-left: -380px;
-    background: radial-gradient(closest-side, rgba(var(--lobe-c-rgb), .3), transparent);
-    animation: drift3 72s ease-in-out infinite;
+    width: 960px; height: 500px; left: 50%; bottom: -32%; margin-left: -480px;
+    background: radial-gradient(closest-side, rgba(var(--lobe-c-rgb), .26), rgba(var(--lobe-c-rgb), .08) 55%, transparent);
   }
   /* Film grain: without it the blurred lobes band on a dark panel. */
   #field::after {
@@ -42,29 +42,26 @@
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   }
   /* Crystal lattice: three line families at 60 degrees, the way ice
-     actually grows. It is masked down to a disc around the pointer, so
-     frost blooms where the cursor passes and the page stays clean. */
+     actually grows. It is a disc that follows the pointer, so frost
+     blooms where the cursor passes and the page stays clean. The disc
+     is moved by transform and its pattern slid back by the same amount,
+     so the lines stay put on the page while only a 520px square is ever
+     redrawn — a screen-sized layer re-masked per pointer move was a
+     full repaint every frame. */
   #lattice {
-    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    position: fixed; left: -260px; top: -260px; width: 520px; height: 520px;
+    z-index: 0; pointer-events: none;
     opacity: 0; transition: opacity .5s ease;
+    transform: translate3d(var(--mx, -400px), var(--my, -400px), 0);
     background-image:
       repeating-linear-gradient(60deg, rgba(var(--accent-rgb), .5) 0 1px, transparent 1px 38px),
       repeating-linear-gradient(-60deg, rgba(var(--accent-rgb), .5) 0 1px, transparent 1px 38px),
       repeating-linear-gradient(0deg, rgba(var(--accent-rgb), .32) 0 1px, transparent 1px 33px);
-    -webkit-mask-image: radial-gradient(260px 260px at var(--mx, -400px) var(--my, -400px), #000 0%, rgba(0, 0, 0, .45) 42%, transparent 72%);
-    mask-image: radial-gradient(260px 260px at var(--mx, -400px) var(--my, -400px), #000 0%, rgba(0, 0, 0, .45) 42%, transparent 72%);
+    background-position: calc(-1 * var(--mx, 0px)) calc(-1 * var(--my, 0px));
+    -webkit-mask-image: radial-gradient(260px 260px at 50% 50%, #000 0%, rgba(0, 0, 0, .45) 42%, transparent 72%);
+    mask-image: radial-gradient(260px 260px at 50% 50%, #000 0%, rgba(0, 0, 0, .45) 42%, transparent 72%);
   }
   #lattice.lit { opacity: .4; }
-
-  @keyframes drift1 {
-    50% { transform: translate3d(70px, 40px, 0) scale(1.12); }
-  }
-  @keyframes drift2 {
-    50% { transform: translate3d(-80px, 54px, 0) scale(1.08); }
-  }
-  @keyframes drift3 {
-    50% { transform: translate3d(50px, -36px, 0) scale(1.14); }
-  }
 
   /* ---- Column ----------------------------------------------------- */
   main {
@@ -77,38 +74,38 @@
     margin-top: min(14vh, 140px); text-align: center;
   }
 
-  .mark { position: relative; width: 116px; height: 116px; margin: 0 auto;
-          display: grid; place-items: center; }
-  /* A cold halo sweeping behind the crystal, the only thing on the page
-     that reads as alive at a glance. */
-  .mark .halo {
-    position: absolute; inset: -14px; border-radius: 50%;
+  /* ---- Lockup ----------------------------------------------------- */
+  /* The crystal and the word on one line, the way a wordmark is set:
+     the mark at cap height, the word in the body face, tight and
+     solid. The search box is the one thing on this page; the lockup
+     signs it and steps back. */
+  .lockup {
+    display: inline-flex; align-items: center; gap: 14px; margin: 0;
+    font-size: 36px; font-weight: 600; letter-spacing: -.035em; line-height: 1;
+    color: var(--tx-strong);
+  }
+  .lockup .mark { position: relative; width: 48px; height: 48px; display: grid; place-items: center; }
+  /* A cold halo behind the crystal. Static: a filtered element that
+     spins is re-filtered every frame for as long as the tab is open. */
+  .lockup .halo {
+    position: absolute; inset: -10px; border-radius: 50%;
     background: conic-gradient(from 0deg, transparent 0 52%,
-                rgba(var(--accent-rgb), .38) 74%, transparent 90%);
-    filter: blur(16px); animation: spin 26s linear infinite;
+                rgba(var(--accent-rgb), .42) 74%, transparent 90%);
+    filter: blur(10px);
   }
   /* The crystal comes from the palette (--mark-url), so the theme's own
      mark arrives with its colours and this page keeps no copy of the
      geometry. */
-  .mark .crystal {
-    position: relative; width: 84px; height: 84px;
+  .lockup .crystal {
+    position: relative; width: 48px; height: 48px;
     background: var(--mark-url) center / contain no-repeat;
-    filter: drop-shadow(0 8px 26px rgba(var(--accent-rgb), .22));
-    animation: breathe 7s ease-in-out infinite;
+    filter: drop-shadow(0 6px 18px rgba(var(--accent-rgb), .28));
   }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  @keyframes breathe { 50% { transform: scale(1.035); } }
+  /* The word sits a hair low of the crystal's optical centre; nudging it
+     up aligns the x-height with the facet line. */
+  .lockup .brand { position: relative; top: -1px; }
 
-  .brand {
-    margin: 16px 0 0; font-size: 40px; font-weight: 650; letter-spacing: .1em;
-    /* The light band in the middle of the ramp is what the one-off sheen
-       sweeps across the word on arrival. */
-    background: var(--brand-grad);
-    background-size: 260% 100%; background-position: 100% 0;
-    -webkit-background-clip: text; background-clip: text; color: transparent;
-  }
-  @keyframes sheen { to { background-position: 0 0; } }
-  .tag { margin: 6px 0 0; color: var(--tx3); font-size: 14px; letter-spacing: .02em; }
+  .tag { margin: 12px 0 0; color: var(--tx3); font-size: 14px; letter-spacing: .02em; }
 
   /* ---- Search ----------------------------------------------------- */
   form#go { position: relative; margin-top: 30px; }
@@ -166,7 +163,9 @@
   .tile {
     position: relative; display: block; width: 106px; padding: 16px 8px 12px;
     border: 1px solid var(--line); border-radius: 16px;
-    background: rgba(var(--glass-rgb), .6); backdrop-filter: blur(10px);
+    /* Opaque-ish glass, no backdrop-filter: seven blurring tiles over a
+       moving field were seven re-blurs per frame. */
+    background: rgba(var(--glass-rgb), .74);
     color: var(--tx2); text-decoration: none; text-align: center;
     font: inherit; font-size: 12px; overflow: hidden;
     transition: transform .18s cubic-bezier(.2, .7, .3, 1), border-color .18s ease,
@@ -284,21 +283,60 @@
   }
   #editor button.go:hover { background: var(--accent-soft-hover); color: var(--accent); }
 
-  /* What is being built next, stated once and quietly. Not a link,
-     because there is nothing to open yet. */
-  .soon {
-    display: inline-flex; align-items: center; gap: 10px;
-    margin-top: 26px; padding: 6px 7px 6px 14px; border-radius: 999px;
-    border: 1px dashed rgba(var(--accent-rgb), .24);
-    background: rgba(var(--glass-rgb), .45);
-    color: var(--tx2); font-size: 12.5px;
+  /* ---- Mail at a glance ------------------------------------------- */
+  /* One wide tile under the dial, cut from the same glass: the inbox's
+     unread count and which account it is in. The app pushes the
+     numbers; the tile is a link either way. */
+  .mail {
+    display: flex; align-items: center; gap: 14px;
+    width: min(500px, 100%); margin: 28px auto 0; padding: 11px 14px 11px 11px;
+    border: 1px solid var(--line); border-radius: 16px;
+    background: rgba(var(--glass-rgb), .74);
+    color: var(--tx2); text-decoration: none; text-align: left;
+    transition: transform .18s cubic-bezier(.2, .7, .3, 1), border-color .18s ease,
+                background .18s ease, box-shadow .18s ease, color .18s ease;
   }
-  .soon svg { width: 15px; height: 15px; color: var(--accent); opacity: .8; }
-  .soon .badge {
-    padding: 3px 9px; border-radius: 999px;
+  .mail:hover, .mail:focus-visible {
+    transform: translateY(-3px); border-color: var(--accent-deep); color: var(--tx);
+    background: rgba(var(--glass-hi-rgb), .78);
+    box-shadow: var(--shadow-tile-hover);
+    outline: none;
+  }
+  .mail:active { transform: translateY(-1px) scale(.995); }
+  .mail-ic {
+    position: relative; flex: none; width: 44px; height: 44px; border-radius: 12px;
+    display: grid; place-items: center;
     background: var(--accent-soft); color: var(--accent);
-    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em;
+    box-shadow: inset 0 1px 0 rgba(var(--sheen-rgb), .1);
+    transition: transform .18s cubic-bezier(.2, .7, .3, 1);
   }
+  .mail:hover .mail-ic, .mail:focus-visible .mail-ic { transform: scale(1.06); }
+  .mail-ic svg { width: 21px; height: 17px; }
+  .mail-n {
+    position: absolute; top: -7px; right: -8px;
+    min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px;
+    background: var(--accent-deep); color: var(--on-accent);
+    border: 2px solid rgb(var(--glass-hi-rgb));
+    font-size: 11px; font-weight: 700; line-height: 16px; text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+  .mail-text { flex: 1; min-width: 0; }
+  .mail-title { display: block; font-size: 14px; font-weight: 600; color: var(--tx); line-height: 1.3; }
+  .mail-sub {
+    display: block; font-size: 12px; color: var(--tx3); line-height: 1.4;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .mail.bad .mail-sub { color: var(--bad-tx); }
+  .mail-go { display: flex; align-items: center; gap: 8px; flex: none; color: var(--tx3); }
+  .mail-go svg {
+    width: 14px; height: 14px; transform: translateX(-2px); opacity: .7;
+    transition: transform .18s ease, opacity .18s ease;
+  }
+  .mail:hover .mail-go svg, .mail:focus-visible .mail-go svg { transform: none; opacity: 1; }
+  /* A pulse on the icon while a sync is running — it reads as "being
+     fetched" without a spinner competing with the count. */
+  .mail.syncing .mail-ic svg { animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .45; } }
 
   /* Corner clock, the one piece of the page that is not about the
      browser. It ticks on the second, so the digits are tabular and the
@@ -325,27 +363,14 @@
   .link:hover { color: var(--tx2); }
   [hidden] { display: none; }
 
-  /* Everything lands in sequence instead of appearing at once. */
-  @keyframes rise { from { opacity: 0; transform: translateY(12px); } }
-  .mark, .brand, .tag, form#go, .soon, .hint, .slot, .tile.add {
-    animation: rise .55s cubic-bezier(.2, .7, .3, 1) both;
-  }
-  .brand {
-    animation: rise .55s cubic-bezier(.2, .7, .3, 1) .06s both,
-               sheen 2.4s cubic-bezier(.4, 0, .2, 1) .5s both;
-  }
-  .tag { animation-delay: .12s; }
-  form#go { animation-delay: .18s; }
-  .soon { animation-delay: .46s; }
-  .hint { animation-delay: .54s; }
-  #clock { animation: rise .55s cubic-bezier(.2, .7, .3, 1) .5s both; }
-  /* The staged arrival is for the first paint; an edit is immediate. */
-  #dial.settled .slot, #dial.settled .tile.add { animation: none; }
+  /* The page is complete on its first paint. A staged arrival looked
+     composed, and cost more than a second before the last tile landed —
+     on a browser whose promise is that a new tab is instant. */
 
   /* Typing is the only thing happening, so let the rest step back. */
   body:has(#box.filled) #dial { opacity: .4; transform: translateY(6px); }
-  body:has(#box.filled) .tag, body:has(#box.filled) .soon { opacity: .45; }
-  #dial, .tag, .soon { transition: opacity .3s ease, transform .3s ease; }
+  body:has(#box.filled) .tag, body:has(#box.filled) .mail { opacity: .45; }
+  #dial, .tag { transition: opacity .3s ease, transform .3s ease; }
 
   /* A home page in a background tab costs nothing to look at, because
      nobody is looking at it. */
@@ -355,7 +380,6 @@
 
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
-    .brand { background-position: 0 0; }
     /* No pointer bloom either, so show the lattice as plain texture. */
     #lattice { opacity: .1; -webkit-mask-image: none; mask-image: none; }
   }

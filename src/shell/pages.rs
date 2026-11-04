@@ -9,7 +9,7 @@
 //! stylesheet and script. This module maps a request path to one of them
 //! and owns nothing else: no page's markup, copy or style lives here.
 
-use crate::shell::{chrome, dial, error, newtab, search, settings, theme};
+use crate::shell::{chrome, dial, error, mail, newtab, search, settings, theme};
 
 /// Origin that all internal pages share. `is_internal_url` keys off this —
 /// keep the two in sync if the scheme registration ever changes.
@@ -18,10 +18,22 @@ pub(crate) const INTERNAL_ORIGIN: &str = "http://cryo.localhost";
 pub const CHROME_URL: &str = "http://cryo.localhost/chrome";
 pub const NEW_TAB_URL: &str = "http://cryo.localhost/newtab";
 pub const SETTINGS_URL: &str = "http://cryo.localhost/settings";
+pub const MAIL_URL: &str = "http://cryo.localhost/mail";
 
 /// A URL that belongs to the shell, not to any web destination.
 pub fn is_internal_url(url: &str) -> bool {
     url::Url::parse(url).is_ok_and(|u| u.origin().ascii_serialization() == INTERNAL_ORIGIN)
+}
+
+/// The shell page a navigation landed on, when it is one a tab can
+/// *be at*: the home page, settings, mail. Anything else internal —
+/// an error card carrying the failed address in its query, the
+/// settings page's request routes, the chrome — is `None`: a tab that
+/// shows those keeps the address it had.
+pub fn page_address(url: &str) -> Option<&'static str> {
+    [NEW_TAB_URL, SETTINGS_URL, MAIL_URL]
+        .into_iter()
+        .find(|page| *page == url)
 }
 
 /// Engine-facing resolver for the `cryo` scheme. wry hands us the request
@@ -45,6 +57,9 @@ pub fn internal_page(path: &str) -> Option<&'static str> {
         "/settings" => Some(settings::HTML),
         "/settings/settings.css" => Some(settings::STYLE),
         "/settings/settings.js" => Some(settings::SCRIPT),
+        "/mail" => Some(mail::HTML),
+        "/mail/mail.css" => Some(mail::STYLE),
+        "/mail/mail.js" => Some(mail::SCRIPT),
         // The error page reads its parameters from the query string, which
         // never reaches this resolver — one document covers every failure.
         error::ERROR_PATH => Some(error::HTML),
@@ -66,7 +81,13 @@ mod tests {
     use super::*;
 
     /// Every document that a surface serves, for the whole-set checks below.
-    const DOCUMENTS: [&str; 4] = ["/chrome", "/newtab", "/settings", error::ERROR_PATH];
+    const DOCUMENTS: [&str; 5] = [
+        "/chrome",
+        "/newtab",
+        "/settings",
+        "/mail",
+        error::ERROR_PATH,
+    ];
 
     #[test]
     fn chrome_document_assets_resolve_as_one_ordered_script() {
@@ -179,6 +200,23 @@ mod tests {
         assert!(internal_page(theme::PATH).is_some());
         assert!(internal_page("/etc/passwd").is_none());
         assert!(internal_page("/newtab/newtab.html").is_none());
+    }
+
+    #[test]
+    fn only_the_three_pages_are_addresses_a_tab_can_hold() {
+        assert_eq!(page_address(NEW_TAB_URL), Some(NEW_TAB_URL));
+        assert_eq!(page_address(SETTINGS_URL), Some(SETTINGS_URL));
+        assert_eq!(page_address(MAIL_URL), Some(MAIL_URL));
+        for not_a_place in [
+            "http://cryo.localhost/error?kind=dns&url=https%3A%2F%2Fx",
+            "http://cryo.localhost/settings/theme/light",
+            "http://cryo.localhost/mail?x=1",
+            "http://cryo.localhost/mail/",
+            CHROME_URL,
+            "https://example.com",
+        ] {
+            assert_eq!(page_address(not_a_place), None, "{not_a_place}");
+        }
     }
 
     #[test]

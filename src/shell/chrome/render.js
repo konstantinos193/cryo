@@ -6,19 +6,84 @@
     lastState.downloads = rows || [];
   };
 
-  window.__cryo_update = (state) => {
-    const prev = lastState;
-    lastState = state;
+  // Chrome-style reorder: a press activates, a horizontal pull past a
+  // few pixels picks the tab up, and the drop sends `relocate`. The
+  // pointer listeners sit on the document rather than the tab — the
+  // press's own activate echo rebuilds the strip before the pull
+  // begins, and a long pull leaves the strip's bounds. While a tab is
+  // in hand the strip holds its DOM: state keeps arriving (loading
+  // ticks, titles) and would otherwise rebuild it under the pointer.
+  let drag = null;
+  const tabAt = (id) => tabsEl.querySelector('.tab[data-id="' + id + '"]');
+  const liftTab = () => {
+    const el = tabAt(drag.id);
+    if (!el) { drag = null; return; }
+    drag.el = el;
+    drag.tabs = [...tabsEl.children].map((t) => {
+      const r = t.getBoundingClientRect();
+      return {el: t, mid: r.left + r.width / 2, w: r.width};
+    });
+    drag.from = drag.tabs.findIndex((t) => t.el === el);
+    drag.to = drag.from;
+    const gap = parseFloat(getComputedStyle(tabsEl).gap) || 0;
+    drag.shift = drag.tabs[drag.from].w + gap;
+    tabsEl.classList.add('reordering');
+    el.classList.add('dragging');
+  };
+  const dragMove = (e) => {
+    if (!drag) return;
+    if (!drag.el) {
+      if (Math.abs(e.clientX - drag.x0) < 5) return;
+      liftTab();
+      if (!drag) return;
+    }
+    const dx = e.clientX - drag.x0;
+    drag.el.style.transform = 'translateX(' + dx + 'px)';
+    // Neighbours the lifted tab's centre has passed slide out of its
+    // way; the count passed is the slot it drops into.
+    const mid = drag.tabs[drag.from].mid + dx;
+    let to = drag.from;
+    drag.tabs.forEach((t, i) => {
+      let shift = 0;
+      if (i < drag.from && t.mid > mid) { shift = drag.shift; to--; }
+      if (i > drag.from && t.mid < mid) { shift = -drag.shift; to++; }
+      if (i !== drag.from) t.el.style.transform = shift ? 'translateX(' + shift + 'px)' : '';
+    });
+    drag.to = to;
+  };
+  const dragEnd = () => {
+    if (!drag) return;
+    const {el, id, from, to} = drag;
+    drag = null;
+    if (!el) return;
+    tabsEl.classList.remove('reordering');
+    if (to !== from) ipc({cmd: 'relocate', id, index: to});
+    // Repaint in the dropped order straight away so nothing snaps back
+    // while the app's own update is in flight.
+    const tabs = (lastState.tabs || []).slice();
+    const i = tabs.findIndex((t) => t.id === id);
+    if (i >= 0) tabs.splice(to, 0, tabs.splice(i, 1)[0]);
+    lastState.tabs = tabs;
+    renderTabs(lastState);
+  };
+  document.addEventListener('pointermove', dragMove);
+  document.addEventListener('pointerup', dragEnd);
+  document.addEventListener('pointercancel', dragEnd);
+
+  const renderTabs = (state) => {
+    if (drag && drag.el) return;
     tabsEl.innerHTML = '';
     for (const t of state.tabs) {
       const el = document.createElement('div');
       el.className = 'tab' + (t.active ? ' active' : '') +
                      (t.state !== 'active' ? ' ' + t.state : '');
+      el.dataset.id = t.id;
       el.title = t.state === 'frozen' ? 'Frozen — click to restore'
                : t.state === 'discarded' ? 'Discarded — click to reload' : '';
       el.addEventListener('pointerdown', (e) => {
         if (e.button !== 0 || e.target.closest('.fz, .x')) return;
         e.preventDefault();
+        drag = {id: t.id, x0: e.clientX, el: null};
         ipc({cmd: 'activate', id: t.id});
       });
       // Middle-click anywhere on the tab closes it.
@@ -64,7 +129,18 @@
       el.append(title, x);
       tabsEl.appendChild(el);
     }
+  };
+
+  window.__cryo_update = (state) => {
+    const prev = lastState;
+    lastState = state;
+    renderTabs(state);
     if (document.activeElement !== urlEl) urlEl.value = state.active_url;
+    // The lock reads the active address: https is secure, a shell page
+    // is the browser's own, anything else is not secure.
+    const url = state.active_url;
+    siteBtn.className = !url || url.startsWith('http://cryo.localhost') ? 'internal'
+      : url.startsWith('https://') ? 'secure' : 'insecure';
     // Loading state: the active tab's flag swaps reload for ✕ and runs
     // the indeterminate bar; background tabs only spin their own icon.
     const active = state.tabs.find((t) => t.active);

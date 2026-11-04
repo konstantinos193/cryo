@@ -16,9 +16,25 @@ pub enum ChromeCommand {
         backwards: bool,
     },
     FindClose,
+    /// A prompt's Allow or Block button — both are remembered for the
+    /// origin.
     PermissionAnswer {
         token: u64,
         allow: bool,
+    },
+    /// The prompt went away without a choice (Escape, a click elsewhere):
+    /// this one request is denied and the site may ask again.
+    PermissionDismiss {
+        token: u64,
+    },
+    /// The lock in the address bar — the app answers with a
+    /// `__cryo_site` eval describing the active page.
+    SiteInfo,
+    /// A popup row's reset: forget the remembered decision so the site
+    /// asks again. `capability` is the wire name the popup was given.
+    PermissionReset {
+        origin: String,
+        capability: String,
     },
     /// Sent by the chrome document when it finishes parsing — the signal to
     /// push state. The page announces itself instead of the app racing the
@@ -38,6 +54,14 @@ pub enum ChromeCommand {
     },
     Close {
         id: u64,
+    },
+    /// A tab dropped after a strip drag — it lands at `index` in strip
+    /// order (clamped by the registry). Same move the keyboard makes by
+    /// Ctrl+Shift+PgUp/PgDn, named by id because the drop may land
+    /// before the press's own `activate` has settled.
+    Relocate {
+        id: u64,
+        index: usize,
     },
     Navigate {
         input: String,
@@ -74,6 +98,9 @@ pub enum ChromeCommand {
     ClearData,
     /// Open the internal settings page in a new tab.
     Settings,
+    /// Open the mail client — the /mail internal page, focused rather
+    /// than duplicated when a mail tab already exists.
+    Mail,
     /// Menu's "Check for updates" — result surfaces in a dialog.
     CheckUpdates,
     /// "Restart to update" — runs the staged installer and exits.

@@ -32,6 +32,16 @@ mod tests {
         assert!(!HTML.contains("/cmd"));
     }
 
+    /// The inbox card asks for its counts over `window.ipc` and takes
+    /// the answer through one named function — the same shape as the
+    /// mail page's own wire, with exactly one question in it.
+    #[test]
+    fn the_mail_card_asks_for_a_glance_and_links_to_the_mail_page() {
+        assert!(SCRIPT.contains("window.__cryo_mail_glance ="));
+        assert!(SCRIPT.contains("{kind: \"mail_glance\"}"));
+        assert!(HTML.contains("href=\"/mail\""));
+    }
+
     #[test]
     fn refuses_javascript_urls_from_its_own_origin() {
         assert!(SCRIPT.contains("/^javascript:/i.test(s)"));

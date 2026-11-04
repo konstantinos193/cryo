@@ -117,6 +117,10 @@ value objects, aggregates, domain services. That's it.
   (the extension catalogue and the Chrome Web Store — it owns what is
   installed, what a manifest says and CRX3 verification, never the
   loading, which is `engine`'s),
+  `mail` (the IMAP+SMTP client — it owns accounts, folders, envelopes,
+  body sanitization and the single worker thread all network traffic
+  lives on; the `/mail` page is a `shell` document, the engine never
+  sees a socket),
   `instance` (single-instance handoff), `update` (self-update), `account` (Google
   session detection — HTTP and foreign-wire parsing are session
   plumbing, not window UI, so it is not `shell`). `memory` is the
@@ -323,6 +327,19 @@ default 1024. It budgets engine private commitments — WebView2's environment o
 Windows, the WebKit child-process tree on Linux/macOS — not host memory or
 unique physical RAM. Platforms without a sampler adapter retain manual freezing
 without the old 24-view fallback.
+
+`CRYO_WARM_MINUTES` (default 30, `0` turns it off) is how long the `--warm`
+keeper a closing window leaves behind holds a WebView2 browser process open
+(`instance::warm`). Booting that process is the whole cost of the first view
+(~850 ms from window shown to views up, versus ~380 ms attaching to a keeper's);
+nothing else on the launch path — browser flags, extensions, the user data
+folder's location — moved the number. The keeper exits the moment a window
+attaches. Two things it must not do, both measured: show its window (a shown
+keeper view made the next attach slower than cold) and attach to the closing
+window's browser process instead of booting its own (same). The other launch
+cost was ours: reading a multi-megabyte `history.json` the last window had just
+rewritten blocked ~3.7 s on the antivirus scanning it, so the recorder opens
+`pending` and a worker hydrates it.
 
 Chrome-script tests run with `npm test` (run `npm ci` first — jsdom is a
 devDependency). They must be named `tests/*.test.cjs`: that is the pattern

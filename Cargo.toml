@@ -1,6 +1,6 @@
 [package]
 name = "cryo"
-version = "0.17.1"
+version = "0.18.0"
 edition = "2021"
 description = "A memory-obsessed browser shell written in Rust. Tabs freeze. Budgets hold."
 license = "MIT"
@@ -30,6 +30,25 @@ servo = { version = "0.7.0", optional = true }
 image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
 dpi = { version = "0.1", optional = true }
 zip = { version = "9.3.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+# The mail context's plumbing: a synchronous IMAP client on the mail
+# worker's thread (no second runtime, AGENTS §9), schannel TLS on
+# Windows via native-tls, lettre for SMTP send, mail-parser for MIME.
+imap = "2.4.1"
+lettre = { version = "0.11.23", default-features = false, features = [
+    "builder",
+    "smtp-transport",
+    "native-tls",
+    "hostname",
+] }
+mail-parser = "0.11.9"
+# Inline (`cid:`) images are re-encoded as data URLs for the reading
+# pane — the sanitizer lets self-contained images through, never a part
+# id the page would have to fetch.
+base64 = "0.23"
+# Sanitizes message HTML before it reaches the /mail document — the only
+# thing standing between a hostile sender and the shell's own origin.
+ammonia = "4.2.4"
+native-tls = "0.2.18"
 
 [features]
 servo-engine = ["dep:servo", "dep:image", "dep:dpi"]
@@ -68,10 +87,13 @@ windows = { version = "0.62", features = [
     "Win32_System_ProcessStatus",
     "Win32_System_SystemServices",
     "Win32_System_Threading",
+    "Win32_Media_Audio",
     "Win32_UI_HiDpi",
     "Win32_UI_Shell",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
+    "UI_Notifications",
+    "Data_Xml_Dom",
 ] }
 
 [build-dependencies]

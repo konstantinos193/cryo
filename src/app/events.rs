@@ -11,7 +11,7 @@ use crate::shell::chrome::favicon_data_url;
 use crate::shell::pages;
 use crate::tabs::TabId;
 
-use super::{App, DEFAULT_URL};
+use super::{App, DEFAULT_URL, NEW_TAB_URL};
 
 impl App {
     /// A view's document title changed — record it on the tab and attach
@@ -37,9 +37,30 @@ impl App {
             self.cancel_permission_prompt()?;
             self.close_password_prompt()?;
         }
-        // Internal pages are shell surfaces, not tab destinations —
-        // never record them as a tab's address.
+        // Internal pages never reach history or the address bar. The
+        // three shell *pages* are still places a tab can be at: a home
+        // tab that followed the inbox card to /mail is a mail tab now,
+        // and one that went Back is a home tab again — so freeze,
+        // duplicate, the site popup and the mail wire all agree with
+        // what the surface shows. Error cards and the settings routes
+        // are not places; a tab showing one keeps the address it had.
         if pages::is_internal_url(&url) {
+            if let Some(page) = pages::page_address(&url) {
+                let address = if page == NEW_TAB_URL {
+                    DEFAULT_URL
+                } else {
+                    page
+                };
+                let moved = self
+                    .registry
+                    .get_mut(id)
+                    .filter(|tab| tab.url() != address)
+                    .map(|tab| tab.navigate(address.to_string()))
+                    .is_some();
+                if moved && self.registry.active_id() == Some(id) {
+                    return self.sync_chrome();
+                }
+            }
             return Ok(());
         }
         // Sign-ins and sign-outs all route through Google — a
