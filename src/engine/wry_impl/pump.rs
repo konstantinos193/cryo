@@ -36,7 +36,7 @@ pub(crate) fn suppress_redraw(handle: &raw_window_handle::RawWindowHandle, suppr
             Some(LPARAM(0)),
         );
         if !suppress {
-            InvalidateRect(hwnd, None, true);
+            InvalidateRect(Some(hwnd), None, true);
         }
     }
 }
