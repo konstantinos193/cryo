@@ -425,16 +425,24 @@ impl Engine for WryEngine {
         }
 
         // `build_as_child` waits on its own pump; clear queued paints or a
-        // mid-spawn WM_PAINT re-enters tao's handler (see `pump`).
+        // mid-spawn WM_PAINT re-enters tao's handler (see `pump`), and
+        // suppress redraw so no NEW paint can be generated during the
+        // wait — the re-entrancy panic seen in CI (#23).
         #[cfg(target_os = "windows")]
-        pump::clear_pending_paints();
+        {
+            pump::clear_pending_paints();
+            pump::suppress_redraw(&self.parent, true);
+        }
 
         // SAFETY: `parent` is the handle of the window `App` owns for the
         // whole event loop — no spawn can outlive it.
         let parent = unsafe { WindowHandle::borrow_raw(self.parent) };
         let view = builder
             .build_as_child(&parent)
-            .map_err(|e| EngineError::Spawn(e.to_string()))?;
+            .map_err(|e| EngineError::Spawn(e.to_string()));
+        #[cfg(target_os = "windows")]
+        pump::suppress_redraw(&self.parent, false);
+        let view = view?;
         // Only now: a spawn that failed loaded nothing, and the next
         // content view should still get the chance to.
         #[cfg(target_os = "windows")]

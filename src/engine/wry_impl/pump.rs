@@ -9,10 +9,32 @@
 
 use std::sync::mpsc::Receiver;
 
-use windows::Win32::Graphics::Gdi::ValidateRect;
+use windows::Win32::Graphics::Gdi::{InvalidateRect, ValidateRect};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE, WM_PAINT,
+    DispatchMessageW, GetMessageW, PeekMessageW, SendMessageW, TranslateMessage, MSG, PM_REMOVE,
+    WM_PAINT, WM_SETREDRAW,
 };
+
+/// Toggle `WM_SETREDRAW` on the host window around a WebView2 spawn.
+/// `clear_pending_paints` drains paints already queued; it cannot stop a
+/// NEW one being generated while wry's `build_as_child` waits inside its
+/// own pump — an occlusion change, a resize, a sibling painting. That
+/// paint dispatches into tao's runner mid-handler and panics it (#23).
+/// `WM_SETREDRAW false` means none is generated for the wait's duration;
+/// re-enabling plus `InvalidateRect` repaints what was suppressed.
+pub(crate) fn suppress_redraw(handle: &raw_window_handle::RawWindowHandle, suppress: bool) {
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+    let raw_window_handle::RawWindowHandle::Win32(win32) = handle else {
+        return;
+    };
+    let hwnd = HWND(win32.hwnd.get() as _);
+    unsafe {
+        SendMessageW(hwnd, WM_SETREDRAW, WPARAM(suppress as usize), LPARAM(0));
+        if !suppress {
+            InvalidateRect(hwnd, None, true);
+        }
+    }
+}
 
 /// Drop queued paints and clear their windows' update regions. Run before
 /// handing the thread to a pump we don't own — wry's `build_as_child` waits
