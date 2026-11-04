@@ -96,8 +96,29 @@ impl App {
                 }
             })
             .collect();
+        let processes = self
+            .last_memory
+            .as_ref()
+            .map(|(_, snapshot)| {
+                snapshot
+                    .processes()
+                    .iter()
+                    .map(|p| crate::shell::chrome::ChromeProcess {
+                        pid: p.id().0,
+                        kind: match p.kind() {
+                            crate::engine::accounting::ProcessKind::Browser => "browser",
+                            crate::engine::accounting::ProcessKind::Gpu => "gpu",
+                            crate::engine::accounting::ProcessKind::Renderer => "renderer",
+                            _ => "other",
+                        },
+                        bytes: p.stats().ok().map(|s| s.private_bytes()),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let payload = ChromeTasks {
             tasks,
+            processes,
             overhead: pools.overhead,
             shared: pools.shared_renderers,
             partial: pools.partial,

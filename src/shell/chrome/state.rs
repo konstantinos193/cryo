@@ -254,6 +254,18 @@ pub struct ChromeTask {
     pub favicon: Option<String>,
 }
 
+/// One real process row — what the runtime always answers: pid, kind
+/// and private bytes, even when no view↔process link exists. The
+/// pane lists them under the tabs it cannot bill them to.
+#[derive(Debug, Serialize)]
+pub struct ChromeProcess {
+    pub pid: u32,
+    /// "browser" | "gpu" | "renderer" | "other"
+    pub kind: &'static str,
+    /// Private bytes, `None` when the read failed.
+    pub bytes: Option<u64>,
+}
+
 /// The tasks pane payload, pushed by `__cryo_tasks` apart from
 /// `__cryo_library`: a fresh sample lands without the panel's other
 /// data changing, and resending a thousand history rows per sample
@@ -261,6 +273,7 @@ pub struct ChromeTask {
 #[derive(Debug, Serialize)]
 pub struct ChromeTasks {
     pub tasks: Vec<ChromeTask>,
+    pub processes: Vec<ChromeProcess>,
     /// Browser, GPU and utility processes — reported once, never
     /// divided across tabs.
     pub overhead: u64,

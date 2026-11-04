@@ -76,4 +76,22 @@
       ' · shared renderers: ' + fmtBytes(taskData.shared || 0) +
       (taskData.partial ? ' · a process read failed — figures are partial' : ''));
     libBody.appendChild(pools);
+    // The runtime's own view, honestly labelled: processes whose link
+    // to a view is unknown show their real bytes under the tabs they
+    // cannot be billed to.
+    const procs = taskData.processes || [];
+    if (procs.length) {
+      const sep = node('div', 'lrow');
+      sep.style.borderBottom = '0';
+      sep.appendChild(node('div', 'fold', procs.length + ' processes'));
+      libBody.appendChild(sep);
+      for (const p of procs) {
+        const r = node('div', 'lrow task');
+        const main = node('div', 'main');
+        main.append(node('div', 't', p.kind + ' · pid ' + p.pid));
+        r.appendChild(main);
+        r.appendChild(node('div', 'fold mem', p.bytes != null ? fmtBytes(p.bytes) : '?'));
+        libBody.appendChild(r);
+      }
+    }
   };
