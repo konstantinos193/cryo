@@ -312,8 +312,9 @@ there is no longer a 24-live-view cap.
   platforms and live-verified on Windows.
 - [ ] Phase 3: memory dashboard (the real `Shift+Esc`).
 - [ ] Phase 4: a WebExtensions (MV3) surface. Installing from the Web Store or
-  a folder, loading and removing are done on Windows; what remains is a
-  toolbar action surface, per-extension enable/disable, and incognito grants.
+  a folder, loading, enabling/disabling and removing are done on Windows —
+  WebView2 exposes no toolbar action surface, so `browser_action` popups have
+  nowhere to render; what remains is incognito grants.
 - [ ] Phase 5: evaluate Servo as a second engine backend. If it earns the slot.
 
 Known gaps by design: native find-in-page on Linux/macOS.
