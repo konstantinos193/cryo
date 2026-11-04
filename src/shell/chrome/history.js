@@ -12,7 +12,18 @@
       entries.length + (entries.length === 1 ? ' remembered address' : ' remembered addresses')));
     head.appendChild(heading);
     if (entries.length) {
-      head.appendChild(button('Clear history', 'warn', () => ipc({cmd: 'history_clear'})));
+      // "Clear a range": the picker names the span, the button sends
+      // it — and the app's OS dialog still asks before anything is
+      // forgotten.
+      let range = 'all';
+      const pick = xdrop(
+        [['hour', 'the last hour'], ['day', 'the last 24 hours'],
+         ['week', 'the last week'], ['all', 'everything']],
+        range, (v) => { range = v; }, 'How far back to forget');
+      const clear = node('div', 'clear-range');
+      clear.append(pick,
+        button('Forget', 'warn', () => ipc({cmd: 'history_clear', range})));
+      head.appendChild(clear);
     }
     libBody.appendChild(head);
     if (!entries.length) {
