@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.18.2
+
+### Fixed
+
+- Linux builds carry glib 0.18.5 with the upstream `VariantStrIter`
+  fix (GHSA-wrw7-89jp-8q8g, Dependabot alert 1) as a `[patch.crates-io]`
+  override in `patches/glib`. No release of wry or tao reaches glib
+  0.20, where the fix shipped: both bind GTK3 through gtk-rs 0.18. The
+  patch goes the day they move.
+
 ## 0.18.1
 
 ### Fixed
