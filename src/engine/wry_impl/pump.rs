@@ -29,9 +29,14 @@ pub(crate) fn suppress_redraw(handle: &raw_window_handle::RawWindowHandle, suppr
     };
     let hwnd = HWND(win32.hwnd.get() as _);
     unsafe {
-        SendMessageW(hwnd, WM_SETREDRAW, WPARAM(suppress as usize), LPARAM(0));
+        SendMessageW(
+            Some(hwnd),
+            WM_SETREDRAW,
+            Some(WPARAM(suppress as usize)),
+            Some(LPARAM(0)),
+        );
         if !suppress {
-            InvalidateRect(hwnd, None, true);
+            InvalidateRect(Some(hwnd), None, true);
         }
     }
 }
