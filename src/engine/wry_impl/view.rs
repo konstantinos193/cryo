@@ -592,4 +592,15 @@ impl ContentView for WryView {
             None
         }
     }
+
+    fn frame_id(&self) -> Option<u32> {
+        #[cfg(target_os = "windows")]
+        {
+            ops::frame_id(&self.view)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            None
+        }
+    }
 }

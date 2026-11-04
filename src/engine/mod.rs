@@ -328,6 +328,13 @@ pub trait ContentView {
     /// Whether the page is playing audio. `None` when the engine can't
     /// say — callers must then assume it might be, before suspending.
     fn playing_audio(&self) -> Option<bool>;
+    /// The engine's id for this view's top frame — the handle that
+    /// pairs with a renderer's served frames to say which views share a
+    /// process. `None` where the engine cannot say; attribution then
+    /// reports no figure rather than guessing one.
+    fn frame_id(&self) -> Option<u32> {
+        None
+    }
 }
 
 /// One cookie from the profile's jar, in our own vocabulary — name and

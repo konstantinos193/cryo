@@ -73,7 +73,7 @@ impl App {
             self.freeze_view(id)?;
             self.sync_chrome()?;
         }
-        Ok(())
+        self.note_memory_sample(snapshot)
     }
 
     pub(super) fn suspend_idle_views(&mut self) {

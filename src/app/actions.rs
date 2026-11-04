@@ -101,7 +101,15 @@ impl App {
             }
             ChromeCommand::HistoryOpen { url, ctrl, shift } => self.open_history(&url, ctrl, shift),
             ChromeCommand::HistoryRemove { text } => self.remove_history(&text),
-            ChromeCommand::HistoryClear {} => self.clear_history(),
+            ChromeCommand::HistoryClear { range } => self.clear_history(range),
+            ChromeCommand::TabFreeze { id } => {
+                self.freeze_tab(TabId::from_raw(id))?;
+                self.push_tasks()
+            }
+            ChromeCommand::TabDiscard { id } => {
+                self.discard_tab(TabId::from_raw(id))?;
+                self.push_tasks()
+            }
             ChromeCommand::PasswordReveal { origin, username } => {
                 self.reveal_password(&origin, &username)
             }

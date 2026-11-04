@@ -341,6 +341,20 @@
     background: var(--accent-soft); color: var(--accent);
     border-color: rgba(var(--accent-rgb), .35);
   }
+  /* The history pane's range forget: the picker names the span, the
+     warn button sends it. Sized to the lbtn row, not the 38px default. */
+  .clear-range { display: flex; align-items: center; gap: 7px; flex: 0 0 auto; }
+  .clear-range .xdrop-btn { height: auto; padding: 5px 10px; border-radius: 8px; font-size: 11px; }
+  /* The tasks pane: state chip and the memory column — a figure only
+     when sole ownership makes it honest, a word when it is not. */
+  .task .mem { min-width: 84px; text-align: right; }
+  .task .chip {
+    flex: 0 0 auto; padding: 2px 7px; border-radius: 6px;
+    font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
+  }
+  .task .chip.frozen { background: rgba(var(--accent-rgb), .12); color: var(--accent-tx); }
+  .task .chip.discarded { background: rgba(var(--bad-rgb), .1); color: var(--bad-tx); }
+  .task .you { color: var(--tx3); font-weight: 400; }
   /* "Add to Chrome": one card for the question, the download and the
      result. Same corner and the same material as the password prompt,
      because it is the same kind of question — asked by the browser, about

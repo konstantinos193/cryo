@@ -16,7 +16,7 @@
 use crate::bookmarks::{BookmarkId, Draft};
 use crate::shell::chrome::{
     favicon_data_url, ChromeBookmark, ChromeHistoryEntry, ChromeLibrary, ChromePassword,
-    ChromeSource, Notice, SecretReply,
+    ChromeSource, ClearRange, Notice, SecretReply,
 };
 use crate::shell::pages;
 
@@ -131,6 +131,12 @@ impl App {
         if pane == "import" {
             self.find_import_sources();
         }
+        // The tasks pane's rows ride their own push — sample data, not
+        // the panel's static lists.
+        if pane == "tasks" {
+            self.request_memory_sample();
+            self.push_tasks()?;
+        }
         self.push_library()
     }
 
@@ -184,16 +190,26 @@ impl App {
     }
 
     /// "Clear history": an irreversible wipe, so the OS dialog asks
-    /// first — the same gate a revealed password goes through.
-    pub(super) fn clear_history(&mut self) -> anyhow::Result<()> {
-        if !confirm(
-            "Clear history",
-            "Forget every recorded visit and typed address? Kept pages and saved passwords stay.",
-        ) {
+    /// first — the same gate a revealed password goes through. `range`
+    /// bounds the wipe to a recent span or covers everything.
+    pub(super) fn clear_history(&mut self, range: ClearRange) -> anyhow::Result<()> {
+        let question = match range {
+            ClearRange::All => "Forget every recorded visit and typed address? Kept pages and saved passwords stay.".to_string(),
+            span => format!(
+                "Forget visits and typed addresses from {}? Everything older stays.",
+                span.label()
+            ),
+        };
+        if !confirm("Clear history", &question) {
             return Ok(());
         }
         if let Some(rec) = &mut self.recorder {
-            rec.clear()?;
+            match range.seconds() {
+                Some(secs) => {
+                    rec.remove_since(unix_now().saturating_sub(secs))?;
+                }
+                None => rec.clear()?,
+            }
         }
         self.push_library()
     }
