@@ -1,9 +1,31 @@
 # Changelog
 
-## 0.18.2
+## 0.19.0
+
+### Added
+
+- Sender pictures in the mail list and reading pane: the picture the
+  reader chose for an address, then Gravatar, then the organization's
+  own site icon. Site icons are fetched only over `https` to hosts that
+  resolve to public addresses, every redirect hop judged the same way,
+  so a message cannot aim a request at the reader's network.
+- Mail signatures: kept per account, sanitized with the same allowlist
+  as a body, and sent as `multipart/alternative` with the RFC 3676
+  `-- ` marker in the plain half. Attachments go out as
+  `multipart/mixed`. Account settings are edited from the mail page.
+- The address box follows the active tab; a draft typed into it holds
+  only on the tab it was typed on and lasts until that page moves.
 
 ### Fixed
 
+- The browser profile no longer lives wherever the program is installed.
+  On an external USB drive every page load read its cache from that disk
+  (cold reads ~41 ms against ~0.8 ms on NVMe; the same pages about 45%
+  slower). It now lives in `%LOCALAPPDATA%\cryo\webview`. An existing
+  profile is copied by the warm keeper after the last window closes,
+  without its rebuildable caches, so nobody waits on it and sign-ins carry
+  over. The old folder is left in place. Turning the keeper off with
+  `CRYO_WARM_MINUTES=0` also leaves the profile where it is.
 - Linux builds carry glib 0.18.5 with the upstream `VariantStrIter`
   fix (GHSA-wrw7-89jp-8q8g, Dependabot alert 1) as a `[patch.crates-io]`
   override in `patches/glib`. No release of wry or tao reaches glib

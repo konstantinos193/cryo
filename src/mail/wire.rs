@@ -68,6 +68,31 @@ pub enum PageCommand {
     RemoveAccount {
         email: String,
     },
+    /// The settings page's Save.
+    SaveProfile {
+        email: String,
+        display: String,
+        signature: String,
+        photo: String,
+    },
+    /// The settings page leaving its HTML source view: typed markup
+    /// goes through the sanitizer before the document renders it.
+    CleanSignature {
+        html: String,
+    },
+    /// Addresses the list is showing that need a picture. `lookup` is
+    /// false when the reader turned lookups off: their own choices still
+    /// answer, nothing goes out.
+    Faces {
+        addrs: Vec<String>,
+        #[serde(default)]
+        lookup: bool,
+    },
+    /// The reader chose a sender's picture; empty `photo` clears it.
+    SetFace {
+        addr: String,
+        photo: String,
+    },
     /// The compose overlay's Send. `in_reply_to`/`references` thread a
     /// reply; empty strings mean a fresh message.
     Send {
@@ -78,6 +103,10 @@ pub enum PageCommand {
         bcc: String,
         subject: String,
         text: String,
+        #[serde(default)]
+        quote: String,
+        #[serde(default)]
+        sign: bool,
         #[serde(default)]
         in_reply_to: String,
         #[serde(default)]
@@ -93,6 +122,10 @@ pub enum PageCommand {
         bcc: String,
         subject: String,
         text: String,
+        #[serde(default)]
+        quote: String,
+        #[serde(default)]
+        sign: bool,
     },
     /// Compose's "Attach" — the app opens its file picker and keeps
     /// the paths; the page only ever sees names and sizes.
@@ -180,6 +213,14 @@ impl From<WireFlag> for super::client::Flag {
 pub struct PushAccount {
     pub email: String,
     pub display: String,
+    /// Sanitized HTML; compose shows it, settings edits it.
+    pub signature: String,
+    /// A `data:` URL, or empty.
+    pub photo: String,
+    pub username: String,
+    /// "host:port" of each server, for the settings page to show.
+    pub imap: String,
+    pub smtp: String,
     pub folders: Vec<PushFolder>,
     /// "syncing" | "ok" | an error's text — the row's status dot.
     pub status: String,
@@ -189,6 +230,11 @@ pub struct PushAccount {
 pub struct PushFolder {
     pub name: String,
     pub display: String,
+    /// The decoded hierarchy, "/"-joined — the rail sorts by it.
+    pub path: String,
+    pub depth: u8,
+    /// `false` for a parent that only groups its children.
+    pub selectable: bool,
     /// "inbox" | "sent" | "drafts" | "junk" | "archive" | "trash" | "other".
     pub role: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -323,6 +369,18 @@ pub enum Push {
     /// The onboarding form's verdict: "" on success (a `state` push
     /// follows), or the reason it failed.
     AccountReply { error: String },
+    /// The settings page's verdict: "" on success (a `state` push
+    /// follows), or the reason it was refused.
+    ProfileReply { error: String },
+    /// Typed signature source, safe to render.
+    SignatureClean { html: String },
+    /// One sender's picture, as a `data:` URL. `chosen` marks the reader's
+    /// own, where an empty `src` means it was cleared.
+    Face {
+        addr: String,
+        src: String,
+        chosen: bool,
+    },
     /// Compose's verdict: "" = sent.
     SendReply { error: String },
     /// A guessed server pair for the onboarding form, or nulls.

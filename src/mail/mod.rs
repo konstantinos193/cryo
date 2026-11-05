@@ -16,6 +16,7 @@
 
 mod account;
 mod autoconfig;
+mod avatar;
 mod client;
 mod envelope;
 mod folder;
@@ -24,6 +25,7 @@ mod imap_impl;
 mod message;
 mod sanitize;
 mod send;
+mod site_icon;
 mod store;
 mod thread;
 mod wire;
@@ -35,6 +37,7 @@ pub use envelope::Envelope;
 pub use folder::{Folder, Role};
 pub use guess::defaults_for;
 pub use message::{Attachment, Body};
+pub use sanitize::clean_signature;
 pub use send::Draft;
 pub use store::FileStore;
 pub use wire::{

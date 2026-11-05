@@ -99,6 +99,11 @@ label .dim { font-weight: 500; text-transform: none; letter-spacing: 0; }
 }
 .avatar.sm { width: 24px; height: 24px; font-size: 11px; }
 .avatar.md { width: 40px; height: 40px; font-size: 15px; }
+.avatar.lg { width: 64px; height: 64px; font-size: 24px; }
+/* A picture, when there is one, covers the initial. Logos are often
+   transparent and drawn for white, so the picture brings its own. */
+.avatar { position: relative; overflow: hidden; }
+.avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #fff; }
 
 /* The crystal, from the palette — the page keeps no copy of it. */
 .crystal { display: inline-block; width: 22px; height: 22px; background: var(--mark-url) center / contain no-repeat; }
@@ -107,7 +112,7 @@ label .dim { font-weight: 500; text-transform: none; letter-spacing: 0; }
 
 /* ── Cards: onboarding, incognito ────────────────────────────────── */
 
-#setup, #off {
+#setup, #off, #settings {
   position: fixed; inset: 0; z-index: 5; overflow: auto;
   display: flex; align-items: center; justify-content: center; padding: 24px;
   background: var(--bg0);
@@ -131,6 +136,41 @@ label .dim { font-weight: 500; text-transform: none; letter-spacing: 0; }
 .card .row.end { justify-content: flex-end; margin-top: 22px; }
 .card .row.end .primary { min-width: 140px; }
 #su-servers { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line-soft); }
+
+/* ── Settings ────────────────────────────────────────────────────── */
+
+#settings { align-items: flex-start; padding: 40px 24px; }
+.card.wide { width: min(640px, 100%); padding: 18px 30px 22px; }
+.st-head { display: flex; align-items: center; gap: 8px; margin: 0 0 4px -8px; }
+.st-head h1 { flex: 1; margin: 0; font-size: 18px; letter-spacing: -.015em; }
+.st-head select { width: auto; max-width: 280px; height: 30px; padding-top: 0; padding-bottom: 0; }
+.st-section { padding: 18px 0; border-top: 1px solid var(--line-soft); }
+.st-head + .st-section { border-top: none; }
+.st-section h2 { margin: 0 0 10px; font-size: 13px; font-weight: 650; color: var(--tx-strong); }
+.st-section label:first-of-type { margin-top: 14px; }
+.st-row { display: flex; align-items: baseline; gap: 14px; }
+.st-row .grow { flex: 1; }
+.st-row button.link { margin: 0; }
+.st-photo { display: flex; align-items: center; gap: 16px; }
+.st-photo-actions { display: flex; gap: 6px; }
+.sig-edit { min-height: 96px; max-height: 300px; overflow: auto; font-size: 13.5px; line-height: 1.5; cursor: text; }
+.sig-edit:focus { outline: 2px solid var(--accent-line); outline-offset: 1px; }
+.sig-edit img { max-width: 100%; height: auto; }
+#st-sig-html { font: 12px/1.5 ui-monospace, Consolas, monospace; resize: vertical; }
+.hint { margin: 8px 0 0; font-size: 12px; color: var(--tx3); line-height: 1.5; }
+.st-section label.check {
+  display: flex; align-items: flex-start; gap: 10px; margin: 0; padding: 7px 0;
+  font-size: 12px; font-weight: 400; color: var(--tx3); text-transform: none; letter-spacing: 0; line-height: 1.5; cursor: pointer;
+}
+.check input { width: 15px; height: 15px; margin: 2px 0 0; flex: none; padding: 0; accent-color: var(--accent-deep); }
+.check b { display: block; font-size: 13px; font-weight: 500; color: var(--tx); }
+.st-facts { display: grid; grid-template-columns: max-content 1fr; gap: 5px 18px; margin: 0 0 14px; font-size: 12.5px; }
+.st-facts dt { color: var(--tx3); }
+.st-facts dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+button.danger-link { height: auto; padding: 0; border: none; background: none; font-size: 12px; color: var(--bad-tx); }
+button.danger-link:hover:not(:disabled) { background: none; color: var(--bad); text-decoration: underline; text-underline-offset: 3px; }
+.st-foot { display: flex; justify-content: flex-end; gap: 8px; padding-top: 16px; border-top: 1px solid var(--line-soft); }
+.st-foot .primary { min-width: 96px; }
 
 /* ── App grid ────────────────────────────────────────────────────── */
 
@@ -166,9 +206,8 @@ button.compose span { flex: 1; text-align: left; }
 .acct-head .dot.busy { background: var(--star); animation: pulse 1.2s ease-in-out infinite; }
 .acct-head .dot.bad { background: var(--bad); }
 @keyframes pulse { 50% { opacity: .35; } }
-.acct-head .x { width: 22px; height: 22px; border: none; background: none; color: var(--tx-mute); padding: 0; opacity: 0; }
-.acct-head:hover .x, .acct-head .x:focus-visible { opacity: 1; }
-.acct-head .x:hover { color: var(--bad); background: none; }
+.acct-head .gear { width: 24px; height: 24px; flex: none; border: none; background: none; color: var(--tx3); padding: 0; border-radius: var(--r-sm); }
+.acct-head .gear:hover:not(:disabled) { color: var(--tx); background: rgba(var(--hair-rgb), .07); }
 
 .fold {
   display: flex; align-items: center; gap: 9px; width: 100%;
@@ -188,14 +227,22 @@ button.compose span { flex: 1; text-align: left; }
   background: var(--accent-soft); color: var(--accent);
 }
 .fold.sel .n { background: var(--accent-deep); color: var(--on-accent); }
+/* A parent that only groups: it reads as a heading, and is not a target. */
+.fold:disabled, .fold:disabled:hover { opacity: 1; background: none; color: var(--tx3); cursor: default; font-size: 12px; }
+.fold-label {
+  padding: 12px 10px 4px; font-size: 11px; font-weight: 600; color: var(--tx3);
+  text-transform: uppercase; letter-spacing: .08em;
+}
 
 .rail-foot {
   display: flex; flex-direction: column; gap: 2px;
   margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line-soft);
 }
-.rail-foot .ghost { padding: 0 8px; height: 28px; font-size: 12px; justify-content: flex-start; }
-.sync-row { display: flex; align-items: center; gap: 4px; }
-.status { flex: 1; min-width: 0; padding-left: 8px; font-size: 11px; color: var(--tx3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.foot-row { display: flex; gap: 6px; }
+.foot-add { flex: 1; min-width: 0; height: 30px; font-size: 12.5px; }
+#sync-btn { flex: none; }
+.status { padding: 0 2px 6px; font-size: 11px; color: var(--tx3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status:empty { display: none; }
 .status.bad { color: var(--bad-tx); }
 #sync-btn.busy .ic { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -403,6 +450,22 @@ button.small { height: 24px; padding: 0 9px; font-size: 12px; }
 .r-body td, .r-body th { border: none; padding: 2px 6px; }
 .r-body hr { border: none; border-top: 1px solid var(--line); margin: 16px 0; }
 
+/* HTML mail is written for white paper: senders set dark text and leave
+   the background unset, and logos are transparent with dark lettering.
+   No theme colour can rescue that, so it gets the page it was written
+   for, in every theme. Plain text has no such assumption and stays on
+   the theme. These colours are the paper's, not the palette's. */
+.paper {
+  color-scheme: light; background: #fff; color: #1f2328;
+  padding: 16px 18px; border-radius: var(--r-sm); overflow-x: auto;
+}
+.paper a { color: #0b57d0; }
+.paper a:hover { color: #0842a0; }
+.paper blockquote { border-left-color: #d0d7de; color: #57606a; }
+.paper hr { border-top-color: #d0d7de; }
+.paper img:not([src]) { border-color: #c4cad2; color: #6e7781; }
+.m-body:has(.paper) { padding-left: 14px; }
+
 /* ── Compose ─────────────────────────────────────────────────────── */
 
 #compose {
@@ -441,6 +504,12 @@ button.small { height: 24px; padding: 0 9px; font-size: 12px; }
   padding: 14px 16px; background: var(--bg1); font-size: 13.5px; line-height: 1.55;
   box-shadow: none !important;
 }
+#c-sig { position: relative; flex: none; margin: 0 16px 10px; }
+#c-sig-body { max-height: 130px; overflow: auto; padding: 10px 34px 10px 12px; font-size: 12.5px; line-height: 1.45; }
+#c-sig-body img { max-width: 100%; height: auto; }
+#c-sig-off { position: absolute; top: 4px; right: 4px; z-index: 1; width: 24px; height: 24px; color: #57606a; }
+#c-sig-off:hover:not(:disabled) { background: rgba(0, 0, 0, .07); color: #1f2328; }
+#c-sig-off .ic { width: 14px; height: 14px; }
 #compose .err { margin: 0; padding: 6px 16px 0; }
 .compose-foot {
   display: flex; align-items: center; gap: 8px; flex: none;
@@ -448,6 +517,18 @@ button.small { height: 24px; padding: 0 9px; font-size: 12px; }
 }
 .compose-foot .grow { flex: 1; }
 .compose-foot .dim { font-size: 11px; font-variant-numeric: tabular-nums; }
+
+/* ── Sender picture menu ─────────────────────────────────────────── */
+
+.m-head .avatar { cursor: pointer; transition: box-shadow .15s ease; }
+.m-head .avatar:hover, .m-head .avatar:focus-visible { box-shadow: 0 0 0 2px var(--accent-line); outline: none; }
+#face-menu {
+  position: fixed; z-index: 25; display: flex; flex-direction: column; min-width: 170px; padding: 4px;
+  background: var(--pop-bg); border: 1px solid var(--line-pop); border-radius: var(--r);
+  box-shadow: var(--shadow-box); backdrop-filter: blur(12px);
+}
+#face-menu button { justify-content: flex-start; height: 28px; border: none; background: none; font-size: 12.5px; border-radius: var(--r-sm); }
+#face-menu button:hover { background: rgba(var(--hair-rgb), .08); }
 
 /* ── Toast ───────────────────────────────────────────────────────── */
 

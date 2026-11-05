@@ -290,6 +290,14 @@ pub fn clean(html: &str, allow_remote: bool) -> Cleaned {
     }
 }
 
+/// A signature as it is kept and sent. The same allowlist as a body —
+/// it is shown in the same page — but remote images stay: a logo the
+/// owner chose to put in their own signature is not a tracking pixel
+/// aimed at them.
+pub fn clean_signature(html: &str) -> String {
+    clean(html, true).html.trim().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

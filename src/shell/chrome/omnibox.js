@@ -5,6 +5,31 @@
   // What the user typed before arrows started browsing rows — cycling
   // back off the list (or Escape) restores it.
   let omniTyped = null;
+  // The box holds the user's own text rather than the page's address.
+  let urlDraft = false;
+  // The tab and address the box last followed.
+  let shownTab = null;
+  let shownUrl = '';
+
+  // The box follows the active tab. Only a draft holds it back, and only
+  // on the same tab: while it is being typed nothing moves it; left behind
+  // in the box, it lasts until the page goes somewhere. DOM focus alone
+  // says nothing here — a tab press is prevented and a click into a content
+  // view lands in another document, so activeElement stays on this input
+  // long after the user has gone.
+  const paintAddress = (state) => {
+    const tab = state.tabs.find((t) => t.active);
+    const id = tab ? tab.id : null;
+    const url = state.active_url;
+    const typing = document.activeElement === urlEl && document.hasFocus();
+    const held = urlDraft && id === shownTab && (typing || url === shownUrl);
+    shownTab = id;
+    shownUrl = url;
+    if (held) return;
+    urlDraft = false;
+    // Rewriting an unchanged value would drop the user's selection.
+    if (urlEl.value !== url) urlEl.value = url;
+  };
 
   // Fallback glyphs for the verdict row — a magnifier for searches, a
   // globe for navigations. Sites without a remembered favicon get a
@@ -19,6 +44,7 @@
     ipc({cmd: 'navigate', input,
          ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey,
          engine: enginePick()});
+    urlDraft = false;
     urlEl.blur();
   };
 
@@ -95,7 +121,10 @@
     setOmni(true);
   };
 
-  urlEl.addEventListener('input', renderOmni);
+  urlEl.addEventListener('input', () => {
+    urlDraft = true;
+    renderOmni();
+  });
   urlEl.addEventListener('focus', renderOmni);
   urlEl.addEventListener('blur', () => setOmni(false));
 
@@ -113,6 +142,7 @@
         omniSel = omniSel === -1 ? n - 1 : omniSel - 1;
       }
       urlEl.value = omniSel === -1 ? omniTyped : omniRows[omniSel].input;
+      urlDraft = true;
       urlEl.select();
       paintSel();
       return;
@@ -130,6 +160,7 @@
       if (row) {
         e.preventDefault();
         urlEl.value = row.complete;
+        urlDraft = true;
         urlEl.setSelectionRange(v.length, row.complete.length);
       }
       return;
@@ -146,6 +177,7 @@
       navigator.clipboard.readText().then((t) => {
         if (t) {
           ipc({cmd: 'navigate', input: t, engine: enginePick()});
+          urlDraft = false;
           urlEl.blur();
         }
       }).catch(() => {});

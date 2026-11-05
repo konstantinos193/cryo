@@ -12,11 +12,12 @@
 //! Results reach the event loop through the `out` callback — the app
 //! turns them into `window.__cryo_mail` pushes.
 
-use std::collections::HashMap;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::collections::{HashMap, VecDeque};
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::time::Duration;
 
 use super::account::{Account, ServerSpec};
+use super::avatar;
 use super::client::{Client, Flag};
 use super::store::{FileStore, MAX_KEPT};
 use super::{Envelope, Folder, MailError};
@@ -97,6 +98,12 @@ pub enum Request {
         uid: u32,
         index: usize,
     },
+    /// Look up senders' pictures. Queued behind everything else: mail
+    /// the reader is waiting on never waits for a picture. Without
+    /// `lookup`, only pictures the reader chose answer.
+    Faces { addrs: Vec<String>, lookup: bool },
+    /// The reader chose a sender's picture; an empty `photo` clears it.
+    SetFace { addr: String, photo: String },
     /// Forget everything — the window is going away or the account
     /// was removed.
     DropAccount { email: String },
@@ -149,6 +156,13 @@ pub enum Outcome {
         name: String,
         mime: String,
         bytes: Vec<u8>,
+    },
+    /// A sender's picture, as a `data:` URL. Empty `src` means the
+    /// reader's choice for this address was cleared.
+    Face {
+        addr: String,
+        src: String,
+        chosen: bool,
     },
     Failed {
         op: &'static str,
@@ -238,12 +252,47 @@ fn session<'a>(
 
 fn run(store: FileStore, rx: Receiver<Request>, out: &dyn Fn(Outcome)) {
     let mut sessions: Sessions = HashMap::new();
+    let mut faces: VecDeque<(String, bool)> = VecDeque::new();
     loop {
-        match rx.recv_timeout(IDLE) {
-            Ok(request) => handle(&store, &mut sessions, request, out),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => sessions.clear(),
-            // Every sender is gone — the window is closing.
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+        // Every sender gone means the window is closing — pictures still
+        // queued are not worth holding it open for.
+        let request = if faces.is_empty() {
+            match rx.recv_timeout(IDLE) {
+                Ok(request) => Some(request),
+                Err(RecvTimeoutError::Timeout) => {
+                    sessions.clear();
+                    None
+                }
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
+        } else {
+            match rx.try_recv() {
+                Ok(request) => Some(request),
+                Err(TryRecvError::Empty) => None,
+                Err(TryRecvError::Disconnected) => return,
+            }
+        };
+        match request {
+            Some(Request::Faces { addrs, lookup }) => {
+                for addr in addrs {
+                    let job = (addr, lookup);
+                    if !faces.contains(&job) {
+                        faces.push_back(job);
+                    }
+                }
+            }
+            Some(request) => handle(&store, &mut sessions, request, out),
+            None => {
+                if let Some((addr, lookup)) = faces.pop_front() {
+                    if let Some(found) = avatar::look_up(&store, &addr, lookup) {
+                        out(Outcome::Face {
+                            addr,
+                            src: found.src,
+                            chosen: found.chosen,
+                        });
+                    }
+                }
+            }
         }
     }
 }
@@ -476,6 +525,16 @@ fn handle(store: &FileStore, sessions: &mut Sessions, request: Request, out: &dy
                 }
             }
         }
+        // `run` takes these off the queue itself.
+        Request::Faces { .. } => {}
+        Request::SetFace { addr, photo } => match avatar::choose(store, &addr, &photo) {
+            Ok(()) => out(Outcome::Face {
+                addr,
+                src: photo,
+                chosen: true,
+            }),
+            Err(e) => fail(out, "picture", "", e),
+        },
         Request::DropAccount { email } => {
             sessions.remove(&email);
             if let Err(e) = store.drop_account(&email) {
@@ -625,13 +684,28 @@ fn sync(
     let email = account.email();
     let client = session(sessions, account, secret)?;
     let mut folders = client.folders()?;
+    // One folder that won't answer must not cost the account its whole
+    // folder list — only every folder failing means the session is gone.
+    let (mut answered, mut refusal) = (0usize, None);
     for folder in &mut folders {
-        let sel = client.select(&folder.name)?;
-        folder.exists = Some(sel.exists);
-        folder.unseen = sel.unseen;
+        if !folder.selectable {
+            continue;
+        }
+        match client.counts(&folder.name) {
+            Ok(counts) => {
+                folder.exists = Some(counts.exists);
+                folder.unseen = Some(counts.unseen);
+                answered += 1;
+            }
+            Err(e) => {
+                refusal = Some(e);
+                continue;
+            }
+        }
         if !folder.is_inbox() && Some(folder.name.as_str()) != selected {
             continue;
         }
+        let sel = client.select(&folder.name)?;
         // The index before this sync — arrivals are the uids it lacks.
         // A generation change voids the comparison, not just the cache:
         // uids from a different generation name different messages.
@@ -674,6 +748,9 @@ fn sync(
                 envelopes,
             });
         }
+    }
+    if let (0, Some(e)) = (answered, refusal) {
+        return Err(e);
     }
     out(Outcome::Folders {
         email: email.to_string(),

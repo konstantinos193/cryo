@@ -50,15 +50,18 @@ fn minutes(raw: Option<&str>) -> u64 {
 /// The longest the keeper waits for the old browser process to end
 /// before booting its own regardless — a process that is hanging in
 /// shutdown should not cost the next launch its keeper too.
+#[cfg(windows)]
 const OLD_PROCESS_GRACE: Duration = Duration::from_secs(10);
 
 /// How long a launching window waits for a keeper still booting to
 /// come up: the keeper's own boot is about 0.6 s, so this is the rest of
 /// one, never a wait on a keeper that is wedged.
+#[cfg(windows)]
 const READY_PATIENCE: Duration = Duration::from_millis(1500);
 
 /// How long a launching window gives a dismissed keeper to be gone —
 /// view closed, browser process ended — before booting cold anyway.
+#[cfg(windows)]
 const DISMISS_PATIENCE: Duration = Duration::from_millis(2500);
 
 /// What a launching window finds.

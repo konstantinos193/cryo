@@ -95,6 +95,11 @@ impl Mail {
                 .map(|a| mail::PushAccount {
                     email: a.email().to_string(),
                     display: a.display().to_string(),
+                    signature: a.signature().to_string(),
+                    photo: a.photo().to_string(),
+                    username: a.username().to_string(),
+                    imap: format!("{}:{}", a.imap().host(), a.imap().port()),
+                    smtp: format!("{}:{}", a.smtp().host(), a.smtp().port()),
                     folders: self
                         .folders
                         .get(a.email())
@@ -104,6 +109,9 @@ impl Mail {
                         .map(|f| mail::PushFolder {
                             name: f.name.clone(),
                             display: f.display.clone(),
+                            path: f.path.clone(),
+                            depth: f.depth,
+                            selectable: f.selectable,
                             role: role_str(f.role),
                             unseen: f.unseen,
                             exists: f.exists,
@@ -310,6 +318,23 @@ impl App {
             },
             command @ C::AddAccount { .. } => self.mail_add_account(command),
             C::RemoveAccount { email } => self.mail_remove_account(&email),
+            C::SaveProfile {
+                email,
+                display,
+                signature,
+                photo,
+            } => self.mail_save_profile(&email, &display, &signature, &photo),
+            C::CleanSignature { html } => self.mail_push(&mail::Push::SignatureClean {
+                html: mail::clean_signature(&html),
+            }),
+            C::Faces { addrs, lookup } => {
+                self.mail_worker(mail::Request::Faces { addrs, lookup });
+                Ok(())
+            }
+            C::SetFace { addr, photo } => {
+                self.mail_worker(mail::Request::SetFace { addr, photo });
+                Ok(())
+            }
             C::Send {
                 account,
                 to,
@@ -317,6 +342,8 @@ impl App {
                 bcc,
                 subject,
                 text,
+                quote,
+                sign,
                 in_reply_to,
                 references,
             } => match self.mail_account(&account) {
@@ -331,6 +358,8 @@ impl App {
                             bcc,
                             subject,
                             text,
+                            quote,
+                            sign,
                             in_reply_to,
                             references,
                             attachments,
@@ -347,6 +376,8 @@ impl App {
                 bcc,
                 subject,
                 text,
+                quote,
+                sign,
             } => match self.mail_account(&account) {
                 Some((account, secret)) => {
                     let attachments = self.mail_take_files();
@@ -359,6 +390,8 @@ impl App {
                             bcc,
                             subject,
                             text,
+                            quote,
+                            sign,
                             attachments,
                             ..mail::Draft::default()
                         },
@@ -586,6 +619,9 @@ impl App {
                     Ok(())
                 }
             }
+            O::Face { addr, src, chosen } => {
+                self.mail_push(&mail::Push::Face { addr, src, chosen })
+            }
             O::Sent => self.mail_push(&mail::Push::SendReply {
                 error: String::new(),
             }),
@@ -758,6 +794,41 @@ impl App {
         self.mail_worker(mail::Request::DropAccount {
             email: email.to_string(),
         });
+        let push = self.mail.as_ref().map(|m| m.state_push());
+        if let Some(push) = push {
+            self.mail_push(&push)?;
+        }
+        Ok(())
+    }
+
+    /// The settings page's Save: the account's validated replacement,
+    /// on disk, then a fresh state so the rail and compose repaint.
+    fn mail_save_profile(
+        &mut self,
+        email: &str,
+        display: &str,
+        signature: &str,
+        photo: &str,
+    ) -> anyhow::Result<()> {
+        let Some(mail) = self.mail.as_mut() else {
+            return Ok(());
+        };
+        let Some(at) = mail.accounts.iter().position(|a| a.email() == email) else {
+            return Ok(());
+        };
+        let saved = mail.accounts[at]
+            .clone()
+            .with_profile(display, signature, photo)
+            .and_then(|account| {
+                let mut accounts = mail.accounts.clone();
+                accounts[at] = account;
+                mail::save_accounts(&mail.accounts_path(), &accounts)?;
+                mail.accounts = accounts;
+                Ok(())
+            });
+        self.mail_push(&mail::Push::ProfileReply {
+            error: saved.err().map(|e| e.to_string()).unwrap_or_default(),
+        })?;
         let push = self.mail.as_ref().map(|m| m.state_push());
         if let Some(push) = push {
             self.mail_push(&push)?;

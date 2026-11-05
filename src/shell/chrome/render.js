@@ -135,7 +135,7 @@
     const prev = lastState;
     lastState = state;
     renderTabs(state);
-    if (document.activeElement !== urlEl) urlEl.value = state.active_url;
+    paintAddress(state);
     // The lock reads the active address: https is secure, a shell page
     // is the browser's own, anything else is not secure.
     const url = state.active_url;

@@ -23,6 +23,10 @@ use super::{Envelope, MailError};
 /// largest resident listing the app ever holds.
 pub const MAX_KEPT: usize = 500;
 
+/// How long a looked-up sender picture — or the lack of one — stands
+/// before it is asked for again.
+const FACE_FRESH: std::time::Duration = std::time::Duration::from_secs(14 * 24 * 60 * 60);
+
 /// The index version `IndexFile` writes and reads.
 pub(crate) const CURRENT_VERSION: u32 = 1;
 
@@ -232,6 +236,52 @@ impl FileStore {
             .map_err(|e| MailError::io("write", &self.raw_path(account, folder, uid), e))
     }
 
+    /// A cached sender picture by its address hash, while it is fresh.
+    /// An empty `Vec` is a remembered "nobody has a picture for this".
+    pub fn load_face(&self, key: &str) -> Option<Vec<u8>> {
+        let path = self.face_path(key);
+        let age = std::fs::metadata(&path).ok()?.modified().ok()?.elapsed();
+        if age.is_ok_and(|age| age > FACE_FRESH) {
+            return None;
+        }
+        crate::read_file(&path).ok()?
+    }
+
+    pub fn save_face(&self, key: &str, bytes: &[u8]) -> Result<(), MailError> {
+        let path = self.face_path(key);
+        crate::write_file_atomic(&path, bytes).map_err(|e| MailError::io("write", &path, e))
+    }
+
+    /// The picture the reader chose for an address. Not a cache entry:
+    /// it never expires and no sync touches it.
+    pub fn load_chosen(&self, key: &str) -> Option<Vec<u8>> {
+        crate::read_file(&self.chosen_path(key)).ok()?
+    }
+
+    pub fn save_chosen(&self, key: &str, bytes: &[u8]) -> Result<(), MailError> {
+        let path = self.chosen_path(key);
+        crate::write_file_atomic(&path, bytes).map_err(|e| MailError::io("write", &path, e))
+    }
+
+    pub fn clear_chosen(&self, key: &str) -> Result<(), MailError> {
+        let path = self.chosen_path(key);
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(MailError::io("remove", &path, e)),
+        }
+    }
+
+    fn chosen_path(&self, key: &str) -> PathBuf {
+        self.root.join("_chosen").join(safe(key))
+    }
+
+    /// Pictures aren't any one account's, so they live beside the
+    /// account directories, which are named for addresses.
+    fn face_path(&self, key: &str) -> PathBuf {
+        self.root.join("_faces").join(safe(key))
+    }
+
     /// An account went away — its cache goes with it.
     pub fn drop_account(&self, account: &str) -> Result<(), MailError> {
         let dir = self.account_dir(account);
@@ -287,6 +337,18 @@ mod tests {
         let store = FileStore::new(dir.clone());
         let path = store.index_path("a@x", "../evil");
         assert!(path.starts_with(&dir));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn faces_round_trip_and_a_miss_is_remembered() {
+        let dir = crate::test_dir("mail-faces");
+        let store = FileStore::new(dir.clone());
+        assert!(store.load_face("abc").is_none());
+        store.save_face("abc", b"png").unwrap();
+        assert_eq!(store.load_face("abc").unwrap(), b"png");
+        store.save_face("none", b"").unwrap();
+        assert!(store.load_face("none").unwrap().is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
 

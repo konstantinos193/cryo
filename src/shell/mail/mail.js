@@ -54,6 +54,15 @@
   let files = [];               // compose's picked files (names, sizes)
   let sendSeq = 0;              // compose generation — stale replies drop
   let lastSynced = 0;           // ms epoch of the last idle status
+  let adding = false;           // the add-account form is up
+  let composeSigned = true;     // this message keeps the signature
+  let editing = null;           // email the settings page is showing
+  let editPhoto = '';           // its picture, as chosen so far
+  let photos = new Map();       // own addresses -> the picture they chose
+  const faces = new Map();      // address -> a looked-up picture
+  const chosen = new Map();     // address -> a picture the reader chose
+  let faceFor = null;           // address the picture menu is acting on
+  const asked = new Set();      // addresses already sent to the lookup
 
   const findAccount = (email) => accounts.find((a) => a.email === email);
   const findFolder = (email, name) =>
@@ -77,6 +86,14 @@
     set.add(addr.toLowerCase());
     try { localStorage.setItem(TRUST, JSON.stringify([...set])); } catch (_) {}
   };
+
+  // The reading choices on the settings page, kept beside it.
+  const PICTURES = 'cryo.mail.pictures';
+  const REMOTE_ALL = 'cryo.mail.remote-all';
+  const pref = (key) => { try { return localStorage.getItem(key); } catch (_) { return null; } };
+  const setPref = (key, value) => { try { localStorage.setItem(key, value); } catch (_) {} };
+  const showsPictures = () => pref(PICTURES) !== 'off';
+  const loadsRemote = () => pref(REMOTE_ALL) === 'on';
 
   // ── Addresses, dates, sizes ───────────────────────────────
   // "Ann Rivers <ann@example.com>" → a name and an address; a bare
@@ -103,12 +120,47 @@
     const hue = 168 + (h % 92);
     return {bg: `hsl(${hue} var(--tint-bg))`, fg: `hsl(${hue} var(--tint-fg))`};
   };
+  // The picture an address wears: what the reader chose (their own
+  // account's, or one they set for this sender), else a looked-up one,
+  // else none and the initial shows.
+  const faceOf = (addr) =>
+    photos.get(addr) || chosen.get(addr) || (showsPictures() && faces.get(addr)) || '';
+  const dressFace = (a) => {
+    const src = faceOf(a.dataset.addr);
+    const img = a.querySelector('img');
+    if (!src) { if (img) img.remove(); return; }
+    if (img) { img.src = src; return; }
+    const pic = el('img');
+    pic.alt = '';
+    pic.src = src;
+    pic.onerror = () => pic.remove();
+    a.appendChild(pic);
+  };
   const avatar = (who, cls) => {
     const a = el('span', 'avatar' + (cls ? ' ' + cls : ''), initial(who.name));
-    const t = tone(who.addr.toLowerCase());
+    const addr = who.addr.toLowerCase();
+    const t = tone(addr);
     a.style.background = t.bg;
     a.style.color = t.fg;
+    a.dataset.addr = addr;
+    dressFace(a);
     return a;
+  };
+  const dressAllFaces = () => {
+    for (const a of document.querySelectorAll('.avatar')) dressFace(a);
+  };
+  // Addresses on screen the app hasn't been asked about — each once.
+  const askFaces = () => {
+    const addrs = [];
+    const add = (raw) => {
+      const addr = (raw || '').toLowerCase();
+      if (!addr.includes('@') || asked.has(addr) || photos.has(addr)) return;
+      asked.add(addr);
+      addrs.push(addr);
+    };
+    for (const a of accounts) add(a.email);
+    for (const m of list) add(firstAddr(m.from).addr);
+    if (addrs.length) ipc({kind: 'faces', addrs, lookup: showsPictures()});
   };
 
   const fmtDate = (ts) => {
@@ -165,17 +217,25 @@
       else if (st) dot.classList.add('bad');
       dot.title = st === 'syncing' ? 'Syncing…' : (st || 'Connected');
       head.appendChild(dot);
-      head.appendChild(iconButton('x', `Remove ${a.email}`, 'x', () => {
-        if (confirm(`Remove ${a.email} and its cached mail?`)) {
-          ipc({kind: 'remove_account', email: a.email});
-        }
-      }));
+      head.appendChild(iconButton('gear', `Settings for ${a.email}`, 'gear', () => openSettings(a.email)));
       box.appendChild(head);
-      const folders = [...(a.folders || [])].sort(
-        (x, y) => (ROLE_ORDER[x.role] ?? 6) - (ROLE_ORDER[y.role] ?? 6) || x.display.localeCompare(y.display));
-      for (const f of folders) {
+      let labelled = false;
+      for (const f of folderTree(a.folders)) {
+        if (f.role === 'other' && !labelled && !depthOf(f)) {
+          labelled = true;
+          box.appendChild(el('div', 'fold-label', 'Folders'));
+        }
         const row = el('button', 'fold');
         row.type = 'button';
+        row.title = pathOf(f);
+        row.style.paddingLeft = `${10 + Math.min(depthOf(f), 6) * 14}px`;
+        if (f.selectable === false) {
+          row.disabled = true;
+          row.appendChild(icon('folder'));
+          row.appendChild(el('span', 'name', f.display));
+          box.appendChild(row);
+          continue;
+        }
         const current = sel && sel.account === a.email && sel.folder === f.name;
         if (current) {
           row.classList.add('sel');
@@ -190,6 +250,20 @@
       host.appendChild(box);
     }
     paintStatus();
+  };
+
+  const pathOf = (f) => f.path || f.display;
+  const depthOf = (f) => f.depth || 0;
+  // Specials first in their usual order, then the reader's own folders
+  // alphabetically, with every folder's children under it.
+  const folderTree = (folders) => {
+    const all = folders || [];
+    const byPath = new Map(all.map((f) => [pathOf(f), f]));
+    const rank = (f) => {
+      const top = byPath.get(pathOf(f).split('/')[0]) || f;
+      return ROLE_ORDER[top.role] ?? 6;
+    };
+    return [...all].sort((x, y) => rank(x) - rank(y) || pathOf(x).localeCompare(pathOf(y)));
   };
 
   const paintStatus = () => {
@@ -345,7 +419,7 @@
 
   // ── Opening ───────────────────────────────────────────────
   const openMsg = (m) => {
-    const remote = trusted().has(firstAddr(m.from).addr.toLowerCase());
+    const remote = loadsRemote() || trusted().has(firstAddr(m.from).addr.toLowerCase());
     ipc({kind: 'open', account: sel.account, folder: sel.folder, uid: m.uid, remote});
   };
 
@@ -438,7 +512,18 @@
     const body = bodies[m.uid];
     const from = firstAddr(m.from);
     const head = el('header', 'm-head');
-    head.appendChild(avatar(from, 'md'));
+    const disc = avatar(from, 'md');
+    disc.title = 'Change this picture';
+    disc.tabIndex = 0;
+    disc.setAttribute('role', 'button');
+    disc.onclick = (e) => { e.stopPropagation(); openFaceMenu(from.addr.toLowerCase(), disc); };
+    disc.onkeydown = (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      e.stopPropagation();
+      disc.click();
+    };
+    head.appendChild(disc);
     const who = el('div', 'm-who');
     const line = el('div', 'm-from');
     line.appendChild(el('b', '', from.name || '(no sender)'));
@@ -492,6 +577,7 @@
         // asked — remote content never got this far. Verbatim
         // injection is the design.
         content.innerHTML = body.html;
+        content.classList.add('paper');
       } else {
         content.appendChild(el('pre', '', body.text || '(empty message)'));
       }
@@ -541,9 +627,9 @@
     move.textContent = '';
     move.appendChild(el('option', '', 'Move to…'));
     const acct = findAccount(sel.account);
-    for (const f of (acct ? acct.folders : [])) {
-      if (f.name === sel.folder) continue;
-      const opt = el('option', '', f.display);
+    for (const f of folderTree(acct ? acct.folders : [])) {
+      if (f.name === sel.folder || f.selectable === false) continue;
+      const opt = el('option', '', '\u00a0\u00a0'.repeat(depthOf(f)) + f.display);
       opt.value = f.name;
       move.appendChild(opt);
     }
@@ -615,10 +701,12 @@
     for (const a of accounts) from.appendChild(el('option', '', a.email));
     from.value = opts.account || (accounts[0] && accounts[0].email) || '';
     $('compose').hidden = false;
-    $('compose')._meta = {in_reply_to: opts.in_reply_to || '', references: opts.references || ''};
+    $('compose')._meta = {in_reply_to: opts.in_reply_to || '', references: opts.references || '', quote: opts.quote || ''};
+    composeSigned = true;
     files = [];
     paintFiles();
     paintCount();
+    paintSignature();
     const body = $('c-body');
     if (opts.to) {
       body.focus();
@@ -626,6 +714,29 @@
     } else {
       $('c-to').focus();
     }
+  };
+
+  // The signature as it will arrive. Sanitized Rust-side when it was
+  // saved, like a message body.
+  const signatureOf = (email) => (findAccount(email) || {}).signature || '';
+  const paintSignature = () => {
+    const signature = signatureOf($('c-from').value);
+    $('c-sig-body').innerHTML = signature;
+    $('c-sig').hidden = !signature || !composeSigned;
+    $('c-sig-on').hidden = !signature || composeSigned;
+  };
+
+  // What goes on the wire around the signature: the writing, and the
+  // quote while it is still the one we put there. An edited quote is the
+  // writer's own text now.
+  const composeParts = () => {
+    const value = $('c-body').value;
+    const quoted = ($('compose')._meta || {}).quote || '';
+    const account = $('c-from').value;
+    const parts = quoted && value.endsWith(quoted)
+      ? {text: value.slice(0, -quoted.length), quote: quoted}
+      : {text: value, quote: ''};
+    return {...parts, account, sign: composeSigned && !!signatureOf(account)};
   };
 
   const composeDirty = () =>
@@ -652,24 +763,30 @@
     const answerAddr = firstAddr(answer).addr.toLowerCase();
     const keep = (a) => !own.has(a.addr.toLowerCase()) && a.addr.toLowerCase() !== answerAddr;
     const show = (a) => a.name && a.name !== a.addr ? `${a.name} <${a.addr}>` : a.addr;
+    const quoted = quote(`On ${fmtFull(b.date)}, ${b.from} wrote:`, b.text);
     return {
       title: all ? 'Reply all' : 'Reply',
       account: b.account || sel.account,
       to: all ? [answer, ...addrList(b.to).filter(keep).map(show)].join(', ') : answer,
       cc: all ? addrList(b.cc).filter(keep).map(show).join(', ') : '',
       subject: /^re:/i.test(subj) ? subj : 'Re: ' + subj,
-      text: quote(`On ${fmtFull(b.date)}, ${b.from} wrote:`, b.text),
+      text: quoted,
+      quote: quoted,
       in_reply_to: b.message_id || '',
       references: b.references || b.message_id || '',
     };
   };
 
-  const forwardOpts = (b) => ({
-    title: 'Forward',
-    account: sel.account,
-    subject: /^fwd?:/i.test(b.subject || '') ? b.subject : 'Fwd: ' + (b.subject || ''),
-    text: quote(`--- Forwarded message ---\nFrom: ${b.from}\nDate: ${fmtFull(b.date)}\nSubject: ${b.subject || ''}\nTo: ${b.to}`, b.text),
-  });
+  const forwardOpts = (b) => {
+    const quoted = quote(`--- Forwarded message ---\nFrom: ${b.from}\nDate: ${fmtFull(b.date)}\nSubject: ${b.subject || ''}\nTo: ${b.to}`, b.text);
+    return {
+      title: 'Forward',
+      account: sel.account,
+      subject: /^fwd?:/i.test(b.subject || '') ? b.subject : 'Fwd: ' + (b.subject || ''),
+      text: quoted,
+      quote: quoted,
+    };
+  };
 
   const openDraft = (m) => {
     openCompose({
@@ -693,8 +810,8 @@
     $('c-send').disabled = true;
     $('c-error').hidden = true;
     ipc({
-      kind: 'send', account: $('c-from').value, to: $('c-to').value, cc: $('c-cc').value,
-      bcc: $('c-bcc').value, subject: $('c-subject').value, text: $('c-body').value,
+      kind: 'send', to: $('c-to').value, cc: $('c-cc').value,
+      bcc: $('c-bcc').value, subject: $('c-subject').value, ...composeParts(),
       in_reply_to: meta.in_reply_to, references: meta.references
     });
     setTimeout(() => { if (sendSeq === seq) $('c-send').disabled = false; }, 30000);
@@ -702,6 +819,7 @@
 
   // ── Onboarding ────────────────────────────────────────────
   const showSetup = (withBack) => {
+    adding = withBack;
     $('app').hidden = true;
     $('setup').hidden = false;
     $('su-back').hidden = !withBack;
@@ -715,6 +833,128 @@
     $('su-servers').hidden = true;
   };
 
+  // ── A sender's picture ────────────────────────────────────
+  const closeFaceMenu = () => { $('face-menu').hidden = true; };
+  const openFaceMenu = (addr, anchor) => {
+    // An address that is one of the reader's own has its picture on the
+    // settings page, along with everything else about it.
+    const own = accounts.find((a) => a.email.toLowerCase() === addr);
+    if (own) { openSettings(own.email); return; }
+    if (!addr.includes('@')) return;
+    faceFor = addr;
+    const box = anchor.getBoundingClientRect();
+    const menu = $('face-menu');
+    menu.style.left = `${box.left}px`;
+    menu.style.top = `${box.bottom + 6}px`;
+    $('face-clear').hidden = !chosen.has(addr);
+    menu.hidden = false;
+  };
+
+  // ── Settings ──────────────────────────────────────────────
+  // A picked image as a data URL no wider than `size`; `square` crops to
+  // the middle first, which is what a disc wants.
+  const shrink = (file, size, square) => new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('unreadable')); };
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const side = Math.min(img.naturalWidth, img.naturalHeight);
+      const [sw, sh] = square ? [side, side] : [img.naturalWidth, img.naturalHeight];
+      const scale = Math.min(1, size / sw);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(sw * scale);
+      canvas.height = Math.round(sh * scale);
+      const g = canvas.getContext('2d');
+      g.fillStyle = '#fff';
+      g.fillRect(0, 0, canvas.width, canvas.height);
+      g.drawImage(img, (img.naturalWidth - sw) / 2, (img.naturalHeight - sh) / 2, sw, sh, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/jpeg', 0.86));
+    };
+    img.src = url;
+  });
+
+  const paintEditPhoto = () => {
+    const a = findAccount(editing);
+    if (!a) return;
+    const shown = splitAddr(a.display ? `${a.display} <${a.email}>` : a.email);
+    const host = $('st-photo-preview');
+    host.textContent = '';
+    const disc = avatar(shown, 'lg');
+    const img = disc.querySelector('img');
+    if (img) img.remove();
+    if (editPhoto) {
+      const pic = el('img');
+      pic.alt = '';
+      pic.src = editPhoto;
+      disc.appendChild(pic);
+    }
+    host.appendChild(disc);
+    $('st-photo-clear').hidden = !editPhoto;
+  };
+
+  const signatureSourceOpen = () => !$('st-sig-html').hidden;
+  const showSignatureSource = (open) => {
+    if (open === signatureSourceOpen()) return;
+    if (open) $('st-sig-html').value = $('st-sig').innerHTML;
+    $('st-sig-html').hidden = !open;
+    $('st-sig').hidden = open;
+    $('st-sig-source').textContent = open ? 'Edit visually' : 'Edit HTML';
+    $('st-sig-image').hidden = open;
+  };
+
+  const fillSettings = (email) => {
+    const a = findAccount(email);
+    if (!a) return;
+    editing = email;
+    editPhoto = a.photo || '';
+    $('st-account').value = email;
+    $('st-name').value = a.display || '';
+    showSignatureSource(false);
+    $('st-sig').innerHTML = a.signature || '';
+    $('st-imap').textContent = a.imap || '';
+    $('st-smtp').textContent = a.smtp || '';
+    $('st-user').textContent = a.username || a.email;
+    $('st-error').hidden = true;
+    paintEditPhoto();
+  };
+
+  const openSettings = (email) => {
+    const pick = $('st-account');
+    pick.textContent = '';
+    for (const a of accounts) {
+      const opt = el('option', '', a.email);
+      opt.value = a.email;
+      pick.appendChild(opt);
+    }
+    pick.hidden = accounts.length < 2;
+    $('st-pictures').checked = showsPictures();
+    $('st-remote').checked = loadsRemote();
+    fillSettings(email);
+    $('st-save').disabled = false;
+    $('app').hidden = true;
+    $('settings').hidden = false;
+    $('settings').scrollTop = 0;
+    $('st-name').focus();
+  };
+
+  const closeSettings = () => {
+    editing = null;
+    $('settings').hidden = true;
+    $('app').hidden = false;
+  };
+
+  const saveSettings = () => {
+    $('st-save').disabled = true;
+    ipc({
+      kind: 'save_profile',
+      email: editing,
+      display: $('st-name').value,
+      signature: signatureSourceOpen() ? $('st-sig-html').value : $('st-sig').innerHTML,
+      photo: editPhoto,
+    });
+  };
+
   // ── The push entry point ──────────────────────────────────
   window.__cryo_mail = (msg) => {
     switch (msg.kind) {
@@ -724,7 +964,12 @@
           return;
         }
         accounts = msg.accounts || [];
-        for (const a of accounts) statusByEmail[a.email] = a.status || '';
+        for (const a of accounts) {
+          // The sync's end arrives as this state, not as a status push.
+          if (statusByEmail[a.email] === 'syncing' && !a.status) lastSynced = Date.now();
+          statusByEmail[a.email] = a.status || '';
+        }
+        photos = new Map(accounts.filter((a) => a.photo).map((a) => [a.email.toLowerCase(), a.photo]));
         if (sel && !findAccount(sel.account)) {
           sel = null;
           list = [];
@@ -735,13 +980,20 @@
           paintFolders();
           return;
         }
-        $('setup').hidden = true;
-        $('app').hidden = false;
+        // A sync finishing mustn't pull a form out from under whoever
+        // is filling it in.
+        if (!adding && !editing) {
+          $('setup').hidden = true;
+          $('app').hidden = false;
+        }
         paintFolders();
         paintHead();
+        dressAllFaces();
+        askFaces();
         if (!sel) {
           const a = accounts[0];
-          const inbox = (a.folders || []).find((f) => f.role === 'inbox') || (a.folders || [])[0];
+          const usable = (a.folders || []).filter((f) => f.selectable !== false);
+          const inbox = usable.find((f) => f.role === 'inbox') || usable[0];
           if (inbox) selectFolder(a.email, inbox.name);
           else paintList();
         }
@@ -754,6 +1006,32 @@
         if (cursor && !threadOf(cursor)) closeThread();
         paintList();
         paintBody();
+        askFaces();
+        break;
+      }
+      case 'face': {
+        const addr = msg.addr.toLowerCase();
+        if (!msg.chosen) faces.set(addr, msg.src);
+        else if (msg.src) chosen.set(addr, msg.src);
+        else chosen.delete(addr);
+        dressAllFaces();
+        break;
+      }
+      case 'signature_clean': {
+        if (!signatureSourceOpen()) break;
+        showSignatureSource(false);
+        $('st-sig').innerHTML = msg.html;
+        break;
+      }
+      case 'profile_reply': {
+        $('st-save').disabled = false;
+        if (msg.error) {
+          $('st-error').textContent = msg.error;
+          $('st-error').hidden = false;
+        } else {
+          closeSettings();
+          toast('Settings saved.');
+        }
         break;
       }
       case 'body': {
@@ -793,6 +1071,9 @@
         } else {
           $('su-error').hidden = true;
           resetSetup();
+          adding = false;
+          $('setup').hidden = true;
+          $('app').hidden = false;
           toast('Account added.');
         }
         break;
@@ -874,7 +1155,81 @@
     chip.onclick = () => { view = chip.dataset.view; paintHead(); paintList(); };
   }
 
+  $('st-close').onclick = closeSettings;
+  $('st-cancel').onclick = closeSettings;
+  $('st-save').onclick = saveSettings;
+  $('st-account').onchange = (e) => fillSettings(e.target.value);
+  $('st-photo-pick').onclick = () => $('st-photo-file').click();
+  $('st-photo-clear').onclick = () => { editPhoto = ''; paintEditPhoto(); };
+  $('st-photo-file').onchange = async (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      editPhoto = await shrink(file, 160, true);
+      paintEditPhoto();
+    } catch (_) {
+      toast("That image can't be read.", true);
+    }
+  };
+  $('st-sig-source').onclick = () => {
+    if (!signatureSourceOpen()) { showSignatureSource(true); return; }
+    // Typed source runs in this document only once the app has cleaned
+    // it — the reply is what goes back in the visual editor.
+    ipc({kind: 'clean_signature', html: $('st-sig-html').value});
+  };
+  $('st-sig-image').onclick = () => $('st-sig-file').click();
+  $('st-sig-file').onchange = async (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const img = el('img');
+      img.alt = '';
+      img.src = await shrink(file, 400, false);
+      $('st-sig').appendChild(img);
+    } catch (_) {
+      toast("That image can't be read.", true);
+    }
+  };
+  $('st-pictures').onchange = (e) => {
+    setPref(PICTURES, e.target.checked ? 'on' : 'off');
+    // Asked while off means asked for the reader's choices only; on
+    // again, those addresses have a lookup still owed.
+    asked.clear();
+    dressAllFaces();
+    askFaces();
+  };
+  $('face-pick').onclick = () => $('face-file').click();
+  $('face-clear').onclick = () => {
+    closeFaceMenu();
+    ipc({kind: 'set_face', addr: faceFor, photo: ''});
+  };
+  $('face-file').onchange = async (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    closeFaceMenu();
+    if (!file) return;
+    try {
+      ipc({kind: 'set_face', addr: faceFor, photo: await shrink(file, 160, true)});
+    } catch (_) {
+      toast("That image can't be read.", true);
+    }
+  };
+  document.addEventListener('click', (e) => {
+    if (!$('face-menu').hidden && !$('face-menu').contains(e.target)) closeFaceMenu();
+  });
+  $('st-remote').onchange = (e) => setPref(REMOTE_ALL, e.target.checked ? 'on' : 'off');
+  $('st-remove').onclick = () => {
+    if (!confirm(`Remove ${editing} and its cached mail?`)) return;
+    ipc({kind: 'remove_account', email: editing});
+    closeSettings();
+  };
+
   $('c-send').onclick = send;
+  $('c-from').onchange = paintSignature;
+  $('c-sig-off').onclick = () => { composeSigned = false; paintSignature(); };
+  $('c-sig-on').onclick = () => { composeSigned = true; paintSignature(); };
   $('c-body').addEventListener('input', paintCount);
   $('c-attach').onclick = () => ipc({kind: 'attach_pick'});
   $('c-bcc-show').onclick = () => {
@@ -884,8 +1239,8 @@
   };
   $('c-draft').onclick = () => {
     ipc({
-      kind: 'save_draft', account: $('c-from').value, to: $('c-to').value, cc: $('c-cc').value,
-      bcc: $('c-bcc').value, subject: $('c-subject').value, text: $('c-body').value
+      kind: 'save_draft', to: $('c-to').value, cc: $('c-cc').value,
+      bcc: $('c-bcc').value, subject: $('c-subject').value, ...composeParts()
     });
     files = [];
     closeCompose(true);
@@ -896,6 +1251,15 @@
   // Keys: the single letters every mail client answers to, only while
   // nothing is being typed. Modified keys belong to the chrome.
   document.addEventListener('keydown', (e) => {
+    if (!$('face-menu').hidden && e.key === 'Escape') {
+      e.preventDefault();
+      closeFaceMenu();
+      return;
+    }
+    if (!$('settings').hidden) {
+      if (e.key === 'Escape') { e.preventDefault(); closeSettings(); }
+      return;
+    }
     const composing = !$('compose').hidden;
     if (composing) {
       if (e.key === 'Escape') { e.preventDefault(); closeCompose(false); }
@@ -949,6 +1313,7 @@
   });
   $('su-adv').onclick = () => { $('su-servers').hidden = false; };
   $('su-back').onclick = () => {
+    adding = false;
     $('setup').hidden = true;
     $('app').hidden = false;
   };

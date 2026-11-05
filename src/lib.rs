@@ -72,6 +72,33 @@ pub(crate) fn extensions_root() -> std::path::PathBuf {
     data_dir().join("extensions")
 }
 
+/// The user data folder's home and the old location it may still be at.
+/// `None` leaves WebView2's default in place: a packaged process has its
+/// own private storage, and a dev build keeps a profile of its own beside
+/// the binary rather than opening the installed browser's.
+#[cfg(all(windows, not(feature = "servo-engine")))]
+fn webview_places() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    if cfg!(debug_assertions) || update::store_managed() {
+        return None;
+    }
+    let old = engine::wry_impl::profile_folder::beside_exe()?;
+    Some((data_dir().join("webview"), old))
+}
+
+/// The folder this process opens its browser on.
+#[cfg(not(feature = "servo-engine"))]
+fn webview_folder() -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        let (home, old) = webview_places()?;
+        Some(engine::wry_impl::profile_folder::current(&home, &old))
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
 /// Read a whole file — `Ok(None)` when it isn't there, since a missing
 /// file is a fresh profile, not an error. Every store adapter reads
 /// through this so the rule lives once (AGENTS §2).
@@ -283,6 +310,7 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
         shell::pages::internal_page,
         incognito,
         extensions_dir.as_ref().map(|c| c.root().to_path_buf()),
+        webview_folder(),
     ));
     #[cfg(feature = "servo-engine")]
     let engine: Rc<dyn Engine> = {
@@ -434,6 +462,17 @@ pub fn run_warm(old_browser: Option<u32>) -> anyhow::Result<()> {
         if let Some(pid) = old_browser {
             instance::warm::wait_for_process_end(engine::accounting::ProcessId(pid));
         }
+        // Nobody is waiting on this process and the old browser has gone,
+        // which makes it the one moment moving the profile costs no one
+        // anything. A launch cancels it; the next close tries again.
+        if let Some((home, old)) = webview_places() {
+            let moved = engine::wry_impl::profile_folder::relocate(&home, &old, || {
+                keeper.launch_signalled()
+            });
+            if let Err(e) = moved {
+                crate::report!("moving the browser profile: {e}");
+            }
+        }
         let mut event_loop = EventLoopBuilder::<()>::with_user_event().build();
         let proxy = event_loop.create_proxy();
         // Hidden, and it has to stay hidden: WebView2 is slower to create
@@ -457,6 +496,7 @@ pub fn run_warm(old_browser: Option<u32>) -> anyhow::Result<()> {
             shell::pages::internal_page,
             false,
             None,
+            webview_folder(),
         ));
         let _held = engine.spawn(engine::ViewSpec {
             access: engine::ViewAccess::Web,
@@ -504,6 +544,10 @@ pub fn run_warm(old_browser: Option<u32>) -> anyhow::Result<()> {
         drop(window);
         drop(event_loop);
     }
+    // Without WebView2 there is no browser process to keep, so there is
+    // nothing to wait for either.
+    #[cfg(not(all(windows, not(feature = "servo-engine"))))]
+    let _ = old_browser;
     Ok(())
 }
 

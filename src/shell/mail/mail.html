@@ -36,6 +36,7 @@
     <symbol id="i-x" viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8"/></symbol>
     <symbol id="i-check" viewBox="0 0 16 16"><path d="m3 8.5 3 3 7-7"/></symbol>
     <symbol id="i-back" viewBox="0 0 16 16"><path d="m10 3-5 5 5 5"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.3"/><path d="M8 1.8v2M8 12.2v2M1.8 8h2M12.2 8h2M3.6 3.6 5 5M11 11l1.4 1.4M3.6 12.4 5 11M11 5l1.4-1.4"/></symbol>
     <symbol id="i-warn" viewBox="0 0 16 16"><path d="M8 2.5 14 13H2zM8 6.5v3M8 11.5v.5"/></symbol>
   </svg>
 
@@ -75,6 +76,76 @@
     </form>
   </div>
 
+  <!-- Settings: one account's name, picture and signature, and how the
+       page reads mail. Everything account-shaped is saved by the app;
+       the reading choices stay in this origin's storage. -->
+  <div id="settings" hidden>
+    <div class="card wide" role="dialog" aria-labelledby="st-title">
+      <header class="st-head">
+        <button id="st-close" type="button" class="ghost icon" title="Back (Esc)" aria-label="Back to mail">
+          <svg class="ic" aria-hidden="true"><use href="#i-back"/></svg>
+        </button>
+        <h1 id="st-title">Settings</h1>
+        <select id="st-account" aria-label="Account"></select>
+      </header>
+
+      <section class="st-section">
+        <h2>Your identity</h2>
+        <div class="st-photo">
+          <span id="st-photo-preview"></span>
+          <div class="st-photo-actions">
+            <button id="st-photo-pick" type="button">Choose picture</button>
+            <button id="st-photo-clear" type="button" class="ghost">Remove</button>
+            <input id="st-photo-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+          </div>
+        </div>
+        <label for="st-name">Name people see</label>
+        <input id="st-name" autocomplete="name">
+      </section>
+
+      <section class="st-section">
+        <div class="st-row">
+          <h2>Signature</h2>
+          <span class="grow"></span>
+          <button id="st-sig-image" type="button" class="link">Add image</button>
+          <button id="st-sig-source" type="button" class="link">Edit HTML</button>
+          <input id="st-sig-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+        </div>
+        <div id="st-sig" class="paper sig-edit" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Signature"></div>
+        <textarea id="st-sig-html" rows="8" spellcheck="false" aria-label="Signature HTML" hidden></textarea>
+        <p class="hint">Goes on new messages and replies, above any quoted text. You can take it off a single message while writing it. Paste from a web page or another mail client to keep the formatting.</p>
+      </section>
+
+      <section class="st-section">
+        <h2>Reading</h2>
+        <label class="check">
+          <input id="st-pictures" type="checkbox">
+          <span><b>Find pictures of people</b>Looks senders up on Gravatar, then their organization's website and DuckDuckGo's icon service. Those can see your IP address and which address or domain is being looked up, at most once a fortnight, never your mail. Pictures you choose yourself always show.</span>
+        </label>
+        <label class="check">
+          <input id="st-remote" type="checkbox">
+          <span><b>Always load remote images</b>Senders can tell when you open their mail. Off, you choose per message or per sender.</span>
+        </label>
+      </section>
+
+      <section class="st-section">
+        <h2>Servers</h2>
+        <dl class="st-facts">
+          <dt>Incoming (IMAP)</dt><dd id="st-imap"></dd>
+          <dt>Outgoing (SMTP)</dt><dd id="st-smtp"></dd>
+          <dt>Username</dt><dd id="st-user"></dd>
+        </dl>
+        <button id="st-remove" type="button" class="danger-link">Remove this account</button>
+      </section>
+
+      <p id="st-error" class="err" role="alert" hidden></p>
+      <div class="st-foot">
+        <button id="st-cancel" type="button">Cancel</button>
+        <button id="st-save" type="button" class="primary">Save</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Incognito: no account may be left behind, so no mail. -->
   <div id="off" hidden>
     <div class="card quiet">
@@ -97,13 +168,13 @@
       </button>
       <nav id="accounts" aria-label="Folders"></nav>
       <div class="rail-foot">
-        <button id="add-account" class="ghost">
-          <svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg>
-          <span>Add account</span>
-        </button>
-        <div class="sync-row">
-          <div id="status" class="status" aria-live="polite"></div>
-          <button id="sync-btn" class="ghost icon" title="Sync now">
+        <div id="status" class="status" aria-live="polite"></div>
+        <div class="foot-row">
+          <button id="add-account" class="foot-add">
+            <svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg>
+            <span>Add account</span>
+          </button>
+          <button id="sync-btn" class="icon" title="Sync now" aria-label="Sync now">
             <svg class="ic" aria-hidden="true"><use href="#i-refresh"/></svg>
           </button>
         </div>
@@ -189,8 +260,9 @@
     </section>
   </div>
 
-  <!-- Compose: docked bottom-right like a desk drawer. Plain text —
-       what you see is what the wire carries. -->
+  <!-- Compose: docked bottom-right like a desk drawer. You write plain
+       text; the account's signature rides below it, shown as it will
+       arrive. -->
   <div id="compose" hidden role="dialog" aria-labelledby="compose-title">
     <div class="compose-head">
       <h2 id="compose-title">New message</h2>
@@ -206,6 +278,12 @@
       <label class="cf"><span>Subject</span><input id="c-subject"></label>
     </div>
     <textarea id="c-body" aria-label="Message" rows="10"></textarea>
+    <div id="c-sig" hidden>
+      <button id="c-sig-off" type="button" class="ghost icon" title="Take the signature off this message" aria-label="Take the signature off this message">
+        <svg class="ic" aria-hidden="true"><use href="#i-x"/></svg>
+      </button>
+      <div id="c-sig-body" class="paper"></div>
+    </div>
     <div id="c-files" class="atts" hidden></div>
     <p id="c-error" class="err" role="alert" hidden></p>
     <div class="compose-foot">
@@ -218,9 +296,17 @@
         <span>Attach</span>
       </button>
       <button id="c-draft" class="ghost">Save draft</button>
+      <button id="c-sig-on" type="button" class="ghost" hidden>Add signature</button>
       <span class="grow"></span>
       <span class="dim" id="c-count"></span>
     </div>
+  </div>
+
+  <!-- A sender's picture: opened from the disc in a message's header. -->
+  <div id="face-menu" hidden role="menu">
+    <button id="face-pick" type="button" role="menuitem">Choose picture…</button>
+    <button id="face-clear" type="button" role="menuitem">Remove my picture</button>
+    <input id="face-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
   </div>
 
   <div id="toast" hidden role="status">

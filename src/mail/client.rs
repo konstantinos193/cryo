@@ -36,10 +36,14 @@ impl Flag {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Selection {
     pub uid_validity: u32,
-    /// `EXISTS` — the row count, for the folder line in the UI.
+}
+
+/// A folder's counts, from `STATUS`. `SELECT`'s own `UNSEEN` is the
+/// sequence number of the first unseen message, not how many there are.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Counts {
     pub exists: u32,
-    /// `UNSEEN`, when the server reported it.
-    pub unseen: Option<u32>,
+    pub unseen: u32,
 }
 
 /// What the domain asks of a server. All blocking, all on the worker.
@@ -47,10 +51,15 @@ pub trait Client {
     /// Prove the credentials work — the onboarding flow's gate.
     fn verify(&mut self) -> Result<(), MailError>;
 
-    /// `LIST` — the account's folders, roles resolved.
+    /// The account's folders, roles resolved: `LIST`, every namespace
+    /// `NAMESPACE` names beyond the personal one, and whatever `LSUB`
+    /// holds that those missed.
     fn folders(&mut self) -> Result<Vec<Folder>, MailError>;
 
-    /// `SELECT` — the folder's generation and counts.
+    /// `STATUS` — a folder's counts, without selecting it.
+    fn counts(&mut self, folder: &str) -> Result<Counts, MailError>;
+
+    /// `SELECT` — the folder's generation.
     fn select(&mut self, folder: &str) -> Result<Selection, MailError>;
 
     /// The newest `limit` envelopes of the selected folder, newest

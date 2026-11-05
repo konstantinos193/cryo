@@ -312,3 +312,249 @@ test('the onboarding form submits what the wire expects and guesses servers', as
   assert.equal(d.getElementById('su-error').textContent, 'imap login: no');
   assert.ok(!d.getElementById('su-go').disabled);
 });
+
+const PLUS = { ...ANN, imap: 'mail.a.test:993', smtp: 'mail.a.test:465', username: 'ann@example.com',
+  signature: '<p>Ann <b>Rivers</b></p>', photo: '' };
+
+test('your own folders nest under their parents, after the specials', (t) => {
+  const { window, push } = mail(t);
+  const folder = (name, display, path, depth, role = 'other', selectable = true) =>
+    ({ name, display, path, depth, role, selectable });
+  push({ kind: 'state', incognito: false, accounts: [{ ...ANN, folders: [
+    folder('INBOX.Zeta', 'Zeta', 'Zeta', 0),
+    folder('INBOX.Clients.Hotels', 'Hotels', 'Clients/Hotels', 1),
+    folder('INBOX.Clients', 'Clients', 'Clients', 0, 'other', false),
+    folder('INBOX.Trash', 'Trash', 'Trash', 0, 'trash'),
+    folder('INBOX', 'Inbox', 'INBOX', 0, 'inbox'),
+  ] }] });
+  const rail = [...window.document.querySelectorAll('#accounts .fold')];
+  assert.deepEqual(rail.map((r) => r.querySelector('.name').textContent),
+    ['Inbox', 'Trash', 'Clients', 'Hotels', 'Zeta']);
+  assert.ok(rail[2].disabled, 'a parent that holds no mail is not a target');
+  assert.ok(parseInt(rail[3].style.paddingLeft, 10) > parseInt(rail[4].style.paddingLeft, 10),
+    'the child is indented');
+  assert.equal(window.document.querySelector('.fold-label').textContent, 'Folders');
+});
+
+test('a parent with no mail is never opened, even when it lists first', (t) => {
+  const { sent, push } = mail(t);
+  push({ kind: 'state', incognito: false, accounts: [{ ...ANN, folders: [
+    { name: 'Parent', display: 'Parent', path: 'Parent', depth: 0, role: 'other', selectable: false },
+    { name: 'Notes', display: 'Notes', path: 'Notes', depth: 0, role: 'other', selectable: true },
+  ] }] });
+  assert.deepEqual(sent.filter((m) => m.kind === 'select_folder').map((m) => m.folder), ['Notes']);
+});
+
+test('html mail sits on paper; plain text stays on the theme', (t) => {
+  const { window, push } = opened(t);
+  rowsOf(window)[1].click();
+  push(body(2, { html: '<p style="color:#000">dark words</p>', from: 'carol@example.com', subject: 'Lunch?' }));
+  assert.ok(window.document.querySelector('.r-body').classList.contains('paper'));
+  rowsOf(window)[0].click();
+  push(body(4));
+  assert.ok(!window.document.querySelector('.r-body').classList.contains('paper'));
+});
+
+test('a sync finishing leaves the add-account form where it is', (t) => {
+  const { window, push } = opened(t);
+  window.document.getElementById('add-account').click();
+  assert.ok(!window.document.getElementById('setup').hidden);
+  push({ kind: 'state', incognito: false, accounts: [ANN] });
+  assert.ok(!window.document.getElementById('setup').hidden, 'the form stayed up');
+  assert.ok(window.document.getElementById('app').hidden);
+  push({ kind: 'account_reply', error: '' });
+  assert.ok(window.document.getElementById('setup').hidden, 'success is what closes it');
+  assert.ok(!window.document.getElementById('app').hidden);
+});
+
+test('the rail says when the last sync finished', (t) => {
+  const { window, push } = opened(t);
+  push({ kind: 'status', account: ANN.email, status: 'syncing' });
+  push({ kind: 'state', incognito: false, accounts: [ANN] });
+  assert.match(window.document.getElementById('status').textContent, /^Synced /);
+});
+
+test('senders are looked up once and wear their picture when it comes', (t) => {
+  const { window, sent, push } = opened(t);
+  const asks = () => sent.filter((m) => m.kind === 'faces');
+  const asked = asks().flatMap((m) => m.addrs);
+  assert.ok(asked.includes('bob@example.com'));
+  assert.ok(asked.includes('carol@example.com'));
+  assert.equal(new Set(asked).size, asked.length, 'each address once');
+  const before = asks().length;
+  push({ kind: 'list', account: ANN.email, folder: 'INBOX', envelopes: ROWS.map((r) => ({ ...r })) });
+  assert.equal(asks().length, before, 'a repaint asks nothing new');
+  push({ kind: 'face', addr: 'carol@example.com', src: 'data:image/png;base64,AA' });
+  const carol = rowsOf(window).find((r) => r.querySelector('.who').textContent === 'carol@example.com');
+  assert.equal(carol.querySelector('.avatar img').getAttribute('src'), 'data:image/png;base64,AA');
+});
+
+test('your own picture needs no lookup and beats one', (t) => {
+  const { window, sent, push } = mail(t);
+  push({ kind: 'state', incognito: false, accounts: [{ ...PLUS, photo: 'data:image/jpeg;base64,ME' }] });
+  assert.equal(window.document.querySelector('.acct-head .avatar img').getAttribute('src'),
+    'data:image/jpeg;base64,ME');
+  assert.ok(!sent.filter((m) => m.kind === 'faces').flatMap((m) => m.addrs).includes(ANN.email));
+});
+
+test('turning lookups off takes their pictures down and asks only for chosen ones', (t) => {
+  const { window, sent, push } = opened(t);
+  push({ kind: 'face', addr: 'bob@example.com', src: 'data:image/png;base64,AA' });
+  assert.ok(window.document.querySelector('#list .avatar img'));
+  window.document.querySelector('.acct-head .gear').click();
+  const toggle = window.document.getElementById('st-pictures');
+  assert.ok(toggle.checked, 'on until someone says otherwise');
+  toggle.checked = false;
+  toggle.onchange({ target: toggle });
+  assert.ok(!window.document.querySelector('#list .avatar img'));
+  push({ kind: 'list', account: ANN.email, folder: 'INBOX', envelopes: [row(9, 'new@example.com', 'x', 1700000500, '9')] });
+  const ask = sent.at(-1);
+  assert.deepEqual(ask, { kind: 'faces', addrs: ['new@example.com'], lookup: false });
+  toggle.checked = true;
+  toggle.onchange({ target: toggle });
+  assert.deepEqual(sent.at(-1).lookup, true, 'turned back on, the lookups owed go out');
+  assert.ok(sent.at(-1).addrs.includes('new@example.com'));
+});
+
+test('a picture you chose for a sender stands with lookups off, and can be removed', (t) => {
+  const { window, sent, push } = opened(t);
+  const $ = (id) => window.document.getElementById(id);
+  const toggle = () => {
+    window.document.querySelector('.acct-head .gear').click();
+    $('st-pictures').checked = false;
+    $('st-pictures').onchange({ target: $('st-pictures') });
+    $('st-cancel').click();
+  };
+  toggle();
+  push({ kind: 'face', addr: 'BOB@example.com', src: 'data:image/png;base64,MINE', chosen: true });
+  const bob = () => rowsOf(window).find((r) => r.querySelector('.who').textContent.startsWith('Bob'));
+  assert.equal(bob().querySelector('.avatar img').getAttribute('src'), 'data:image/png;base64,MINE');
+  rowsOf(window)[0].click();
+  push(body(4));
+  const disc = window.document.querySelector('.m.open .m-head .avatar');
+  assert.ok(disc);
+  disc.click();
+  assert.ok(!$('face-menu').hidden);
+  assert.ok(!$('face-clear').hidden, 'there is something of yours to remove');
+  $('face-clear').click();
+  assert.ok($('face-menu').hidden);
+  assert.deepEqual(sent.at(-1), { kind: 'set_face', addr: 'bob@example.com', photo: '' });
+  push({ kind: 'face', addr: 'bob@example.com', src: '', chosen: true });
+  assert.ok(!bob().querySelector('.avatar img'));
+});
+
+test('your own disc in a message opens settings, not the sender menu', (t) => {
+  const { window, push } = mail(t);
+  const $ = (id) => window.document.getElementById(id);
+  push({ kind: 'state', incognito: false, accounts: [PLUS] });
+  push({ kind: 'list', account: ANN.email, folder: 'INBOX', envelopes: [row(3, 'Ann Rivers <ann@example.com>', 'x', 1700000300, '3')] });
+  rowsOf(window)[0].click();
+  push(body(3, { from: 'Ann Rivers <ann@example.com>' }));
+  window.document.querySelector('.m.open .m-head .avatar').click();
+  assert.ok($('face-menu').hidden);
+  assert.ok(!$('settings').hidden);
+});
+
+function settings(t) {
+  const m = mail(t);
+  m.push({ kind: 'state', incognito: false, accounts: [PLUS] });
+  m.window.document.querySelector('.acct-head .gear').click();
+  return m;
+}
+
+test('settings shows the account, and Save sends what was edited', (t) => {
+  const { window, sent, push } = settings(t);
+  const $ = (id) => window.document.getElementById(id);
+  assert.ok(!$('settings').hidden);
+  assert.equal($('st-name').value, 'Ann Rivers');
+  assert.equal($('st-sig').innerHTML, '<p>Ann <b>Rivers</b></p>');
+  assert.equal($('st-imap').textContent, 'mail.a.test:993');
+  $('st-name').value = 'Ann R';
+  $('st-sig').innerHTML = '<p>New</p>';
+  $('st-save').click();
+  assert.deepEqual(sent.at(-1), { kind: 'save_profile', email: ANN.email, display: 'Ann R',
+    signature: '<p>New</p>', photo: '' });
+  push({ kind: 'profile_reply', error: 'too large' });
+  assert.equal($('st-error').textContent, 'too large');
+  assert.ok(!$('settings').hidden, 'a refusal stays on the page');
+  $('st-save').click();
+  push({ kind: 'profile_reply', error: '' });
+  assert.ok($('settings').hidden);
+  assert.ok(!$('app').hidden);
+});
+
+test('a sync finishing leaves settings open with its edits', (t) => {
+  const { window, push } = settings(t);
+  const $ = (id) => window.document.getElementById(id);
+  $('st-name').value = 'half typed';
+  push({ kind: 'state', incognito: false, accounts: [PLUS] });
+  assert.ok(!$('settings').hidden);
+  assert.ok($('app').hidden);
+  assert.equal($('st-name').value, 'half typed');
+});
+
+test('typed signature source reaches the editor only through the app', (t) => {
+  const { window, sent, push } = settings(t);
+  const $ = (id) => window.document.getElementById(id);
+  $('st-sig-source').click();
+  assert.equal($('st-sig-html').value, '<p>Ann <b>Rivers</b></p>');
+  $('st-sig-html').value = '<img src=x onerror=alert(1)><p>typed</p>';
+  $('st-sig-source').click();
+  assert.deepEqual(sent.at(-1), { kind: 'clean_signature', html: '<img src=x onerror=alert(1)><p>typed</p>' });
+  assert.ok(!$('st-sig-html').hidden, 'still source until the answer');
+  push({ kind: 'signature_clean', html: '<p>typed</p>' });
+  assert.ok($('st-sig-html').hidden);
+  assert.equal($('st-sig').innerHTML, '<p>typed</p>');
+});
+
+test('removing an account lives in settings and asks first', (t) => {
+  const { window, sent } = settings(t);
+  window.document.getElementById('st-remove').click();
+  assert.deepEqual(sent.at(-1), { kind: 'remove_account', email: ANN.email });
+});
+
+function signedReply(t) {
+  const m = mail(t);
+  m.push({ kind: 'state', incognito: false, accounts: [PLUS] });
+  m.push({ kind: 'list', account: ANN.email, folder: 'INBOX', envelopes: ROWS.map((r) => ({ ...r })) });
+  rowsOf(m.window)[0].click();
+  m.push(body(4));
+  m.window.document.getElementById('reply-btn').click();
+  return m;
+}
+
+test('a reply shows the signature and sends it between writing and quote', (t) => {
+  const { window, sent } = signedReply(t);
+  const $ = (id) => window.document.getElementById(id);
+  assert.ok(!$('c-sig').hidden);
+  assert.equal($('c-sig-body').innerHTML, PLUS.signature);
+  const typed = 'Thanks!' + $('c-body').value;
+  $('c-body').value = typed;
+  $('c-send').click();
+  const msg = sent.at(-1);
+  assert.equal(msg.kind, 'send');
+  assert.equal(msg.text, 'Thanks!');
+  assert.match(msg.quote, /wrote:\n> body 4/);
+  assert.equal(msg.sign, true);
+});
+
+test('the signature can come off one message and go back on', (t) => {
+  const { window, sent } = signedReply(t);
+  const $ = (id) => window.document.getElementById(id);
+  $('c-sig-off').click();
+  assert.ok($('c-sig').hidden);
+  assert.ok(!$('c-sig-on').hidden);
+  $('c-send').click();
+  assert.equal(sent.at(-1).sign, false);
+  $('c-sig-on').click();
+  assert.ok(!$('c-sig').hidden);
+});
+
+test('an edited quote is the writer\'s own text', (t) => {
+  const { window, sent } = signedReply(t);
+  const $ = (id) => window.document.getElementById(id);
+  $('c-body').value = 'rewrote it all';
+  $('c-send').click();
+  assert.equal(sent.at(-1).text, 'rewrote it all');
+  assert.equal(sent.at(-1).quote, '');
+});

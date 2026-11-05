@@ -2,15 +2,16 @@
 //! lettre drives the SMTP conversation, and the raw bytes come back so
 //! the caller can `APPEND` the copy the Sent folder needs.
 //!
-//! Plain text only for now — the draft's `text` is the whole body, so
-//! there is no HTML injection surface on the outbound side either.
-//! Files ride as a `multipart/mixed` beside it, read from disk here on
+//! The composer writes plain text. A signed message also goes out as
+//! `multipart/alternative`: the HTML half is the escaped text around the
+//! account's already-sanitized signature, so nothing the composer typed
+//! can become markup. Files ride as a `multipart/mixed` beside it, read from disk here on
 //! the worker at send time — the app holds paths, never bytes.
 
 use std::path::PathBuf;
 
 use lettre::message::header::{ContentType, Header, HeaderName, HeaderValue};
-use lettre::message::{Attachment, MultiPart, SinglePart};
+use lettre::message::{Attachment, MultiPart, MultiPartBuilder, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{Message, SmtpTransport, Transport};
 
@@ -30,8 +31,13 @@ pub struct Draft {
     pub cc: String,
     pub bcc: String,
     pub subject: String,
-    /// The whole plain-text body.
+    /// What the writer wrote, plain text.
     pub text: String,
+    /// The quoted message a reply carries — the signature goes between
+    /// the two, where a reader expects it.
+    pub quote: String,
+    /// Add the account's signature, if it has one.
+    pub sign: bool,
     /// RFC2822 Message-Id of the message answered, for threading.
     pub in_reply_to: String,
     /// The thread's Message-Id chain a reply appends to.
@@ -111,12 +117,21 @@ pub(crate) fn build(account: &Account, draft: &Draft) -> Result<Message, MailErr
     if !references.is_empty() {
         builder = builder.header(References(references));
     }
+    let signature = Some(account.signature()).filter(|s| draft.sign && !s.is_empty());
+    let plain = plain_body(draft, signature);
+    let html = signature.map(|s| html_body(draft, s));
     if draft.attachments.is_empty() {
-        return builder
-            .body(draft.text.clone())
-            .map_err(|e| MailError::Invalid(e.to_string()));
+        return match html {
+            Some(html) => builder.multipart(MultiPart::alternative_plain_html(plain, html)),
+            None => builder.body(plain),
+        }
+        .map_err(|e| MailError::Invalid(e.to_string()));
     }
-    let mut mixed = MultiPart::mixed().singlepart(SinglePart::plain(draft.text.clone()));
+    let start: MultiPartBuilder = MultiPart::mixed();
+    let mut mixed = match html {
+        Some(html) => start.multipart(MultiPart::alternative_plain_html(plain, html)),
+        None => start.singlepart(SinglePart::plain(plain)),
+    };
     let mut total = 0u64;
     for path in &draft.attachments {
         let bytes = std::fs::read(path).map_err(|e| MailError::io("read", path, e))?;
@@ -139,6 +154,42 @@ pub(crate) fn build(account: &Account, draft: &Draft) -> Result<Message, MailErr
     builder
         .multipart(mixed)
         .map_err(|e| MailError::Invalid(e.to_string()))
+}
+
+/// The text a plain reader gets: writing, the RFC 3676 "-- " signature
+/// marker with the signature as text, then the quote.
+fn plain_body(draft: &Draft, signature: Option<&str>) -> String {
+    let Some(signature) = signature else {
+        return format!("{}{}", draft.text, draft.quote);
+    };
+    let text = mail_parser::decoders::html::html_to_text(signature);
+    format!(
+        "{}\n\n-- \n{}{}",
+        draft.text.trim_end(),
+        text.trim(),
+        draft.quote
+    )
+}
+
+/// The same three parts as HTML. Only the signature is markup.
+fn html_body(draft: &Draft, signature: &str) -> String {
+    const PRE: &str = "<div style=\"white-space:pre-wrap\">";
+    let escape = |s: &str| {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+    };
+    let mut out = format!(
+        "{PRE}{}</div><br><div>{signature}</div>",
+        escape(draft.text.trim_end())
+    );
+    if !draft.quote.is_empty() {
+        out.push_str(&format!(
+            "<br>{PRE}{}</div>",
+            escape(draft.quote.trim_start())
+        ));
+    }
+    out
 }
 
 /// A Content-Type from the file's extension — the common ones named,
@@ -260,6 +311,84 @@ mod tests {
         // A file that vanished is a refused send, not an empty part.
         std::fs::remove_dir_all(&dir).ok();
         assert!(build(&account(), &draft).is_err());
+    }
+
+    fn signed() -> Account {
+        account()
+            .with_profile("Ann R", "<p>Ann <b>Rivers</b></p>", "")
+            .unwrap()
+    }
+
+    fn reply() -> Draft {
+        Draft {
+            to: "bob@b.test".into(),
+            subject: "s".into(),
+            text: "my <reply>\n".into(),
+            quote: "\n\nOn Monday, Bob wrote:\n> hello".into(),
+            sign: true,
+            ..Draft::default()
+        }
+    }
+
+    /// A built message back through the parser: the text and HTML a
+    /// recipient's client would show.
+    fn parts(message: &Message) -> (String, String) {
+        let raw = message.formatted();
+        let m = mail_parser::MessageParser::default().parse(&raw).unwrap();
+        (
+            m.body_text(0).unwrap().to_string(),
+            m.body_html(0).unwrap().to_string(),
+        )
+    }
+
+    #[test]
+    fn a_signature_goes_between_the_writing_and_the_quote() {
+        let (text, html) = parts(&build(&signed(), &reply()).unwrap());
+        let order = |body: &str, sig: &str| {
+            let (a, b, c) = (
+                body.find("reply").unwrap(),
+                body.find(sig).unwrap(),
+                body.find("Bob wrote").unwrap(),
+            );
+            assert!(a < b && b < c, "{body}");
+        };
+        order(&text, "Rivers");
+        assert!(text.lines().any(|l| l == "-- "), "{text}");
+        order(&html, "<b>Rivers</b>");
+        assert!(
+            html.contains("my &lt;reply&gt;"),
+            "typed text stays text: {html}"
+        );
+    }
+
+    #[test]
+    fn a_signed_message_keeps_its_attachments() {
+        let dir = crate::test_dir("mail-send-signed");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("notes.txt");
+        std::fs::write(&file, b"hello file").unwrap();
+        let draft = Draft {
+            attachments: vec![file],
+            ..reply()
+        };
+        let raw = String::from_utf8(build(&signed(), &draft).unwrap().formatted()).unwrap();
+        assert!(raw.contains("multipart/mixed"), "{raw}");
+        assert!(raw.contains("multipart/alternative"), "{raw}");
+        assert!(raw.contains("filename=\"notes.txt\""), "{raw}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn no_signature_means_the_plain_message_it_always_was() {
+        let raw = String::from_utf8(build(&account(), &reply()).unwrap().formatted()).unwrap();
+        assert!(!raw.contains("multipart"), "no signature to carry: {raw}");
+        let unsigned = Draft {
+            sign: false,
+            ..reply()
+        };
+        let raw = String::from_utf8(build(&signed(), &unsigned).unwrap().formatted()).unwrap();
+        assert!(!raw.contains("Rivers"), "taken off this message: {raw}");
+        assert!(raw.contains("Bob wrote"), "{raw}");
     }
 
     #[test]

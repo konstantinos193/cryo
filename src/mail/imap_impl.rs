@@ -9,8 +9,8 @@
 use imap::types::Flag as ImapFlag;
 
 use super::account::{Account, Tls};
-use super::client::{Client, Flag, Selection};
-use super::folder::{display_name, role_of, Folder};
+use super::client::{Client, Counts, Flag, Selection};
+use super::folder::Folder;
 use super::message::{header_text, show_list};
 use super::{Envelope, MailError};
 use crate::vault::Secret;
@@ -55,6 +55,110 @@ impl Drop for ImapClient {
     }
 }
 
+impl ImapClient {
+    /// One `LIST` pattern's rows into `out`, skipping names already
+    /// there — namespaces can overlap.
+    fn list_into(&mut self, pattern: &str, out: &mut Vec<Folder>) -> Result<(), MailError> {
+        let names = self
+            .session
+            .list(Some(""), Some(pattern))
+            .map_err(|e| MailError::imap("list", e))?;
+        for n in names.iter() {
+            if !out.iter().any(|f| f.name == n.name()) {
+                out.push(Folder::listed(n.name(), n.delimiter(), n.attributes()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Shared and other-user namespaces: some servers keep them out of
+    /// `LIST "" "*"`. Not every server has `NAMESPACE`, and folders it
+    /// could have added are never worth failing the list over.
+    fn foreign_namespaces(&mut self, out: &mut Vec<Folder>) {
+        let Ok(raw) = self.session.run_command_and_read_response("NAMESPACE") else {
+            return;
+        };
+        for prefix in foreign_prefixes(&raw) {
+            if let Err(e) = self.list_into(&format!("{prefix}*"), out) {
+                crate::report!("mail namespace {prefix}: {e}");
+            }
+        }
+    }
+
+    /// Subscribed names `LIST` didn't report. A subscription can outlive
+    /// its folder, so each one must answer `STATUS` to count.
+    fn subscribed_into(&mut self, out: &mut Vec<Folder>) {
+        let Ok(names) = self.session.lsub(Some(""), Some("*")) else {
+            return;
+        };
+        let extra: Vec<Folder> = names
+            .iter()
+            .filter(|n| !out.iter().any(|f| f.name == n.name()))
+            .map(|n| Folder::listed(n.name(), n.delimiter(), n.attributes()))
+            .filter(|f| f.selectable)
+            .collect();
+        for folder in extra {
+            if self.counts(&folder.name).is_ok() {
+                out.push(folder);
+            }
+        }
+    }
+}
+
+/// The prefixes of a `NAMESPACE` answer's second and third groups:
+/// `* NAMESPACE (("INBOX." ".")) NIL (("#shared." ".")("x/" "/"))`. The
+/// first group is the personal namespace `LIST "" "*"` already covers.
+fn foreign_prefixes(raw: &[u8]) -> Vec<String> {
+    let text = String::from_utf8_lossy(raw);
+    let Some(line) = text
+        .lines()
+        .find_map(|l| l.trim_start().strip_prefix("* NAMESPACE"))
+    else {
+        return Vec::new();
+    };
+    let (mut group, mut depth, mut fields) = (0usize, 0usize, 0usize);
+    let mut out = Vec::new();
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '(' => {
+                depth += 1;
+                if depth == 2 {
+                    fields = 0;
+                }
+            }
+            ')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    group += 1;
+                }
+            }
+            // NIL: an absent group.
+            'N' if depth == 0 => {
+                chars.next();
+                chars.next();
+                group += 1;
+            }
+            '"' => {
+                let mut value = String::new();
+                while let Some(q) = chars.next() {
+                    match q {
+                        '\\' => value.extend(chars.next()),
+                        '"' => break,
+                        other => value.push(other),
+                    }
+                }
+                if depth == 2 && fields == 0 && group > 0 && !value.is_empty() {
+                    out.push(value);
+                }
+                fields += 1;
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Header bytes → an `Envelope` row. Parsing headers with mail-parser
 /// is what makes encoded words and odd charsets display correctly.
 fn envelope_from_header(uid: u32, flags: &[ImapFlag<'_>], size: u32, header: &[u8]) -> Envelope {
@@ -93,20 +197,22 @@ impl Client for ImapClient {
     }
 
     fn folders(&mut self) -> Result<Vec<Folder>, MailError> {
-        let names = self
+        let mut out = Vec::new();
+        self.list_into("*", &mut out)?;
+        self.foreign_namespaces(&mut out);
+        self.subscribed_into(&mut out);
+        Ok(out)
+    }
+
+    fn counts(&mut self, folder: &str) -> Result<Counts, MailError> {
+        let status = self
             .session
-            .list(Some(""), Some("*"))
-            .map_err(|e| MailError::imap("list", e))?;
-        Ok(names
-            .iter()
-            .map(|n| Folder {
-                name: n.name().to_string(),
-                display: display_name(n.name()),
-                role: role_of(n.attributes(), n.name()),
-                unseen: None,
-                exists: None,
-            })
-            .collect())
+            .status(folder, "(MESSAGES UNSEEN)")
+            .map_err(|e| MailError::imap("status", e))?;
+        Ok(Counts {
+            exists: status.exists,
+            unseen: status.unseen.unwrap_or(0),
+        })
     }
 
     fn select(&mut self, folder: &str) -> Result<Selection, MailError> {
@@ -117,8 +223,6 @@ impl Client for ImapClient {
         self.exists = mailbox.exists;
         Ok(Selection {
             uid_validity: mailbox.uid_validity.unwrap_or(0),
-            exists: mailbox.exists,
-            unseen: mailbox.unseen,
         })
     }
 
@@ -210,6 +314,16 @@ impl Client for ImapClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_foreign_namespaces_get_listed() {
+        let raw = b"* NAMESPACE ((\"INBOX.\" \".\")) NIL ((\"#shared.\" \".\")(\"public/\" \"/\"))\r\nA1 OK done\r\n";
+        assert_eq!(foreign_prefixes(raw), ["#shared.", "public/"]);
+        let raw = b"* NAMESPACE ((\"\" \"/\")) ((\"user/\" \"/\")) NIL\r\n";
+        assert_eq!(foreign_prefixes(raw), ["user/"]);
+        assert!(foreign_prefixes(b"* NAMESPACE ((\"\" \"/\")) NIL NIL\r\n").is_empty());
+        assert!(foreign_prefixes(b"A1 BAD unknown\r\n").is_empty());
+    }
 
     #[test]
     fn encoded_subjects_decode_for_the_list() {

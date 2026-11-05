@@ -23,6 +23,8 @@ mod ops;
 mod permission_profile;
 #[cfg(target_os = "windows")]
 mod permissions;
+#[cfg(target_os = "windows")]
+pub(crate) mod profile_folder;
 mod protocol;
 #[cfg(target_os = "windows")]
 pub(crate) mod pump;
@@ -98,6 +100,10 @@ pub struct WryEngine {
     /// this environment shares it. Read once, from that view.
     #[cfg(target_os = "windows")]
     browser_process: std::cell::Cell<Option<u32>>,
+    /// The user data folder, or `None` for WebView2's default beside the
+    /// executable. Must match across every process on one browser process.
+    #[cfg(target_os = "windows")]
+    user_data: Option<std::path::PathBuf>,
 }
 
 impl WryEngine {
@@ -106,6 +112,9 @@ impl WryEngine {
         resolve_page: PageResolver,
         incognito: bool,
         #[cfg_attr(not(target_os = "windows"), allow(unused_variables))] extensions_dir: Option<
+            std::path::PathBuf,
+        >,
+        #[cfg_attr(not(target_os = "windows"), allow(unused_variables))] user_data: Option<
             std::path::PathBuf,
         >,
     ) -> Self {
@@ -125,6 +134,8 @@ impl WryEngine {
             extension_profile: RefCell::new(None),
             #[cfg(target_os = "windows")]
             browser_process: std::cell::Cell::new(None),
+            #[cfg(target_os = "windows")]
+            user_data,
         }
     }
 
@@ -144,7 +155,7 @@ impl WryEngine {
         if let Some(env) = &*self.environment.borrow() {
             return Ok(env.clone());
         }
-        let env = create_environment()?;
+        let env = create_environment(self.user_data.as_deref())?;
         *self.environment.borrow_mut() = Some(env.clone());
         Ok(env)
     }
@@ -194,8 +205,8 @@ fn browser_args() -> String {
 
 /// Build the one `ICoreWebView2Environment` every view shares — the same
 /// call wry makes inside `build_as_child`, hoisted here so it runs once.
-/// Null executable folder and user-data folder mean WebView2's defaults,
-/// which is what a wry view with no custom context already gets.
+/// A null executable folder means the installed runtime; a null user-data
+/// folder means WebView2's default beside the executable.
 #[cfg(target_os = "windows")]
 /// `AreBrowserExtensionsEnabled` is set here rather than on the builder:
 /// wry sets the same option during *its* environment creation, which
@@ -210,7 +221,9 @@ fn browser_args() -> String {
 /// window built without the option could not open beside a normal one,
 /// nor attach to the warm keeper. Whether a *view* loads extensions is
 /// still the builder's `with_extensions_path`, which incognito never sets.
-fn create_environment() -> Result<ICoreWebView2Environment, EngineError> {
+fn create_environment(
+    user_data: Option<&std::path::Path>,
+) -> Result<ICoreWebView2Environment, EngineError> {
     use std::sync::mpsc::channel;
     use webview2_com::{
         CoreWebView2EnvironmentOptions, CreateCoreWebView2EnvironmentCompletedHandler,
@@ -218,7 +231,7 @@ fn create_environment() -> Result<ICoreWebView2Environment, EngineError> {
             CreateCoreWebView2EnvironmentWithOptions, ICoreWebView2EnvironmentOptions,
         },
     };
-    use windows::core::{Error as WinError, PCWSTR};
+    use windows::core::{Error as WinError, HSTRING, PCWSTR};
     use windows::Win32::Foundation::{E_POINTER, E_UNEXPECTED};
     use windows::Win32::Globalization::{
         GetUserDefaultUILanguage, LCIDToLocaleName, LOCALE_ALLOW_NEUTRAL_NAMES, MAX_LOCALE_NAME,
@@ -234,6 +247,10 @@ fn create_environment() -> Result<ICoreWebView2Environment, EngineError> {
         options.set_language(String::from_utf16_lossy(&lang));
     }
 
+    let user_data = user_data.map(HSTRING::from);
+    let user_data = user_data
+        .as_ref()
+        .map_or(PCWSTR::null(), |folder| PCWSTR(folder.as_ptr()));
     let (tx, rx) = channel();
     let handler = CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(
         move |error_code, environment| {
@@ -247,7 +264,7 @@ fn create_environment() -> Result<ICoreWebView2Environment, EngineError> {
     unsafe {
         CreateCoreWebView2EnvironmentWithOptions(
             PCWSTR::null(),
-            PCWSTR::null(),
+            user_data,
             &ICoreWebView2EnvironmentOptions::from(options),
             &handler,
         )

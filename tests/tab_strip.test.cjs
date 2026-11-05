@@ -32,7 +32,7 @@ function fixture() {
     renderDl() {}, renderBar() {},
     // The siblings render.js calls into. The tab-search overlay reads the
     // same pushed state, so a closed one is what the strip renders beside.
-    tabfindOpen: false, paintTabfind() {},
+    tabfindOpen: false, paintTabfind() {}, paintAddress() {},
   });
   window.eval(RENDER_JS);
   const state = {

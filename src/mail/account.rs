@@ -62,6 +62,13 @@ impl ServerSpec {
     }
 }
 
+/// A signature is a few lines and maybe a logo; past this it is a page.
+const MAX_SIGNATURE_BYTES: usize = 512 * 1024;
+
+/// The page shrinks a picked picture to a small square before it gets
+/// here, so a larger one didn't come from the page.
+const MAX_PHOTO_BYTES: usize = 256 * 1024;
+
 /// A configured account. `Clone` freely — it carries no secret.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Account {
@@ -72,6 +79,10 @@ pub struct Account {
     username: String,
     imap: ServerSpec,
     smtp: ServerSpec,
+    /// Sanitized HTML appended to what this account sends; may be empty.
+    signature: String,
+    /// The account's own picture as a `data:` URL; may be empty.
+    photo: String,
 }
 
 impl Account {
@@ -103,7 +114,35 @@ impl Account {
             username,
             imap,
             smtp,
+            signature: String::new(),
+            photo: String::new(),
         })
+    }
+
+    /// This account with the settings page's fields replaced — the
+    /// signature comes back sanitized, so a stored one is always safe to
+    /// show and to send.
+    pub fn with_profile(
+        mut self,
+        display: &str,
+        signature: &str,
+        photo: &str,
+    ) -> Result<Self, MailError> {
+        if signature.len() > MAX_SIGNATURE_BYTES {
+            return Err(MailError::Invalid(
+                "that signature is too large — use smaller images".into(),
+            ));
+        }
+        let is_picture = ["png", "jpeg", "webp"]
+            .iter()
+            .any(|kind| photo.starts_with(&format!("data:image/{kind};base64,")));
+        if !photo.is_empty() && (!is_picture || photo.len() > MAX_PHOTO_BYTES) {
+            return Err(MailError::Invalid("that picture can't be used".into()));
+        }
+        self.display = display.trim().to_string();
+        self.signature = super::sanitize::clean_signature(signature);
+        self.photo = photo.to_string();
+        Ok(self)
     }
 
     /// What the "From" header and the SMTP envelope use — "Display
@@ -128,6 +167,14 @@ impl Account {
 
     pub fn email(&self) -> &str {
         &self.email
+    }
+
+    pub fn signature(&self) -> &str {
+        &self.signature
+    }
+
+    pub fn photo(&self) -> &str {
+        &self.photo
     }
 
     pub fn username(&self) -> &str {
@@ -160,6 +207,10 @@ struct AccountDto {
     username: String,
     imap: ServerDto,
     smtp: ServerDto,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    signature: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    photo: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -209,7 +260,15 @@ pub fn load_accounts(path: &std::path::Path) -> Result<Vec<Account>, MailError> 
         .iter()
         .filter_map(|d| {
             let (imap, smtp) = (dto_server(&d.imap).ok()?, dto_server(&d.smtp).ok()?);
-            Account::new(&d.display, &d.email, &d.username, imap, smtp).ok()
+            let account = Account::new(&d.display, &d.email, &d.username, imap, smtp).ok()?;
+            // A profile that no longer validates costs the profile, not
+            // the account and the password behind it.
+            Some(
+                account
+                    .clone()
+                    .with_profile(&d.display, &d.signature, &d.photo)
+                    .unwrap_or(account),
+            )
         })
         .collect())
 }
@@ -226,6 +285,8 @@ pub fn save_accounts(path: &std::path::Path, accounts: &[Account]) -> Result<(),
                 username: a.username.clone(),
                 imap: server_dto(&a.imap),
                 smtp: server_dto(&a.smtp),
+                signature: a.signature.clone(),
+                photo: a.photo.clone(),
             })
             .collect(),
     };
@@ -270,6 +331,51 @@ mod tests {
             "imap://imap.a.test"
         );
         assert!(crate::vault::SiteOrigin::parse("imap://imap.a.test").is_none());
+    }
+
+    #[test]
+    fn a_profile_is_validated_and_its_signature_sanitized() {
+        let a = Account::new("Ann", "ann@a.test", "", spec("i.a.test"), spec("s.a.test")).unwrap();
+        let signed = a
+            .clone()
+            .with_profile(
+                " Ann R ",
+                "<p>Ann<script>x</script></p><img src=\"https://a.test/logo.png\">",
+                "data:image/jpeg;base64,AAAA",
+            )
+            .unwrap();
+        assert_eq!(signed.display(), "Ann R");
+        assert!(!signed.signature().contains("script"));
+        assert!(
+            signed.signature().contains("https://a.test/logo.png"),
+            "a signature's logo is the sender's own choice to send"
+        );
+        assert!(a
+            .clone()
+            .with_profile("", "", "javascript:alert(1)")
+            .is_err());
+        assert!(a
+            .clone()
+            .with_profile("", "", "data:text/html;base64,AA")
+            .is_err());
+        assert!(a
+            .with_profile("", &"x".repeat(MAX_SIGNATURE_BYTES + 1), "")
+            .is_err());
+    }
+
+    #[test]
+    fn a_profile_survives_the_file_and_files_without_one_still_load() {
+        let dir = crate::test_dir("mail-profile");
+        let path = dir.join("accounts.json");
+        let a = Account::new("Ann", "ann@a.test", "", spec("i.a.test"), spec("s.a.test"))
+            .unwrap()
+            .with_profile("Ann", "<p>Regards</p>", "data:image/png;base64,AA")
+            .unwrap();
+        save_accounts(&path, std::slice::from_ref(&a)).unwrap();
+        let back = load_accounts(&path).unwrap();
+        assert_eq!(back[0].signature(), "<p>Regards</p>");
+        assert_eq!(back[0].photo(), "data:image/png;base64,AA");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
