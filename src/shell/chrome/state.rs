@@ -42,6 +42,29 @@ pub struct ChromeSiteGrant {
     pub allowed: bool,
 }
 
+/// The session history behind or ahead of the active tab — what a
+/// right-click on an arrow lists, pushed on request.
+#[derive(Debug, Serialize)]
+pub struct ChromeNavMenu {
+    /// The tab these rows belong to — `nav_go` sends it back.
+    pub tab: u64,
+    pub forward: bool,
+    /// Nearest page first.
+    pub rows: Vec<ChromeNavRow>,
+}
+
+/// One page in that menu.
+#[derive(Debug, Serialize)]
+pub struct ChromeNavRow {
+    /// The engine's id for the entry — `nav_go` sends it back.
+    pub entry: i64,
+    pub title: String,
+    pub url: String,
+    /// `data:` URL from the history store. The list itself carries no
+    /// icons, and incognito keeps no store to read them from.
+    pub favicon: Option<String>,
+}
+
 /// State pushed to the chrome UI after every change.
 #[derive(Debug, Serialize)]
 pub struct ChromeState {

@@ -283,6 +283,31 @@
     -webkit-backdrop-filter: blur(18px) saturate(1.3);
   }
   #menu-pop.open, #omni-pop.open, #acct-pop.open { display: block; }
+  /* The arrows' session-history menus. `left` is set from the arrow's rect
+     when the reply lands; the height is capped because the strip's own
+     height is all the view has until the overlay stretch arrives. */
+  #nav-pop {
+    display: none; position: fixed; top: 40px; z-index: 10;
+    width: 340px; max-width: calc(100vw - 16px);
+    max-height: calc(100vh - 48px); overflow-y: auto;
+    padding: 5px; outline: none;
+    background: var(--pop-bg); border: 1px solid var(--line-pop);
+    border-radius: 12px; box-shadow: var(--shadow);
+    backdrop-filter: blur(18px) saturate(1.3);
+    -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  }
+  #nav-pop.open { display: block; }
+  .nav-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 10px; border-radius: 8px; cursor: pointer;
+    color: var(--tx); font-size: 12px;
+  }
+  /* One highlight, moved by the arrow keys and by hover alike. */
+  .nav-row.at { background: rgba(var(--hair-rgb), .06); }
+  .nav-row .fav { width: 16px; height: 16px; flex: 0 0 auto; border-radius: 3px; }
+  .nav-row .fav.blank { background: var(--bg3); }
+  .nav-row .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nav-row.full { color: var(--tx2); }
   /* The account dropdown: every live session the jar holds, and a way
      to add one more. `right` is set from the button's rect at open
      time — the downloads button between it and the corner may hide. */

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.20.0
+
+### Added
+
+- Right-clicking the back or forward arrow opens that tab's session
+  history, Chrome-style: pick any entry to jump straight to it. The
+  list is read from the engine on every open (WebView2 exposes it only
+  over the DevTools protocol), so it is never stale and never copied
+  into the app.
+
+### Fixed
+
+- IMAP sessions that answer out of step (a Dovecot-style `INBOX.`
+  host, or a reply the library cannot parse) no longer poison every
+  later command: the folder list still shows, and the next request
+  opens a fresh session. Unseen counts come from `STATUS`, not
+  `SELECT`'s first-unseen position.
+
 ## 0.19.0
 
 ### Added

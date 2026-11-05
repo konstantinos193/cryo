@@ -60,6 +60,8 @@ pub(crate) const SCRIPT: &str = concat!(
     "\n",
     include_str!("chrome/tabfind.js"),
     "\n",
+    include_str!("chrome/navmenu.js"),
+    "\n",
     include_str!("chrome/render.js"),
 );
 

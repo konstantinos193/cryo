@@ -28,6 +28,8 @@ pub(crate) mod profile_folder;
 mod protocol;
 #[cfg(target_os = "windows")]
 pub(crate) mod pump;
+#[cfg(target_os = "windows")]
+mod session_history;
 mod view;
 
 #[cfg(target_os = "windows")]

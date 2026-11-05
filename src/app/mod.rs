@@ -28,6 +28,7 @@ mod freeze_probe;
 mod keys;
 mod library;
 mod mail;
+mod nav_menu;
 mod permissions;
 mod resources;
 mod site_info;

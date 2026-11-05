@@ -749,8 +749,15 @@ fn sync(
             });
         }
     }
-    if let (0, Some(e)) = (answered, refusal) {
-        return Err(e);
+    match (answered, refusal) {
+        (0, Some(e)) => return Err(e),
+        // Some answered, some didn't: the folder list is still worth
+        // showing, but this session has misbehaved, so the next request
+        // gets a fresh one.
+        (_, Some(_)) => {
+            sessions.remove(email);
+        }
+        _ => {}
     }
     out(Outcome::Folders {
         email: email.to_string(),

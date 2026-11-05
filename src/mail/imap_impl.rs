@@ -70,93 +70,6 @@ impl ImapClient {
         }
         Ok(())
     }
-
-    /// Shared and other-user namespaces: some servers keep them out of
-    /// `LIST "" "*"`. Not every server has `NAMESPACE`, and folders it
-    /// could have added are never worth failing the list over.
-    fn foreign_namespaces(&mut self, out: &mut Vec<Folder>) {
-        let Ok(raw) = self.session.run_command_and_read_response("NAMESPACE") else {
-            return;
-        };
-        for prefix in foreign_prefixes(&raw) {
-            if let Err(e) = self.list_into(&format!("{prefix}*"), out) {
-                crate::report!("mail namespace {prefix}: {e}");
-            }
-        }
-    }
-
-    /// Subscribed names `LIST` didn't report. A subscription can outlive
-    /// its folder, so each one must answer `STATUS` to count.
-    fn subscribed_into(&mut self, out: &mut Vec<Folder>) {
-        let Ok(names) = self.session.lsub(Some(""), Some("*")) else {
-            return;
-        };
-        let extra: Vec<Folder> = names
-            .iter()
-            .filter(|n| !out.iter().any(|f| f.name == n.name()))
-            .map(|n| Folder::listed(n.name(), n.delimiter(), n.attributes()))
-            .filter(|f| f.selectable)
-            .collect();
-        for folder in extra {
-            if self.counts(&folder.name).is_ok() {
-                out.push(folder);
-            }
-        }
-    }
-}
-
-/// The prefixes of a `NAMESPACE` answer's second and third groups:
-/// `* NAMESPACE (("INBOX." ".")) NIL (("#shared." ".")("x/" "/"))`. The
-/// first group is the personal namespace `LIST "" "*"` already covers.
-fn foreign_prefixes(raw: &[u8]) -> Vec<String> {
-    let text = String::from_utf8_lossy(raw);
-    let Some(line) = text
-        .lines()
-        .find_map(|l| l.trim_start().strip_prefix("* NAMESPACE"))
-    else {
-        return Vec::new();
-    };
-    let (mut group, mut depth, mut fields) = (0usize, 0usize, 0usize);
-    let mut out = Vec::new();
-    let mut chars = line.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '(' => {
-                depth += 1;
-                if depth == 2 {
-                    fields = 0;
-                }
-            }
-            ')' => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    group += 1;
-                }
-            }
-            // NIL: an absent group.
-            'N' if depth == 0 => {
-                chars.next();
-                chars.next();
-                group += 1;
-            }
-            '"' => {
-                let mut value = String::new();
-                while let Some(q) = chars.next() {
-                    match q {
-                        '\\' => value.extend(chars.next()),
-                        '"' => break,
-                        other => value.push(other),
-                    }
-                }
-                if depth == 2 && fields == 0 && group > 0 && !value.is_empty() {
-                    out.push(value);
-                }
-                fields += 1;
-            }
-            _ => {}
-        }
-    }
-    out
 }
 
 /// Header bytes → an `Envelope` row. Parsing headers with mail-parser
@@ -199,8 +112,6 @@ impl Client for ImapClient {
     fn folders(&mut self) -> Result<Vec<Folder>, MailError> {
         let mut out = Vec::new();
         self.list_into("*", &mut out)?;
-        self.foreign_namespaces(&mut out);
-        self.subscribed_into(&mut out);
         Ok(out)
     }
 
@@ -315,14 +226,105 @@ impl Client for ImapClient {
 mod tests {
     use super::*;
 
+    /// A scripted server speaking the shape a Dovecot-style `INBOX.` host
+    /// does: answers each command under the tag it was sent, so a client
+    /// that loses its place in the stream fails here as it would for real.
+    fn scripted_server() -> (u16, std::thread::JoinHandle<Vec<String>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut writer = stream.try_clone().unwrap();
+            let mut reader = BufReader::new(stream);
+            writer.write_all(b"* OK ready\r\n").unwrap();
+            let mut commands = Vec::new();
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 {
+                    return commands;
+                }
+                let (tag, command) = line.trim_end().split_once(' ').unwrap();
+                let verb = command.split(' ').next().unwrap().to_ascii_uppercase();
+                commands.push(verb.clone());
+                let body = match verb.as_str() {
+                    "LIST" => concat!(
+                        "* LIST (\\HasChildren) \".\" INBOX\r\n",
+                        "* LIST (\\HasNoChildren \\Sent) \".\" \"INBOX.Sent\"\r\n",
+                        "* LIST (\\Noselect \\HasChildren) \".\" \"INBOX.Clients\"\r\n",
+                        "* LIST (\\HasNoChildren) \".\" \"INBOX.Clients.&A5UDuwO7A7cDvQO5A7oDrA-\"\r\n",
+                    )
+                    .to_string(),
+                    "STATUS" if command.contains("Sent") => {
+                        "* STATUS \"INBOX.Sent\" (MESSAGES 7 UNSEEN 0)\r\n".to_string()
+                    }
+                    "STATUS" => "* STATUS INBOX (MESSAGES 18 UNSEEN 3)\r\n".to_string(),
+                    "SELECT" => concat!(
+                        "* 18 EXISTS\r\n",
+                        "* 0 RECENT\r\n",
+                        "* OK [UNSEEN 12] first unseen\r\n",
+                        "* OK [UIDVALIDITY 77] ok\r\n",
+                    )
+                    .to_string(),
+                    _ => String::new(),
+                };
+                let done = format!("{body}{tag} OK done\r\n");
+                writer.write_all(done.as_bytes()).unwrap();
+                if verb == "LOGOUT" {
+                    return commands;
+                }
+            }
+        });
+        (port, handle)
+    }
+
     #[test]
-    fn only_foreign_namespaces_get_listed() {
-        let raw = b"* NAMESPACE ((\"INBOX.\" \".\")) NIL ((\"#shared.\" \".\")(\"public/\" \"/\"))\r\nA1 OK done\r\n";
-        assert_eq!(foreign_prefixes(raw), ["#shared.", "public/"]);
-        let raw = b"* NAMESPACE ((\"\" \"/\")) ((\"user/\" \"/\")) NIL\r\n";
-        assert_eq!(foreign_prefixes(raw), ["user/"]);
-        assert!(foreign_prefixes(b"* NAMESPACE ((\"\" \"/\")) NIL NIL\r\n").is_empty());
-        assert!(foreign_prefixes(b"A1 BAD unknown\r\n").is_empty());
+    fn a_sync_round_stays_in_step_with_the_server() {
+        let (port, server) = scripted_server();
+        let client = imap::ClientBuilder::new("127.0.0.1", port)
+            .mode(imap::ConnectionMode::Plaintext)
+            .connect()
+            .unwrap();
+        let session = client.login("a", "b").map_err(|(e, _)| e).unwrap();
+        let mut client = ImapClient { session, exists: 0 };
+
+        let folders = client.folders().unwrap();
+        let shown: Vec<(&str, u8, bool)> = folders
+            .iter()
+            .map(|f| (f.path.as_str(), f.depth, f.selectable))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("INBOX", 0, true),
+                ("Sent", 0, true),
+                ("Clients", 0, false),
+                ("Clients/Ελληνικά", 1, true),
+            ]
+        );
+        // The count is how many are unseen, not `SELECT`'s first-unseen
+        // position, 12.
+        assert_eq!(
+            client.counts("INBOX").unwrap(),
+            Counts {
+                exists: 18,
+                unseen: 3
+            }
+        );
+        assert_eq!(client.counts("INBOX.Sent").unwrap().exists, 7);
+        assert_eq!(client.select("INBOX").unwrap().uid_validity, 77);
+        // Every command after the others still lands on its own answer.
+        client.verify().unwrap();
+        drop(client);
+        let commands = server.join().unwrap();
+        // Only commands the IMAP library can read the answer to: one it
+        // can't parse leaves the stream out of step for the whole session.
+        for verb in &commands {
+            assert!(
+                ["LOGIN", "LIST", "STATUS", "SELECT", "NOOP", "LOGOUT"].contains(&verb.as_str()),
+                "{verb}"
+            );
+        }
     }
 
     #[test]

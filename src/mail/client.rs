@@ -51,9 +51,7 @@ pub trait Client {
     /// Prove the credentials work — the onboarding flow's gate.
     fn verify(&mut self) -> Result<(), MailError>;
 
-    /// The account's folders, roles resolved: `LIST`, every namespace
-    /// `NAMESPACE` names beyond the personal one, and whatever `LSUB`
-    /// holds that those missed.
+    /// `LIST` — the account's folders, roles resolved.
     fn folders(&mut self) -> Result<Vec<Folder>, MailError>;
 
     /// `STATUS` — a folder's counts, without selecting it.

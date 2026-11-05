@@ -9,6 +9,8 @@ mod find;
 pub use find::{FindHandler, FindMatches};
 #[cfg(feature = "servo-engine")]
 pub mod servo_impl;
+mod session_history;
+pub use session_history::{SessionEntry, SessionEntryId, SessionHistory};
 pub mod wry_impl;
 
 /// Position and size in logical pixels, relative to the parent window.
@@ -265,6 +267,19 @@ pub trait ContentView {
     /// out the arrows when it doesn't.
     fn can_go_back(&self) -> Result<bool, EngineError>;
     fn can_go_forward(&self) -> Result<bool, EngineError>;
+    /// The whole back/forward list — what the arrows' right-click menus
+    /// list. Answers `Unsupported` where the engine can't enumerate it.
+    fn session_history(&self) -> Result<SessionHistory, EngineError> {
+        Err(EngineError::Unsupported(
+            "Listing session history is unavailable on this engine",
+        ))
+    }
+    /// Jump to an entry `session_history` listed, any distance away.
+    fn go_to_session_entry(&self, _entry: SessionEntryId) -> Result<(), EngineError> {
+        Err(EngineError::Unsupported(
+            "Listing session history is unavailable on this engine",
+        ))
+    }
     /// Abort an in-flight navigation or load.
     fn stop(&self) -> Result<(), EngineError>;
     fn set_visible(&self, visible: bool) -> Result<(), EngineError>;

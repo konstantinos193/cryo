@@ -40,7 +40,7 @@
   let menuOpen = false, omniOpen = false, dlOpen = false, libOpen = false,
       acctOpen = false, passwordOpen = false, siteOpen = false;
   const reportOverlay = () =>
-    ipc({cmd: 'overlay', open: menuOpen || omniOpen || dlOpen || libOpen || acctOpen || passwordOpen || permissionOpen || tabfindOpen || installOpen || siteOpen});
+    ipc({cmd: 'overlay', open: menuOpen || omniOpen || dlOpen || libOpen || acctOpen || passwordOpen || permissionOpen || tabfindOpen || installOpen || siteOpen || navMenuOpen});
   // The lock in the address bar: what this page is, whether the
   // connection is secure, and the permission decisions remembered for
   // it. The popup asks the app on open and paints the `__cryo_site`
@@ -247,7 +247,7 @@
   // the view. One list, so a new overlay joins it in one place.
   const dismissOverlays = () => {
     setMenu(false); setOmni(false); setDl(false); setLib(false); setAcct(false);
-    setTabfind(false); setSite(false);
+    setTabfind(false); setSite(false); setNavMenu(false);
   };
   // Ctrl+Shift+O lands here.
   window.__cryo_library_toggle = (pane) => {

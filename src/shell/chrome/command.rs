@@ -84,6 +84,17 @@ pub enum ChromeCommand {
     Stop,
     Back,
     Forward,
+    /// A right-click on an arrow — the app answers with a `__cryo_nav_menu`
+    /// eval listing that direction's session history.
+    NavMenu {
+        forward: bool,
+    },
+    /// A row of that menu. `tab` is the tab it listed, because `entry` only
+    /// means something to that tab's view.
+    NavGo {
+        tab: u64,
+        entry: i64,
+    },
     /// Open Google sign-in in a new tab — the profile cookie jar is shared,
     /// so signing in once applies to every site and survives restarts.
     SignIn,

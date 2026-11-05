@@ -60,6 +60,8 @@ impl App {
             ChromeCommand::Stop => self.stop_active(),
             ChromeCommand::Back => self.back_active(),
             ChromeCommand::Forward => self.forward_active(),
+            ChromeCommand::NavMenu { forward } => self.push_nav_menu(forward),
+            ChromeCommand::NavGo { tab, entry } => self.go_to_session_entry(tab, entry),
             // The WebView2 profile cookie jar is shared across views, so a
             // Google sign-in tab authenticates every tab — and persists.
             ChromeCommand::SignIn => self.spawn_tab("https://accounts.google.com", true),

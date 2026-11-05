@@ -355,6 +355,16 @@ impl ContentView for WryView {
         }
     }
 
+    #[cfg(target_os = "windows")]
+    fn session_history(&self) -> Result<crate::engine::SessionHistory, EngineError> {
+        super::session_history::read(&self.view)
+    }
+
+    #[cfg(target_os = "windows")]
+    fn go_to_session_entry(&self, entry: crate::engine::SessionEntryId) -> Result<(), EngineError> {
+        super::session_history::go_to(&self.view, entry)
+    }
+
     fn stop(&self) -> Result<(), EngineError> {
         #[cfg(target_os = "windows")]
         {
