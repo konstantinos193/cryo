@@ -1,6 +1,10 @@
 // Take a look at the license at the top of the repository in the LICENSE file.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
+// cryo: a path dependency is linted like our own code — no `--cap-lints`
+// the way a registry crate gets — and this is the 0.18.5 registry crate
+// verbatim but for `variant_iter.rs`. Its warnings are upstream's, not ours.
+#![allow(warnings)]
 #![allow(clippy::missing_safety_doc)]
 #![allow(renamed_and_removed_lints)]
 #![doc = include_str!("../README.md")]

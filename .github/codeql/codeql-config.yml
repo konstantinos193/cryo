@@ -1,0 +1,7 @@
+name: cryo
+
+# patches/ holds registry crates carried verbatim but for one upstream fix
+# (see [patch.crates-io] in Cargo.toml). Their findings are upstream's to
+# act on; scanning them here only buries cryo's own.
+paths-ignore:
+  - patches

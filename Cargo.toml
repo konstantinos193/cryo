@@ -105,7 +105,10 @@ embed-resource = "3.0.12"
 # the out-pointer was passed as `&p`, not `&mut p`). Nothing newer is
 # reachable — wry 0.57 and tao 0.37 bind GTK3 through gtk-rs 0.18, which
 # pins glib ^0.18, and the fix only shipped in 0.20. Linux-only; the
-# crate never compiles for Windows or macOS. Drop the patch and the
-# `patches/` folder the day wry moves to a gtk that takes glib ≥ 0.20.
+# crate never compiles for Windows or macOS. Two lines differ from the
+# registry crate: the fix, and `#![allow(warnings)]` in its lib.rs, since
+# a path crate gets no `--cap-lints` and CI runs clippy at -D warnings.
+# CodeQL skips the folder (.github/codeql/codeql-config.yml). Drop all of
+# it the day wry moves to a gtk that takes glib ≥ 0.20.
 [patch.crates-io]
 glib = { path = "patches/glib" }
