@@ -36,7 +36,7 @@ zip = { version = "9.3.0", default-features = false, features = ["deflate-flate2
 imap = "3.0.0-alpha.15"
 # imap 3 stops re-exporting the LIST attribute enum; `mail::folder`
 # names it directly. Pinned to the version imap itself resolves.
-imap-proto = "0.16.7"
+imap-proto = "0.17.0"
 lettre = { version = "0.11.23", default-features = false, features = [
     "builder",
     "smtp-transport",
