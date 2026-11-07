@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.20.1
+
+### Fixed
+
+- Cloudflare challenges and similar self-solving pages survive. A load
+  that got any response code is judged as that answer: WebView2 reports
+  a 403 with a body as "unknown", and the error page cryo painted over
+  it killed the verification the page was running. Only a navigation
+  with no response at all goes through transport classification, its
+  silent retry and the download race.
+
 ## 0.20.0
 
 ### Added

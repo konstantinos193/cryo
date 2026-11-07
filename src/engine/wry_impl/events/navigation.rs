@@ -152,8 +152,8 @@ unsafe fn navigation_completed(
         download_started,
         on_load_change,
         latest_nav,
-        attempted,
         retry_budget,
+        ..
     } = state;
     let on_load_change = on_load_change.as_ref();
     // A completion counts as the view's current state only when no newer
@@ -174,6 +174,7 @@ unsafe fn navigation_completed(
     };
     let mut success = windows::core::BOOL::default();
     args.IsSuccess(&mut success)?;
+    let code = http_status(args);
     if !success.as_bool() {
         // The navigation that replaced this one owns the page and will
         // report its own verdict. Painting this one's failure over a load
@@ -182,71 +183,25 @@ unsafe fn navigation_completed(
         if !current {
             return Ok(());
         }
-        let mut status = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
-        args.WebErrorStatus(&mut status)?;
-        // "Aborted" is WebView2's catch-all for a navigation that stopped
-        // short, and most of the ways it does are not transport failures:
-        // a page calling `window.stop()`, a document the site replaced
-        // mid-load, a navigation that became a download. Only one of
-        // those got no answer at all, so a response code — any response
-        // code — settles it: the server was reachable, and whatever ended
-        // the load was not the connection.
-        if status == COREWEBVIEW2_WEB_ERROR_STATUS_CONNECTION_ABORTED {
-            if http_status(args).is_some_and(|code| code != 0) {
-                return Ok(());
-            }
-            // Nothing arrived. A navigation that became a download looks
-            // exactly like this — and the two events race: DownloadStarting
-            // can land a few ms *after* the abort. A flag already set is
-            // claimed now; otherwise the report is re-checked on the shared
-            // delay worker once the grace expires, so a download on its way
-            // can still claim it — as can a navigation that starts in the
-            // meantime and takes the view with it.
-            if !download_started.swap(false, Ordering::SeqCst) {
-                crate::report!("navigation to {} aborted", attempted.borrow());
-                let report = report.clone();
-                let flag = download_started.clone();
-                let latest_nav = latest_nav.clone();
-                delayer.after(DOWNLOAD_ABORT_GRACE, move || {
-                    if !flag.swap(false, Ordering::SeqCst) && is_current(&latest_nav, nav_id) {
-                        (*report)(LoadFailure::ConnectionFailed);
-                    }
-                });
-            }
-            return Ok(());
+        // A response code — any response code — means the server was
+        // reachable, whatever WebView2's status says. It fails loads that
+        // got an answer: a page calling `window.stop()` or replacing itself
+        // mid-load ("aborted"), and a 4xx with a body ("unknown") — which
+        // is what a Cloudflare challenge is: a 403 whose page solves itself
+        // and navigates on. Retrying or painting over that page kills the
+        // verification it is running, so an answered load is judged below
+        // as the answer it is.
+        if code.is_none_or(|code| code == 0) {
+            return transport_failure(webview, args, report, state, delayer, nav_id);
         }
-        let failure = load_failure(status);
-        if failure == Some(LoadFailure::Unknown) {
-            // The raw status is the only evidence for what actually
-            // broke — keep it in the log before retrying it away.
-            crate::report!(
-                "navigation to {} failed, status {status:?}",
-                attempted.borrow()
-            );
-            if retry_budget.get() > 0 {
-                retry_budget.set(retry_budget.get() - 1);
-                let url = attempted.borrow().clone();
-                if !url.is_empty()
-                    && webview
-                        .Navigate(&windows::core::HSTRING::from(url.as_str()))
-                        .is_ok()
-                {
-                    return Ok(());
-                }
-            }
-        }
-        if let Some(failure) = failure {
-            (**report)(failure);
-        }
-        return Ok(());
     }
     download_started.store(false, Ordering::SeqCst);
     retry_budget.set(UNCLASSIFIED_RETRIES);
 
-    // A 4xx or 5xx is still a successful navigation — the server answered.
-    // Only step in when it answered with nothing to render, so a site's own
-    // 404 page survives, the way Chrome leaves it alone.
-    let Some(code) = http_status(args) else {
+    // A 4xx or 5xx is still an answer. Only step in when it came with
+    // nothing to render, so a site's own 404 page survives, the way Chrome
+    // leaves it alone.
+    let Some(code) = code else {
         return Ok(());
     };
     let Ok(status) = u16::try_from(code) else {
@@ -263,6 +218,73 @@ unsafe fn navigation_completed(
         Ok(())
     }));
     webview.ExecuteScript(&windows::core::HSTRING::from(EMPTY_BODY_PROBE), &probe)
+}
+
+/// A current navigation that failed with no response at all: classify the
+/// transport status, give an unclassified one its silent retry, and report
+/// the rest.
+unsafe fn transport_failure(
+    webview: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2,
+    args: &ICoreWebView2NavigationCompletedEventArgs,
+    report: &Arc<dyn Fn(LoadFailure) + Send + Sync>,
+    state: &NavState,
+    delayer: &Delayer,
+    nav_id: u64,
+) -> windows::core::Result<()> {
+    let NavState {
+        download_started,
+        latest_nav,
+        attempted,
+        retry_budget,
+        ..
+    } = state;
+    let mut status = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
+    args.WebErrorStatus(&mut status)?;
+    if status == COREWEBVIEW2_WEB_ERROR_STATUS_CONNECTION_ABORTED {
+        // A navigation that became a download looks exactly like this —
+        // and the two events race: DownloadStarting can land a few ms
+        // *after* the abort. A flag already set is claimed now; otherwise
+        // the report is re-checked on the shared delay worker once the
+        // grace expires, so a download on its way can still claim it — as
+        // can a navigation that starts in the meantime and takes the view
+        // with it.
+        if !download_started.swap(false, Ordering::SeqCst) {
+            crate::report!("navigation to {} aborted", attempted.borrow());
+            let report = report.clone();
+            let flag = download_started.clone();
+            let latest_nav = latest_nav.clone();
+            delayer.after(DOWNLOAD_ABORT_GRACE, move || {
+                if !flag.swap(false, Ordering::SeqCst) && is_current(&latest_nav, nav_id) {
+                    (*report)(LoadFailure::ConnectionFailed);
+                }
+            });
+        }
+        return Ok(());
+    }
+    let failure = load_failure(status);
+    if failure == Some(LoadFailure::Unknown) {
+        // The raw status is the only evidence for what actually
+        // broke — keep it in the log before retrying it away.
+        crate::report!(
+            "navigation to {} failed, status {status:?}",
+            attempted.borrow()
+        );
+        if retry_budget.get() > 0 {
+            retry_budget.set(retry_budget.get() - 1);
+            let url = attempted.borrow().clone();
+            if !url.is_empty()
+                && webview
+                    .Navigate(&windows::core::HSTRING::from(url.as_str()))
+                    .is_ok()
+            {
+                return Ok(());
+            }
+        }
+    }
+    if let Some(failure) = failure {
+        (**report)(failure);
+    }
+    Ok(())
 }
 
 /// The response code this navigation got, or `None` when the runtime is
