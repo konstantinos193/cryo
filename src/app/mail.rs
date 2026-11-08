@@ -17,7 +17,7 @@ use zeroize::Zeroize;
 
 use crate::engine::PageMessage;
 use crate::mail::{self, Account, Folder, MailError, ServerSpec, Tls};
-use crate::shell::pages::{self, INTERNAL_ORIGIN, MAIL_URL, NEW_TAB_URL};
+use crate::shell::pages::{self, MAIL_URL, NEW_TAB_URL};
 use crate::tabs::TabId;
 use crate::vault::{Draft, Secret};
 
@@ -212,8 +212,7 @@ impl App {
         // The internal origin is shared — a shell page is trusted only
         // for the URL its surface actually has loaded, which the caller
         // checked; the message must claim that origin too.
-        let claimed = url::Url::parse(&message.source)
-            .is_ok_and(|u| u.origin().ascii_serialization() == INTERNAL_ORIGIN);
+        let claimed = url::Url::parse(&message.source).is_ok_and(|u| pages::is_internal_parsed(&u));
         if !claimed || !self.is_mail_tab(id) {
             message.body.zeroize();
             return;
