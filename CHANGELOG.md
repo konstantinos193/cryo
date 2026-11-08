@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.20.4
+
+### Fixed
+
+- Linux: menus no longer open behind the page. The chrome view raises
+  itself to host a menu, and wry child views are sibling X11 windows
+  stacked in mapping order — `bring_to_front` was a Windows-only op, so
+  on Linux the menu rendered under the content. A hide/show pair maps
+  the view last, which is the X11 raise.
+
 ## 0.20.3
 
 ### Fixed
