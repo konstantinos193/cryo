@@ -307,7 +307,17 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
     {
         use gtk::prelude::WidgetExt as _;
         use tao::platform::unix::WindowExtUnix as _;
-        window.gtk_window().realize();
+        let w = window.gtk_window();
+        eprintln!("dbg: pre-realize gdk_window={}", w.window().is_some());
+        w.realize();
+        eprintln!(
+            "dbg: post-realize gdk_window={} realized={} mapped={}",
+            w.window().is_some(),
+            w.is_realized(),
+            w.is_mapped()
+        );
+        eprintln!("dbg: display type={}", w.display().type_().name());
+        eprintln!("dbg: handle={:?}", window.window_handle().map(|h| h.as_raw()));
     }
 
     #[cfg(not(feature = "servo-engine"))]

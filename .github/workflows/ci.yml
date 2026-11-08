@@ -75,6 +75,13 @@ jobs:
             exit 1
           fi
 
+      - name: Upload linux debug binary
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cryo-linux-debug
+          path: target/debug/cryo
+
   # The chrome render script is JavaScript inside the Rust tree, so cargo
   # never sees it. tests/*.test.cjs drive it under jsdom and cover the
   # pointer-activation regression from v0.9.0 — ungated, it rots.
