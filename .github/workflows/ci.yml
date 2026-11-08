@@ -75,12 +75,18 @@ jobs:
             exit 1
           fi
 
-      - name: Upload linux debug binary
+      - name: Build release for probe
+        if: runner.os == 'Linux'
+        run: cargo build --release --locked
+
+      - name: Upload linux binaries
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
-          name: cryo-linux-debug
-          path: target/debug/cryo
+          name: cryo-linux-binaries
+          path: |
+            target/debug/cryo
+            target/release/cryo
 
   # The chrome render script is JavaScript inside the Rust tree, so cargo
   # never sees it. tests/*.test.cjs drive it under jsdom and cover the
