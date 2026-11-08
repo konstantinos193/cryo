@@ -5,6 +5,13 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # imap-proto is pinned to whatever `imap` resolves — bumping it
+      # alone splits the dependency graph and breaks `mail::folder`.
+      - dependency-name: "imap-proto"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
   - package-ecosystem: github-actions
     directory: /
     schedule:
