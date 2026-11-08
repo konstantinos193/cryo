@@ -57,6 +57,24 @@ jobs:
       - name: test
         run: cargo test --all
 
+      # Issue #33: a window that dies before it exists passed every gate
+      # because none of them opened one. Under Xvfb the debug binary must
+      # still be alive a few seconds in — enough to catch that class.
+      - name: Smoke — window stays up (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y xvfb
+          set +e
+          xvfb-run -a timeout -k 5 8 target/debug/cryo
+          rc=$?
+          set -e
+          # 124 is timeout killing a still-living process — the pass case.
+          # Anything earlier is a dead window and a failed gate.
+          if [ "$rc" -ne 124 ]; then
+            echo "cryo exited before the window could live ($rc)"
+            exit 1
+          fi
+
   # The chrome render script is JavaScript inside the Rust tree, so cargo
   # never sees it. tests/*.test.cjs drive it under jsdom and cover the
   # pointer-activation regression from v0.9.0 — ungated, it rots.

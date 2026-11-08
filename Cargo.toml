@@ -1,6 +1,6 @@
 [package]
 name = "cryo"
-version = "0.20.1"
+version = "0.20.2"
 edition = "2021"
 description = "A memory-obsessed browser shell written in Rust. Tabs freeze. Budgets hold."
 license = "MIT"
@@ -61,6 +61,11 @@ servo-engine = ["dep:servo", "dep:image", "dep:dpi"]
 chacha20poly1305 = "0.11"
 getrandom = "0.4"
 keyring = "4"
+
+# gtk is how tao's window is realized before the event loop pumps —
+# `WindowExtUnix::gtk_window` is the same gtk-rs wry and tao bind.
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
 
 # libproc for memory accounting (proc_listchildpids, proc_pid_rusage).
 [target.'cfg(target_os = "macos")'.dependencies]

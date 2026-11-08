@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.20.2
+
+### Fixed
+
+- Linux: cryo opens its window instead of exiting with "the underlying
+  handle is not available". tao queues `set_visible` as a request the
+  event loop pumps later, and a GTK widget owns no GdkWindow — so no
+  window handle — until it is realized; the engine asked for the handle
+  in between. The window is now realized without mapping first, and CI
+  keeps it honest: an Xvfb smoke test launches the binary and requires
+  it still be alive a few seconds later.
+
 ## 0.20.1
 
 ### Fixed
