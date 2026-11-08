@@ -395,7 +395,13 @@ impl ContentView for WryView {
         }
         #[cfg(not(target_os = "windows"))]
         {
-            Ok(())
+            // wry child views are sibling X11 windows stacked in mapping
+            // order, and wry offers no sibling restack: XMapWindow puts
+            // this view on top, but only after an unmap — a hide/show
+            // pair is the raise.
+            let layout = |e: wry::Error| EngineError::Layout(e.to_string());
+            self.view.set_visible(false).map_err(layout)?;
+            self.view.set_visible(true).map_err(layout)
         }
     }
 
