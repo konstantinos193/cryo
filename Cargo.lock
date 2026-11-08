@@ -1362,6 +1362,7 @@ dependencies = [
  "dpi",
  "embed-resource",
  "getrandom 0.4.3",
+ "gtk",
  "image",
  "imap",
  "imap-proto",

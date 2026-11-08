@@ -299,6 +299,16 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
         window.set_maximized(true);
     }
     window.set_visible(true);
+    // tao queues the show as a request the event loop pumps later, and a
+    // GTK widget owns no GdkWindow — and so no window handle — until it
+    // is realized. Realize now, without mapping, so the handle below
+    // exists on Linux instead of reporting `Unavailable`.
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::WidgetExt as _;
+        use tao::platform::unix::WindowExtUnix as _;
+        window.gtk_window().realize();
+    }
 
     #[cfg(not(feature = "servo-engine"))]
     // The composition root names the path (AGENTS §5). An incognito window
