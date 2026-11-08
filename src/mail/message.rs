@@ -4,7 +4,7 @@
 //! push, drop — the resident cost of reading mail is the page's DOM,
 //! which a freeze can reclaim wholesale).
 
-use mail_parser::{HeaderValue, Message, MimeHeaders};
+use mail_parser::{AddressList, ContentType, Mailbox, Message, TextList};
 
 /// Inline (`cid:`) images are re-encoded into the markup as data URLs;
 /// past this many bytes of them the rest stay as their alt text — a
@@ -68,7 +68,7 @@ pub(crate) fn hydrate(raw: &[u8], allow_remote: bool) -> Body {
     // Prefer the HTML part when one exists — the text copy stays as the
     // plain view and the reply-quote source. `body_html` reports a
     // text/plain body too, so check the part really is html first.
-    let has_html = m.parts.iter().any(|p| p.is_content_type("text", "html"));
+    let has_html = m.parts().any(|p| p.is_content_type("text", "html"));
     let (html, blocked_remote) = match (has_html, m.body_html(0)) {
         (true, Some(raw_html)) => {
             let inlined = inline_cids(&m, &raw_html);
@@ -87,7 +87,7 @@ pub(crate) fn hydrate(raw: &[u8], allow_remote: bool) -> Body {
             index,
             name: part.attachment_name().unwrap_or("attachment").to_string(),
             mime: mime_of(part.content_type()),
-            size: part.contents().len(),
+            size: part.decoded_len(),
         })
         .collect();
     Body {
@@ -107,7 +107,7 @@ fn inline_cids(m: &Message<'_>, html: &str) -> String {
     use base64::Engine;
     let mut out = html.to_string();
     let mut spent = 0usize;
-    for part in &m.parts {
+    for part in m.parts() {
         let Some(cid) = part.content_id() else {
             continue;
         };
@@ -120,13 +120,13 @@ fn inline_cids(m: &Message<'_>, html: &str) -> String {
             continue;
         }
         let mime = mime_of(part.content_type());
-        if !mime.starts_with("image/") || spent + part.contents().len() > MAX_INLINE_BYTES {
+        if !mime.starts_with("image/") || spent + part.decoded_len() > MAX_INLINE_BYTES {
             continue;
         }
-        spent += part.contents().len();
+        spent += part.decoded_len();
         let data = format!(
             "data:{mime};base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(part.contents())
+            base64::engine::general_purpose::STANDARD.encode(part.decoded())
         );
         out = out.replace(&needle, &data);
     }
@@ -136,56 +136,47 @@ fn inline_cids(m: &Message<'_>, html: &str) -> String {
 /// The first `http(s)` link a `List-Unsubscribe` header offers — the
 /// `mailto:` alternative is skipped, a reader clicks, they don't send.
 /// mail-parser reads the header as an address list (its `<…>` items
-/// look like one), so both shapes are checked.
-fn unsubscribe_link(value: &HeaderValue<'_>) -> String {
+/// look like one).
+fn unsubscribe_link(list: Option<AddressList<'_>>) -> String {
     let is_web = |s: &str| s.starts_with("https://") || s.starts_with("http://");
-    if let HeaderValue::Address(list) = value {
-        return list
-            .iter()
-            .filter_map(|a| a.address())
+    list.and_then(|l| {
+        l.mailboxes()
+            .filter_map(|m| m.address())
             .map(str::trim)
             .find(|s| is_web(s))
-            .unwrap_or_default()
-            .to_string();
-    }
-    header_text(value)
-        .split(',')
-        .map(|s| {
-            s.trim()
-                .trim_start_matches('<')
-                .trim_end_matches('>')
-                .trim()
-        })
-        .find(|s| is_web(s))
-        .unwrap_or_default()
-        .to_string()
+            .map(str::to_string)
+    })
+    .unwrap_or_default()
 }
 
-/// A text or text-list header as one whitespace-joined string — what
-/// `In-Reply-To`, `References` and `List-Unsubscribe` carry.
-pub(super) fn header_text(value: &HeaderValue<'_>) -> String {
-    match value {
-        HeaderValue::Text(t) => t.trim().to_string(),
-        HeaderValue::TextList(list) => list
-            .iter()
+/// A text-list header as one whitespace-joined string — what
+/// `In-Reply-To` and `References` carry.
+pub(super) fn header_text(list: Option<TextList<'_>>) -> String {
+    list.map(|l| {
+        l.iter()
             .map(|t| t.trim())
             .filter(|t| !t.is_empty())
             .collect::<Vec<_>>()
-            .join(" "),
-        _ => String::new(),
-    }
+            .join(" ")
+    })
+    .unwrap_or_default()
 }
 
 /// An address header's display string — "A <a@x>, b@y" as one joined
 /// list; nothing for a missing or unparseable header.
-pub(super) fn show_list(addrs: Option<&mail_parser::Address<'_>>) -> String {
+pub(super) fn show_list(addrs: Option<AddressList<'_>>) -> String {
     addrs
-        .map(|a| a.iter().map(show_mail_addr).collect::<Vec<_>>().join(", "))
+        .map(|a| {
+            a.mailboxes()
+                .map(|m| show_mail_addr(&m))
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
         .unwrap_or_default()
 }
 
-/// One parsed `Addr` as display text — "Name <addr>" or the bare addr.
-fn show_mail_addr(a: &mail_parser::Addr<'_>) -> String {
+/// One parsed `Mailbox` as display text — "Name <addr>" or the bare addr.
+fn show_mail_addr(a: &Mailbox<'_>) -> String {
     let addr = a.address().unwrap_or_default();
     match a.name().filter(|n| !n.is_empty()) {
         Some(name) => format!("{name} <{addr}>"),
@@ -195,12 +186,9 @@ fn show_mail_addr(a: &mail_parser::Addr<'_>) -> String {
 
 /// "image/png" for the attachment row; the catch-all when the part
 /// carries no Content-Type.
-fn mime_of(ct: Option<&mail_parser::ContentType<'_>>) -> String {
-    ct.map(|c| {
-        let sub = c.c_subtype.as_deref().unwrap_or("*");
-        format!("{}/{sub}", c.c_type)
-    })
-    .unwrap_or_else(|| "application/octet-stream".into())
+fn mime_of(ct: Option<ContentType<'_>>) -> String {
+    ct.map(|c| format!("{}/{}", c.ctype(), c.subtype().unwrap_or("*")))
+        .unwrap_or_else(|| "application/octet-stream".into())
 }
 
 /// One attachment's decoded bytes for a save — the raw cached message
@@ -211,7 +199,7 @@ pub(crate) fn attachment_bytes(raw: &[u8], index: usize) -> Option<(String, Stri
     Some((
         part.attachment_name().unwrap_or("attachment").to_string(),
         mime_of(part.content_type()),
-        part.contents().to_vec(),
+        part.decoded().into_owned(),
     ))
 }
 
