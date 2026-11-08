@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.20.3
+
+### Fixed
+
+- Linux: shell pages actually render. wry surfaces its custom protocols
+  as `http://<scheme>.localhost` on WebView2 but `<scheme>://localhost`
+  on WebKitGTK, and the app hardcoded the Windows form — every internal
+  page (new tab, settings, mail, the chrome strip) resolved to a real
+  host and answered connection refused. The internal origin is now
+  per-platform, so `cryo://localhost/...` reaches the scheme handler
+  the same way on Unix.
+
 ## 0.20.2
 
 ### Fixed

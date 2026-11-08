@@ -139,7 +139,7 @@
     // The lock reads the active address: https is secure, a shell page
     // is the browser's own, anything else is not secure.
     const url = state.active_url;
-    siteBtn.className = !url || url.startsWith('http://cryo.localhost') ? 'internal'
+    siteBtn.className = !url || url.startsWith('http://cryo.localhost') || url.startsWith('cryo://localhost') ? 'internal'
       : url.startsWith('https://') ? 'secure' : 'insecure';
     // Loading state: the active tab's flag swaps reload for ✕ and runs
     // the indeterminate bar; background tabs only spin their own icon.

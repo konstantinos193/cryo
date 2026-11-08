@@ -119,7 +119,7 @@ mod tests {
     #[test]
     fn url_carries_kind_and_target() {
         let url = error_url(LoadFailure::HostNotFound, "https://example.com/a b");
-        assert!(url.starts_with("http://cryo.localhost/error?"));
+        assert!(url.starts_with(&format!("{INTERNAL_ORIGIN}{ERROR_PATH}?")));
         assert!(url.contains("kind=host-not-found"));
         assert!(url.contains("url=https%3A%2F%2Fexample.com%2Fa%20b"));
     }

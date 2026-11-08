@@ -11,18 +11,53 @@
 
 use crate::shell::{chrome, dial, error, mail, newtab, search, settings, theme};
 
-/// Origin that all internal pages share. `is_internal_url` keys off this —
-/// keep the two in sync if the scheme registration ever changes.
+/// Origin that all internal pages share. wry's custom protocols surface
+/// differently per engine: WebView2 rewrites the `cryo` scheme to
+/// `http://cryo.localhost`, while WebKitGTK and WKWebView serve the same
+/// handler under `cryo://localhost` — both are real navigable URLs a
+/// document can script under, which a `data:` URI is not.
+/// `is_internal_url` keys off this — keep the two in sync if the scheme
+/// registration ever changes.
+#[cfg(windows)]
 pub(crate) const INTERNAL_ORIGIN: &str = "http://cryo.localhost";
+#[cfg(not(windows))]
+pub(crate) const INTERNAL_ORIGIN: &str = "cryo://localhost";
 
+#[cfg(windows)]
 pub const CHROME_URL: &str = "http://cryo.localhost/chrome";
+#[cfg(not(windows))]
+pub const CHROME_URL: &str = "cryo://localhost/chrome";
+#[cfg(windows)]
 pub const NEW_TAB_URL: &str = "http://cryo.localhost/newtab";
+#[cfg(not(windows))]
+pub const NEW_TAB_URL: &str = "cryo://localhost/newtab";
+#[cfg(windows)]
 pub const SETTINGS_URL: &str = "http://cryo.localhost/settings";
+#[cfg(not(windows))]
+pub const SETTINGS_URL: &str = "cryo://localhost/settings";
+#[cfg(windows)]
 pub const MAIL_URL: &str = "http://cryo.localhost/mail";
+#[cfg(not(windows))]
+pub const MAIL_URL: &str = "cryo://localhost/mail";
 
-/// A URL that belongs to the shell, not to any web destination.
+/// A URL that belongs to the shell, not to any web destination. The
+/// origin serialization is not asked: non-special schemes report an
+/// opaque origin, so `cryo://localhost` would read as `null` — the
+/// scheme, host and port are compared instead.
 pub fn is_internal_url(url: &str) -> bool {
-    url::Url::parse(url).is_ok_and(|u| u.origin().ascii_serialization() == INTERNAL_ORIGIN)
+    url::Url::parse(url).is_ok_and(|u| is_internal_parsed(&u))
+}
+
+/// The same check on an already-parsed URL, for callers that hold one.
+pub(crate) fn is_internal_parsed(u: &url::Url) -> bool {
+    #[cfg(windows)]
+    {
+        u.scheme() == "http" && u.host_str() == Some("cryo.localhost") && u.port().is_none()
+    }
+    #[cfg(not(windows))]
+    {
+        u.scheme() == "cryo" && u.host_str() == Some("localhost") && u.port().is_none()
+    }
 }
 
 /// The shell page a navigation landed on, when it is one a tab can

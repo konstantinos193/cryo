@@ -9,7 +9,7 @@ use wry::http::{header::CONTENT_TYPE, Request, Response};
 use crate::engine::{IpcHandler, PageResolver, ViewAccess};
 
 pub(super) fn internal_url(url: &str) -> bool {
-    url::Url::parse(url).is_ok_and(|u| u.origin().ascii_serialization() == "http://cryo.localhost")
+    crate::shell::pages::is_internal_url(url)
 }
 
 pub(super) fn allowed(access: ViewAccess, internal: bool, path: &str) -> bool {
@@ -49,9 +49,10 @@ pub(super) fn allowed(access: ViewAccess, internal: bool, path: &str) -> bool {
     }
 }
 
-/// Scheme name registered on every view. On Windows wry rewrites it to
-/// `http://cryo.localhost/...`, which is also the form callers navigate
-/// to directly (`load_url` does not apply the rewrite).
+/// Scheme name registered on every view. WebView2 surfaces it as
+/// `http://cryo.localhost/...`; WebKitGTK serves it under `cryo://localhost/...`
+/// — `pages::INTERNAL_ORIGIN` names the form callers navigate to directly
+/// (`load_url` does not apply any rewrite).
 pub(super) const INTERNAL_SCHEME: &str = "cryo";
 
 /// Reserved path on the internal scheme: view → app command channel.
@@ -60,10 +61,11 @@ pub(super) const INTERNAL_SCHEME: &str = "cryo";
 const CMD_PATH: &str = "/cmd";
 
 /// Answer one `cryo:` request. Internal pages must arrive over a real
-/// `http` URL: pages loaded via NavigateToString land on a `data:` URI
-/// where WebView2 never runs the document's own scripts, and wry's IPC
-/// bridge drops messages whose Source URI fails `http::Uri` parsing —
-/// `data:` does. Both directions of chrome IPC depend on this scheme.
+/// navigable URL (`pages::INTERNAL_ORIGIN` names the per-engine form):
+/// pages loaded via NavigateToString land on a `data:` URI where WebView2
+/// never runs the document's own scripts, and wry's IPC bridge drops
+/// messages whose Source URI fails `http::Uri` parsing — `data:` does.
+/// Both directions of chrome IPC depend on this scheme.
 pub(super) fn respond(
     request: &Request<Vec<u8>>,
     on_ipc: &Option<IpcHandler>,
@@ -83,7 +85,7 @@ pub(super) fn respond(
             .headers()
             .get("origin")
             .and_then(|h| h.to_str().ok());
-        if request.method() != "POST" || origin != Some("http://cryo.localhost") {
+        if request.method() != "POST" || origin != Some(crate::shell::pages::INTERNAL_ORIGIN) {
             return Response::builder()
                 .status(403)
                 .body(Cow::Borrowed(&b"forbidden"[..]))
@@ -118,6 +120,8 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::Arc;
 
+    const ORIGIN: &str = crate::shell::pages::INTERNAL_ORIGIN;
+
     fn page(_: &str) -> Option<&'static str> {
         Some("internal document")
     }
@@ -127,9 +131,9 @@ mod tests {
         for access in [ViewAccess::Web, ViewAccess::Content] {
             for path in ["/chrome", "/chrome/chrome.js", "/cmd"] {
                 let request = Request::builder()
-                    .uri(format!("http://cryo.localhost{path}"))
+                    .uri(format!("{ORIGIN}{path}"))
                     .method("POST")
-                    .header("origin", "http://cryo.localhost")
+                    .header("origin", ORIGIN)
                     .body(vec![])
                     .unwrap();
                 assert_eq!(
@@ -139,7 +143,7 @@ mod tests {
             }
         }
         let request = Request::builder()
-            .uri("http://cryo.localhost/settings")
+            .uri(format!("{ORIGIN}/settings"))
             .body(vec![])
             .unwrap();
         assert_eq!(
@@ -172,13 +176,13 @@ mod tests {
             observed.fetch_add(1, Ordering::Relaxed);
         }));
         for (method, origin, status) in [
-            ("GET", "http://cryo.localhost", 403),
-            ("POST", "https://evil.test", 403),
-            ("POST", "http://cryo.localhost.evil.test", 403),
-            ("POST", "http://cryo.localhost", 200),
+            ("GET", ORIGIN.to_string(), 403),
+            ("POST", "https://evil.test".to_string(), 403),
+            ("POST", format!("{ORIGIN}.evil.test"), 403),
+            ("POST", ORIGIN.to_string(), 200),
         ] {
             let request = Request::builder()
-                .uri("http://cryo.localhost/cmd")
+                .uri(format!("{ORIGIN}/cmd"))
                 .method(method)
                 .header("origin", origin)
                 .body(vec![])
@@ -251,14 +255,14 @@ mod tests {
 
     #[test]
     fn internal_origin_is_not_a_string_prefix() {
-        assert!(internal_url("http://cryo.localhost/settings"));
+        assert!(internal_url(&format!("{ORIGIN}/settings")));
         for url in [
-            "http://cryo.localhost.evil.test/",
-            "http://cryo.localhost@evil.test/",
-            "https://cryo.localhost/",
-            "http://cryo.localhost:81/",
+            format!("{ORIGIN}.evil.test/"),
+            format!("{ORIGIN}@evil.test/"),
+            "https://cryo.localhost/".to_string(),
+            format!("{ORIGIN}:81/"),
         ] {
-            assert!(!internal_url(url));
+            assert!(!internal_url(&url), "{url}");
         }
     }
 }
