@@ -305,7 +305,7 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
     // exists on Linux instead of reporting `Unavailable`.
     #[cfg(target_os = "linux")]
     {
-        use gtk::glib::prelude::ObjectType as _;
+        use gtk::glib::prelude::ObjectExt as _;
         use gtk::prelude::WidgetExt as _;
         use tao::platform::unix::WindowExtUnix as _;
         let w = window.gtk_window();
