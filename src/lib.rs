@@ -318,7 +318,10 @@ pub fn run(incognito: bool, new_window: bool, open_url: Option<String>) -> anyho
             w.is_mapped()
         );
         eprintln!("dbg: display type={}", w.display().type_().name());
-        eprintln!("dbg: handle={:?}", window.window_handle().map(|h| h.as_raw()));
+        eprintln!(
+            "dbg: handle={:?}",
+            window.window_handle().map(|h| h.as_raw())
+        );
     }
 
     #[cfg(not(feature = "servo-engine"))]
