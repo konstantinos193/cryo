@@ -12,6 +12,26 @@ updates:
         update-types:
           - "version-update:semver-minor"
           - "version-update:semver-major"
+      # These follow what wry/tao/webview2-com link, never their own
+      # latest: gtk (and rfd's gtk3 backend, which links gtk-sys) must
+      # share tao's gtk-3, and windows/windows-core must be the version
+      # webview2-com's interfaces are written against.
+      - dependency-name: "gtk"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      - dependency-name: "rfd"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      - dependency-name: "windows"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      - dependency-name: "windows-core"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
   - package-ecosystem: github-actions
     directory: /
     schedule:

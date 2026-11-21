@@ -152,8 +152,10 @@ pub enum VaultError {
     NoOrigin,
     #[error("{0} is not a usable origin")]
     Origin(String),
-    #[error("a password that long is not a password ({0} characters)")]
-    SecretLength(usize),
+    /// Carries no length: the error reaches logs, and a password's
+    /// length is part of the password.
+    #[error("a password that long is not a password (over {MAX_SECRET} characters)")]
+    SecretLength,
     #[error("the vault is full ({MAX_CREDENTIALS} kept)")]
     Full,
     #[error("reading {path}: {source}")]
@@ -201,7 +203,7 @@ impl Credential {
             return Err(VaultError::Origin(truncate(origin, 40)));
         }
         if secret.len() > MAX_SECRET {
-            return Err(VaultError::SecretLength(secret.len()));
+            return Err(VaultError::SecretLength);
         }
         Ok(Self {
             origin: origin.to_string(),
