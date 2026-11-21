@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.21.0
+
+### Security
+
+- The vault's "password too long" error no longer carries the password's
+  length. The error reaches the log when the mail onboarding seals an
+  account password, and a length is part of the secret (CodeQL
+  `rust/cleartext-logging`).
+
+### Changed
+
+- Every dependency is on its latest release: wry 0.57.3, tao 0.37.3,
+  servo 0.8.0, zip 9.8.1, lettre 0.11.24, ammonia 4.2.5, zeroize 1.9.2,
+  the whole lockfile refreshed, and jsdom 31 for the chrome-script
+  tests. Built and tested on Rust 1.100.
+- Four crates stay where the engine holds them, not at their own latest:
+  gtk 0.18 and rfd 0.17 (wry/tao link gtk-sys 0.18; rfd 0.18 links
+  0.19 and only one crate may link gtk-3), windows/windows-core 0.62
+  (webview2-com's interfaces are written against it). Dependabot now
+  ignores their minor and major bumps instead of opening PRs that cannot
+  build.
+
 ## 0.20.4
 
 ### Fixed

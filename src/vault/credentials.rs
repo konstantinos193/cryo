@@ -225,7 +225,7 @@ mod tests {
         ));
         assert!(matches!(
             vault.add(&draft("https://a.test", "bob", &"x".repeat(MAX_SECRET + 1))),
-            Err(VaultError::SecretLength(_))
+            Err(VaultError::SecretLength)
         ));
         assert!(vault.is_empty());
     }
