@@ -26,7 +26,7 @@ zeroize = "1"
 # Phase 5: the Servo backend. `image` only encodes PNG for favicons and
 # screenshots; `servo` is the embedding crate. Behind `--features
 # servo-engine` so the wry default never pays the mozjs/clang build.
-servo = { version = "0.7.0", optional = true }
+servo = { version = "0.8.0", optional = true }
 image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
 dpi = { version = "0.1", optional = true }
 zip = { version = "9.3.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
